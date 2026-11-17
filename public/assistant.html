@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 助手 · 履约单看板</title>
+<style>
+:root{--bg:#f4f6fa;--card:#fff;--ink:#1b2430;--ink2:#5b6675;--line:#e6ebf2;--brand:#2F5597;--bad:#d9534f;--ok:#2f9e6e}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
+     background:var(--bg);color:var(--ink);font-size:14px}
+.wrap{max-width:1080px;margin:0 auto;padding:20px 22px 60px}
+header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}
+h1{font-size:19px;font-weight:650}
+h1 span{color:var(--brand)}
+a.back{font-size:13px;color:var(--brand);text-decoration:none}
+.tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
+.tab{border:1px solid var(--line);background:#fff;color:var(--ink2);padding:7px 14px;border-radius:8px;
+     cursor:pointer;font-family:inherit;font-size:13px}
+.tab.on{background:var(--brand);color:#fff;border-color:var(--brand);font-weight:600}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:14px}
+.card h2{font-size:14px;font-weight:640;margin-bottom:10px}
+textarea,input[type=text]{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;
+     font:13px/1.6 ui-monospace,Consolas,monospace;font-family:inherit;resize:vertical;outline:none}
+textarea:focus,input:focus{border-color:var(--brand)}
+.btn{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:8px 16px;font-size:13px;
+     font-family:inherit;cursor:pointer}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.btn.ghost{background:#fff;border:1px solid var(--line);color:var(--ink2)}
+.row{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.msg{padding:10px 12px;border-radius:9px;margin-bottom:9px;font-size:13.5px;line-height:1.75;white-space:pre-wrap}
+.msg.u{background:#f1f5fd;border:1px solid #dbe6f7}
+.msg.a{background:#f7f9fc;border:1px solid var(--line)}
+.hint{font-size:12px;color:var(--ink2);line-height:1.7}
+.err{color:var(--bad)}
+.list{border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.item{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start}
+.item:last-child{border-bottom:0}
+.item b{font-weight:600}
+.item .d{font-size:12px;color:var(--ink2);margin-top:3px;line-height:1.6}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+pre{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+    overflow:auto;max-height:320px;font-size:12px;line-height:1.6;white-space:pre-wrap}
+.tag{font-size:11px;padding:2px 7px;border-radius:5px;background:#eef3fb;color:var(--brand)}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>AI 助手<span>.</span></h1>
+    <div style="display:flex;gap:14px;align-items:center">
+      <span class="hint" id="who">—</span>
+      <a class="back" href="/">← 返回看板</a>
+    </div>
+  </header>
+
+  <div class="tabs">
+    <button class="tab on" data-tab="ai">AI 对话</button>
+    <button class="tab" data-tab="mcp">MCP 工具</button>
+    <button class="tab" data-tab="skill">技能</button>
+  </div>
+
+  <!-- AI -->
+  <section id="tab-ai">
+    <div class="card">
+      <h2>与站点 AI 对话</h2>
+      <div id="chat"></div>
+      <textarea id="aiInput" rows="3" placeholder="例如：本周哪些平台的仓内处理时长超过了 24 小时？"></textarea>
+      <div class="row">
+        <button class="btn" id="aiSend">发送</button>
+        <button class="btn ghost" id="aiClear">清空</button>
+        <span class="hint" id="aiMeta"></span>
+      </div>
+      <div class="hint" id="aiQuota" style="margin-top:8px"></div>
+    </div>
+  </section>
+
+  <!-- MCP -->
+  <section id="tab-mcp" class="hidden">
+    <div class="card">
+      <h2>站点 MCP 工具 <button class="btn ghost" id="mcpReload" style="float:right">刷新</button></h2>
+      <div class="hint" style="margin-bottom:10px">这些是本站点被授权调用的工具，由后端持站点密钥请求，浏览器看不到密钥。</div>
+      <div class="list" id="mcpList"><div class="item hint">加载中…</div></div>
+    </div>
+    <div class="card hidden" id="mcpCallCard">
+      <h2>调用 <span class="mono" id="mcpName"></span></h2>
+      <div class="hint" style="margin:6px 0 8px">参数（JSON）</div>
+      <textarea id="mcpArgs" rows="4">{}</textarea>
+      <div class="row"><button class="btn" id="mcpRun">执行</button></div>
+      <div id="mcpResult" style="margin-top:10px"></div>
+    </div>
+  </section>
+
+  <!-- 技能 -->
+  <section id="tab-skill" class="hidden">
+    <div class="card">
+      <h2>已授权技能 <button class="btn ghost" id="skillReload" style="float:right">刷新</button></h2>
+      <div class="hint" style="margin-bottom:10px">技能包下载后会按 sha256 校验，校验不过直接丢弃。</div>
+      <div class="list" id="skillList"><div class="item hint">加载中…</div></div>
+    </div>
+    <div class="card">
+      <h2>说明</h2>
+      <div class="hint" id="skillNote">「标记使用」会向平台上报一次使用记录（含唯一 eventKey 与引擎名），用于统计技能实际被用到的次数。</div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function(){
+  let ME = null;
+  const $ = (id) => document.getElementById(id);
+
+  async function api(path, opts){
+    const o = Object.assign({headers:{}}, opts||{});
+    o.headers = Object.assign({'Accept':'application/json'}, o.headers);
+    if (o.body) { o.headers['Content-Type']='application/json'; }
+    if (o.method && o.method !== 'GET' && ME) o.headers['X-CSRF-Token'] = ME.csrf;
+    const r = await fetch(path, o);
+    if (r.status === 401){ location.href = '/?next=' + encodeURIComponent(location.pathname); throw new Error('unauth'); }
+    const t = await r.text();
+    let j = {}; try { j = JSON.parse(t); } catch(e){ j = {message:t.slice(0,200)}; }
+    if (!r.ok) throw Object.assign(new Error(j.message || '请求失败'), {code:j.error, detail:j.detail, status:r.status});
+    return j;
+  }
+
+  function fail(el, e){
+    el.innerHTML = '<div class="msg err">' +
+      (e.message || '请求失败') +
+      (e.detail ? '<br><span class="hint">' + String(e.detail).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) + '</span>' : '') +
+      '</div>';
+  }
+
+  // ---------------- 初始化
+  async function boot(){
+    try{
+      ME = await api('/api/me');
+    }catch(e){ return; }
+    const u = ME.user || {};
+    $('who').textContent = u.name || u.username || u.sub || '';
+    if (!ME.features.ai){
+      $('aiSend').disabled = true;
+      $('aiInput').placeholder = '站点 AI 未配置';
+    }
+    if (!ME.features.mcp){
+      $('mcpList').innerHTML = '<div class="item hint">站点 MCP 未配置</div>';
+    } else { loadMcp(); }
+    if (!ME.features.skills){
+      $('skillList').innerHTML = '<div class="item hint">技能服务未配置';
+    } else { loadSkills(); }
+  }
+
+  // ---------------- tabs
+  document.querySelectorAll('.tab').forEach(b=>{
+    b.onclick = ()=>{
+      document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on', x===b));
+      ['ai','mcp','skill'].forEach(k=>$('tab-'+k).classList.toggle('hidden', k!==b.dataset.tab));
+    };
+  });
+
+  // ---------------- AI
+  const history = [];
+  $('aiSend').onclick = async () => {
+    const text = $('aiInput').value.trim();
+    if (!text) return;
+    $('aiInput').value = '';
+    history.push({role:'user', content:text});
+    renderChat();
+    $('aiSend').disabled = true;
+    $('aiMeta').textContent = '思考中…';
+    try{
+      const out = await api('/api/ai/chat', {method:'POST', body: JSON.stringify({messages: history})});
+      history.push({role:'assistant', content: out.text || '（空回复）'});
+      $('aiMeta').textContent = out.model ? ('模型 ' + out.model) : '';
+    }catch(e){
+      history.push({role:'assistant', content:'【出错】' + (e.message||'')});
+      if (e.code === 'AI_QUOTA'){
+        $('aiQuota').innerHTML = ME.quotaRequestUrl
+          ? '额度不足，<a href="' + ME.quotaRequestUrl + '" target="_blank" rel="noopener">前往申请额度</a>'
+          : '额度不足，请联系管理员申请增加额度。';
+      }
+    }finally{
+      $('aiSend').disabled = false;
+      renderChat();
+    }
+  };
+  $('aiClear').onclick = () => { history.length = 0; renderChat(); $('aiMeta').textContent=''; };
+  function renderChat(){
+    $('chat').innerHTML = history.map(m =>
+      '<div class="msg ' + (m.role==='user'?'u':'a') + '">' +
+      String(m.content).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) + '</div>').join('');
+  }
+
+  // ---------------- MCP
+  let TOOLS = [];
+  async function loadMcp(){
+    $('mcpList').innerHTML = '<div class="item hint">加载中…</div>';
+    try{
+      const out = await api('/api/mcp/tools');
+      TOOLS = out.tools || [];
+      $('mcpList').innerHTML = TOOLS.length
+        ? TOOLS.map((t,i)=>'<div class="item"><div style="flex:1"><b>'+esc(t.title||t.name)+'</b>'+
+            '<div class="d">'+esc(t.description||'')+'</div>'+
+            '<div class="d mono">'+esc(t.name)+'</div></div>'+
+            '<button class="btn ghost" data-i="'+i+'">调用</button></div>').join('')
+        : '<div class="item hint">本站点没有被授权的工具</div>';
+      $('mcpList').querySelectorAll('button[data-i]').forEach(btn=>{
+        btn.onclick = ()=>{
+          const t = TOOLS[+btn.dataset.i];
+          $('mcpCallCard').classList.remove('hidden');
+          $('mcpName').textContent = t.name;
+          $('mcpResult').innerHTML = '';
+          const props = (t.inputSchema && t.inputSchema.properties) || {};
+          const tpl = {};
+          Object.keys(props).forEach(k=>{ tpl[k] = props[k] && props[k].type === 'number' ? 0 : ''; });
+          $('mcpArgs').value = JSON.stringify(tpl, null, 2);
+        };
+      });
+    }catch(e){ fail($('mcpList'), e); }
+  }
+  $('mcpReload').onclick = ()=> api('/api/mcp/tools?refresh=1').then(()=>loadMcp()).catch(e=>fail($('mcpList'),e));
+  $('mcpRun').onclick = async ()=>{
+    $('mcpResult').innerHTML = '<div class="hint">执行中…</div>';
+    $('mcpRun').disabled = true;
+    try{
+      let args = {};
+      try { args = JSON.parse($('mcpArgs').value || '{}'); }
+      catch(e){ throw new Error('参数不是合法 JSON'); }
+      const out = await api('/api/mcp/call', {method:'POST',
+        body: JSON.stringify({name: $('mcpName').textContent, arguments: args})});
+      $('mcpResult').innerHTML = '<div class="hint" style="margin-bottom:6px">'+
+        (out.ok ? '<span style="color:var(--ok)">调用成功</span>' : '<span class="err">工具返回错误</span>')+
+        '</div><pre>'+esc(out.text || JSON.stringify(out.raw, null, 2))+'</pre>';
+    }catch(e){ fail($('mcpResult'), e); }
+    finally{ $('mcpRun').disabled = false; }
+  };
+
+  // ---------------- 技能
+  async function loadSkills(){
+    $('skillList').innerHTML = '<div class="item hint">加载中…</div>';
+    try{
+      const out = await api('/api/skills');
+      const items = out.skills || [];
+      $('skillList').innerHTML = items.length
+        ? items.map((s,i)=>'<div class="item"><div style="flex:1"><b>'+esc(s.name||s.id)+'</b>'+
+            '<div class="d">'+esc(s.description||'')+'</div>'+
+            '<div class="d mono">'+esc(s.id)+(s.version?' · v'+esc(s.version):'')+'</div></div>'+
+            '<button class="btn ghost" data-s="'+i+'">标记使用</button></div>').join('')
+        : '<div class="item hint">没有已授权的技能</div>';
+      $('skillList').querySelectorAll('button[data-s]').forEach(btn=>{
+        btn.onclick = async ()=>{
+          btn.disabled = true; btn.textContent = '上报中…';
+          try{
+            await api('/api/skills/usage', {method:'POST', body: JSON.stringify({ids:[items[+btn.dataset.s].id]})});
+            btn.textContent = '已上报'; btn.style.color = 'var(--ok)';
+          }catch(e){ btn.disabled=false; btn.textContent='标记使用'; alert(e.message||'上报失败'); }
+        };
+      });
+    }catch(e){ fail($('skillList'), e); }
+  }
+  $('skillReload').onclick = ()=> api('/api/skills?refresh=1').then(()=>loadSkills()).catch(e=>fail($('skillList'),e));
+
+  function esc(s){ return String(s==null?'':s).replace(/[<>&"]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c])); }
+
+  boot();
+})();
+</script>
+</body>
+</html>
