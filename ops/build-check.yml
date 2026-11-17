@@ -1,3 +1,15 @@
+# 这是 GitHub Actions 的 CI 检查配置，暂时放在 ops/ 下。
+#
+# 为什么不在 .github/workflows/：当前 gh token 只有 gist / read:org / repo 权限，
+# 缺少 workflow scope，推送 .github/workflows/ 下的文件会被 GitHub 拒绝。
+#
+# 启用方式（一条命令）：
+#     gh auth refresh -s workflow
+#     mkdir -p .github/workflows && git mv ops/build-check.yml .github/workflows/build-check.yml
+#     git commit -m "启用 build-check" && git push
+#
+# 内容：每次推送用 python assemble.py 组装一次，断言产物完整（占位符已替换、单量为正、体积合理）。
+
 name: build-check
 
 # 每次推送验证模板还能正常组装出一个完整的单文件。
