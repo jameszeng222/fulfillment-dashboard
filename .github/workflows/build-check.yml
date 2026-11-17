@@ -1,0 +1,50 @@
+name: build-check
+
+# 每次推送验证模板还能正常组装出一个完整的单文件。
+# 这一步不需要数据库，只用到 dashboard_src/cube.json，所以能在 CI 上跑。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 组装单文件
+        run: python assemble.py
+
+      - name: 断言产物完整
+        run: |
+          python - <<'PY'
+          import json, re, sys
+          html = open("public/index.html", encoding="utf-8").read()
+          problems = []
+          if "__DATA__" in html:            problems.append("__DATA__ 未替换")
+          if "<!--ECHARTS-->" in html:      problems.append("ECHARTS 占位未替换")
+          blocks = re.findall(r"<script>(.*?)</script>", html, flags=re.S)
+          i = html.index("const D = {") + len("const D = ")
+          data = json.loads(html[i:html.index(";\n", i)])
+          orders = data["meta"]["orders"]
+          if not isinstance(orders, int) or orders <= 0:
+              problems.append(f"单量异常: {orders}")
+          kb = len(html.encode()) / 1024
+          if kb < 500: problems.append(f"产物只有 {kb:.0f} KB, 疑似残缺")
+          print(f"产物 {kb:.0f} KB, 单量 {orders:,}, script 块 {len(blocks)} 个")
+          if problems:
+              print("FAIL:", "; ".join(problems)); sys.exit(1)
+          print("OK")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashboard
+          path: public/index.html
+          retention-days: 7

@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>履约单数据看板</title>
+<style>
+:root{
+  --bg:#f4f6fa; --card:#ffffff; --ink:#1b2430; --ink2:#5b6675;
+  --line:#e6ebf2; --brand:#2F5597; --brand2:#4E79A7;
+  --ok:#2f9e6e; --warn:#e8a33d; --bad:#d9534f;
+  --shadow:0 1px 2px rgba(20,40,80,.04),0 6px 20px rgba(20,40,80,.06);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+  background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1480px;margin:0 auto;padding:24px 28px 56px}
+
+/* 顶部 */
+header{
+  position:sticky;top:0;z-index:20;background:rgba(244,246,250,.94);
+  backdrop-filter:blur(8px);border-bottom:1px solid var(--line);
+  margin:0 -28px 24px;padding:14px 28px 12px;
+}
+.hd{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap}
+h1{font-size:21px;font-weight:650;letter-spacing:-.2px}
+h1 span{color:var(--brand)}
+.sub{font-size:12.5px;color:var(--ink2);margin-top:5px;line-height:1.6}
+.sub b{color:var(--ink);font-weight:600}
+
+/* 月份筛选 */
+.filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.flabel{font-size:12px;color:var(--ink2);margin-right:2px}
+.chip{
+  border:1px solid var(--line);background:#fff;color:var(--ink2);
+  font-size:12.5px;padding:6px 12px;border-radius:8px;cursor:pointer;
+  transition:all .15s;font-family:inherit;
+}
+.chip:hover{border-color:var(--brand2);color:var(--brand)}
+.chip.on{background:var(--brand);border-color:var(--brand);color:#fff;font-weight:600}
+
+/* 维度筛选条 */
+.fbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+      margin-top:11px;padding-top:11px;border-top:1px dashed var(--line)}
+.fsel{position:relative}
+.fbtn{
+  border:1px solid var(--line);background:#fff;color:var(--ink2);font-family:inherit;
+  font-size:12.5px;padding:6px 11px;border-radius:8px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:7px;transition:all .15s;
+}
+.fbtn:hover{border-color:var(--brand2);color:var(--brand)}
+.fbtn.active{border-color:var(--brand);color:var(--brand);background:#f1f5fd;font-weight:600}
+.fbtn .n{font-weight:600;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fbtn .car{width:0;height:0;border-left:4px solid transparent;border-right:4px solid transparent;
+           border-top:5px solid currentColor;opacity:.5;margin-left:1px}
+.fpop{
+  position:absolute;z-index:60;top:calc(100% + 6px);left:0;min-width:216px;max-height:380px;
+  overflow:auto;background:#fff;border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 10px 30px rgba(20,40,80,.15);padding:6px;display:none;
+}
+.fpop.open{display:block}
+.fsearch{
+  width:100%;border:1px solid var(--line);border-radius:6px;padding:6px 9px;
+  font-size:12.5px;font-family:inherit;margin-bottom:6px;outline:none;color:var(--ink);
+}
+.fsearch:focus{border-color:var(--brand2)}
+.fempty{padding:12px 8px;text-align:center;color:#9aa5b4;font-size:12px}
+.fopt{
+  display:flex;align-items:center;gap:8px;padding:6px 9px;border-radius:6px;
+  cursor:pointer;font-size:12.5px;color:var(--ink);white-space:nowrap;
+}
+.fopt:hover{background:#f4f7fc}
+.fopt input{accent-color:var(--brand);cursor:pointer;width:13px;height:13px}
+.fopt .cnt{margin-left:auto;color:#9aa5b4;font-size:11px;font-variant-numeric:tabular-nums;padding-left:12px}
+.fall{border-bottom:1px solid var(--line);margin-bottom:4px;padding-bottom:6px;font-weight:600;color:var(--brand)}
+.fall:hover{background:#eef3fb}
+.freset{
+  border:1px dashed var(--line);background:transparent;color:var(--ink2);font-family:inherit;
+  font-size:12px;padding:6px 11px;border-radius:8px;cursor:pointer;transition:all .15s;
+}
+.freset:hover{border-color:var(--bad);color:var(--bad)}
+.fnow{font-size:11.5px;color:var(--ink2);font-variant-numeric:tabular-nums}
+.fnow b{color:var(--brand);font-weight:650}
+
+/* KPI */
+.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;margin-bottom:18px}
+.kpi{
+  background:var(--card);border-radius:12px;padding:16px 18px;
+  box-shadow:var(--shadow);border:1px solid rgba(230,235,242,.7);
+  position:relative;overflow:hidden;
+}
+.kpi::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--brand);opacity:.85}
+.kpi.g::before{background:var(--ok)} .kpi.w::before{background:var(--warn)} .kpi.b::before{background:var(--bad)}
+.kpi .lbl{font-size:12px;color:var(--ink2);margin-bottom:8px;display:flex;align-items:center;gap:5px}
+.kpi .val{font-size:25px;font-weight:660;letter-spacing:-.6px;line-height:1.15;font-variant-numeric:tabular-nums}
+.kpi .val small{font-size:13px;font-weight:500;color:var(--ink2);margin-left:3px;letter-spacing:0}
+.kpi .fl{font-size:11.5px;color:var(--ink2);margin-top:6px}
+
+/* 图表网格 */
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.card{
+  background:var(--card);border-radius:12px;padding:16px 18px 8px;
+  box-shadow:var(--shadow);border:1px solid rgba(230,235,242,.7);
+}
+.card.wide{grid-column:1/-1}
+.ct{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px;gap:12px}
+.ct h2{font-size:14px;font-weight:640;letter-spacing:-.1px}
+.ct .tip{font-size:11.5px;color:var(--ink2);text-align:right}
+.chart{width:100%;height:300px}
+.chart.tall{height:340px}
+
+/* 趋势口径切换 */
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff;vertical-align:middle}
+.seg button{border:0;background:#fff;font-family:inherit;font-size:11.5px;color:var(--ink2);padding:4px 11px;cursor:pointer;transition:all .15s}
+.seg button:hover{color:var(--brand)}
+.seg button.on{background:var(--brand);color:#fff;font-weight:600}
+
+/* 数据覆盖日历 */
+.covsum{font-size:12.5px;color:var(--ink2);margin:6px 0 12px;line-height:1.7}
+.covsum b{color:var(--ok);font-weight:650}
+.covsum code{font-family:inherit;background:#f6f8fc;border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:11.5px;color:#7a6320}
+.cov{overflow-x:auto;padding-bottom:10px}
+.covinner{width:max-content;margin:0 auto}
+.covmonths{display:grid;gap:3px;font-size:10.5px;color:#9aa5b4;margin-bottom:5px;margin-left:24px;height:14px}
+.covmonths span{white-space:nowrap;overflow:visible;line-height:14px}
+.covbody{display:flex;gap:6px}
+.covdow{display:grid;grid-template-rows:repeat(7,15px);gap:3px;font-size:9px;color:#b3bcc9;line-height:15px;text-align:right;width:18px;flex:0 0 18px}
+.covgrid{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,15px);grid-auto-columns:15px;gap:3px}
+.covgrid i{width:15px;height:15px;border-radius:3px;background:#eef2f8;display:block;cursor:default}
+.covgrid i.on{background:#4E79A7}
+.covgrid i.on:hover{background:#2F5597}
+.covgrid i.gap{background:#fbe0de;box-shadow:inset 0 0 0 1px #ee8f89}
+.covgrid i.gap:hover{background:#f5c9c5}
+.covlegend{display:flex;align-items:center;gap:16px;font-size:11.5px;color:var(--ink2);margin-top:2px;flex-wrap:wrap}
+.covlegend em{display:inline-flex;align-items:center;gap:5px;font-style:normal}
+.covlegend s{width:11px;height:11px;border-radius:3px;display:inline-block;text-decoration:none}
+
+/* 说明 */
+.note{
+  margin-top:18px;background:#fffdf6;border:1px solid #f2e6c8;border-radius:12px;
+  padding:14px 18px;font-size:12.5px;line-height:1.85;color:#7a6320;
+}
+.note b{color:#5c4a12}
+.note ul{margin:6px 0 0 18px}
+footer{text-align:center;font-size:11.5px;color:#9aa5b4;margin-top:26px;line-height:1.8}
+
+@media (max-width:1180px){
+  .kpis{grid-template-columns:repeat(3,1fr)}
+  .grid{grid-template-columns:1fr}
+}
+@media (max-width:640px){
+  .wrap{padding:16px 14px 40px}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  header{margin:0 -14px 18px;padding:14px}
+  .chart{height:260px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="hd">
+    <div>
+      <h1>履约单数据看板<span>.</span></h1>
+      <div class="sub">
+        数据区间 <b id="mRange">—</b> · 共 <b id="mOrders">—</b> 张履约单 · 来源：履约系统导出
+      </div>
+    </div>
+    <div class="filters">
+      <span class="flabel">时间</span>
+      <div id="monthChips" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+    </div>
+  </div>
+  <div class="fbar">
+    <span class="flabel">筛选</span>
+    <div class="fsel" id="fs-wh"></div>
+    <div class="fsel" id="fs-pf"></div>
+    <div class="fsel" id="fs-cr"></div>
+    <div class="fsel" id="fs-cn"></div>
+    <button class="freset" id="fReset">重置</button>
+    <span class="fnow" id="fNow"></span>
+  </div>
+</header>
+
+<!-- KPI -->
+<div class="kpis">
+  <div class="kpi">
+    <div class="lbl">履约单数</div>
+    <div class="val" id="kOrders">—</div>
+    <div class="fl" id="kOrdersSub">—</div>
+  </div>
+  <div class="kpi">
+    <div class="lbl">总件数</div>
+    <div class="val" id="kItems">—</div>
+    <div class="fl" id="kItemsSub">—</div>
+  </div>
+  <div class="kpi w">
+    <div class="lbl">仓内处理时长</div>
+    <div class="val" id="kAging">—<small>小时</small></div>
+    <div class="fl">创建 → 签出</div>
+  </div>
+  <div class="kpi g">
+    <div class="lbl">物流运输天数</div>
+    <div class="val" id="kTransit">—<small>天</small></div>
+    <div class="fl">签出 → 签收</div>
+  </div>
+  <div class="kpi b">
+    <div class="lbl">签收覆盖率</div>
+    <div class="val" id="kSign">—<small>%</small></div>
+    <div class="fl">已签收单 / 总单</div>
+  </div>
+</div>
+
+<!-- 图表 -->
+<div class="grid">
+  <div class="card wide">
+    <div class="ct"><h2 id="trendTitle">月度单量与时效走势</h2>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end">
+        <div class="seg" id="trendSeg"><button data-m="total" class="on">总量</button><button data-m="avg">日均</button></div>
+        <div class="tip" id="trendTip">柱：单量　线：物流天数</div>
+      </div>
+    </div>
+    <div class="chart tall" id="cTrend"></div>
+  </div>
+
+  <div class="card">
+    <div class="ct"><h2>仓库对比</h2><div class="tip">按单量排序，右侧为物流天数</div></div>
+    <div class="chart" id="cWh"></div>
+  </div>
+
+  <div class="card">
+    <div class="ct"><h2>后台物流商对比</h2><div class="tip">系统里的承运商字段，右侧为物流天数</div></div>
+    <div class="chart" id="cCarrier"></div>
+  </div>
+
+  <div class="card">
+    <div class="ct"><h2>C 端显示物流服务商</h2><div class="tip">客户实际看到的末端承运商，右侧为物流天数</div></div>
+    <div class="chart" id="cCcar"></div>
+  </div>
+
+  <div class="card">
+    <div class="ct"><h2>目的国 Top 12</h2><div class="tip">按单量排序，右侧为物流天数</div></div>
+    <div class="chart" id="cCountry"></div>
+  </div>
+
+  <div class="card">
+    <div class="ct"><h2>平台分布</h2><div class="tip">按履约单数</div></div>
+    <div class="chart" id="cPlatform"></div>
+  </div>
+
+  <div class="card">
+    <div class="ct"><h2>仓内时效分布</h2><div class="tip">创建到签出的耗时分段</div></div>
+    <div class="chart" id="cAging"></div>
+  </div>
+
+  <div class="card wide">
+    <div class="ct"><h2>出库单状态分布</h2><div class="tip">按履约单数</div></div>
+    <div class="chart" id="cStatus"></div>
+  </div>
+
+  <div class="card wide">
+    <div class="ct"><h2>数据覆盖日历</h2><div class="tip">每日是否存在履约单数据（不随筛选变化）</div></div>
+    <div class="covsum" id="covSum">—</div>
+    <div class="cov">
+      <div class="covinner">
+        <div class="covmonths" id="covMonths"></div>
+        <div class="covbody">
+          <div class="covdow"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+          <div class="covgrid" id="covGrid"></div>
+        </div>
+      </div>
+    </div>
+    <div class="covlegend">
+      <em><s style="background:#4E79A7"></s>有数据</em>
+      <em id="lgGap" style="display:none"><s style="background:#fbe0de;box-shadow:inset 0 0 0 1px #ee8f89"></s>缺口（源数据未导出）</em>
+      <em style="color:#9aa5b4">鼠标悬停查看每日单量</em>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  <b>看板口径说明</b>
+  <ul>
+    <li><b>筛选</b>：时间（单选月份）与仓库 / 平台 / 后台物流商 / 国家（多选）相互叠加，作用到全部 KPI 与图表；下拉里的数字是「其他筛选条件下该选项的单量」，方便判断该选哪个。国家较多，下拉里可直接搜索。</li>
+    <li style="color:#b45309"><b>「后台物流商」与「C 端显示物流服务商」不是一回事，别混用。</b>后台字段是与我方签约的承运商，往往只是总包（例如 WYT-USPS）；C 端字段才是客户实际看到的末端派送商（GOFO、SpeedX、OnTrac、USPS 等）。判断「客户觉得慢不慢」要看 C 端这一张。</li>
+    <li><b>平台</b>名称取自 <code>平台对照表.xlsx</code>（PC 编码 → 正式名称），如 PC1 → Luvme-Global-SHOPIFY。</li>
+    <li><b>单量</b>按「履约单号」去重统计，一个履约单含多个 SKU 时只计 1 单；件数为各 SKU 数量之和。</li>
+    <li><b>物流运输天数</b> = 签收时间 − 签出时间，仅统计两者都有值的单，未签收单不参与。</li>
+    <li><b>签收覆盖率</b>偏低时多为在途未签收，最近月份（尤其 11 月）数值偏低属正常。</li>
+    <li style="color:#b45309"><b>11 月是不完整月份</b>：数据截止 <span id="noteEnd">—</span>，该月只有 12 天，柱状图上的「下降」是截断假象。跨月比较请切到<b>「日均」</b>口径。</li>
+    <li style="color:#b45309"><b>金额类字段不可用于运费看板</b>：「当前物流预估价」98.2% 为 0，「申报金额」仅 12% 有值，两者均无法作为成本口径，故本看板不呈现运费与费比。</li>
+  </ul>
+</div>
+
+<footer>
+  履约单数据看板 · 数据截止 <span id="mEnd">—</span> · 由 DuckDB 聚合生成<br>
+  数据已清洗：删除 199 行测试单、置空 298 行脏签收时间 · 日期覆盖 <span id="mGap">—</span> · 跨月比较建议用「日均」口径
+</footer>
+
+</div>
+
+<script>
+<!--ECHARTS-->
+</script>
+<script>
+/* 本文件是模板，不能直接打开；请打开同目录上一级的 履约单看板.html */
+if (typeof echarts === 'undefined'){
+  document.body.innerHTML = '<div style="max-width:620px;margin:88px auto;padding:28px 32px;'
+    + 'font:15px/1.9 -apple-system,Microsoft YaHei,sans-serif;background:#fff;'
+    + 'border:1px solid #f2e6c8;border-radius:12px;color:#7a6320">'
+    + '<b style="font-size:17px;color:#5c4a12">这是模板文件，不能直接用浏览器打开</b>'
+    + '<p style="margin-top:12px">它里面只有数据与图表库两个占位符，'
+    + '需要由 <code>assemble.py</code> 注入数据后才生成可打开的页面。</p>'
+    + '<p style="margin-top:10px">要看看板，请打开：<b>履约单看板.html</b></p>'
+    + '<p style="margin-top:10px;color:#9aa5b4">改样式改这里，然后跑 <code>python assemble.py</code> 重新生成。</p>'
+    + '</div>';
+  throw new Error('template-not-built');
+}
+</script>
+<script>
+const D = __DATA__;
+
+/* ---------- 维度与立方体 ---------- */
+const DM = D.dims;
+const MONTHS = DM.months, WHS = DM.whs, PFS = DM.pfs, CRS = DM.crs, DAYS = DM.days;
+const CTRY = DM.countries, CTRY_ZH = DM.countryZH;
+const CTRY_LABEL = CTRY.map(c => CTRY_ZH[c] || c);
+const CCARS = DM.ccars, STATUSES = DM.statuses, ABANDS = DM.abands;
+const DAYM = DM.dayMonth;
+
+const DAY = D.day,    DAY_S = 12;  // di wi pi ci ni | n items hS hC tS tC sg
+const CCA = D.ccar,   CCA_S = 9;   // mi wi pi ci ni xi | n tS tC
+const STA = D.status, STA_S = 7;   // mi wi pi ci ni si | n
+const AGE = D.aging,  AGE_S = 7;   // mi wi pi ci ni abi | n
+
+/* 每月有数据的天(日号) */
+const MDAYS = MONTHS.map(()=>[]);
+DAYS.forEach((d,i)=>MDAYS[DAYM[i]].push(+d.slice(8)));
+
+/* ---------- 工具 ---------- */
+const fmt  = n => (n==null||isNaN(n) ? '—' : Number(n).toLocaleString('zh-CN'));
+const fmt1 = n => (n==null||isNaN(n) ? '—' : Number(n).toLocaleString('zh-CN',{maximumFractionDigits:1,minimumFractionDigits:1}));
+const COLORS = ['#2F5597','#4E79A7','#59A14F','#E8A33D','#D9534F','#76B7B2','#B07AA1','#9C755F','#86BCB6','#F28E2B','#7B8FA1','#C4A484'];
+const daysInMonth = ym => new Date(+ym.slice(0,4), +ym.slice(5,7), 0).getDate();
+const esc = s => String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const charts = {};
+function init(id){ const c = echarts.init(document.getElementById(id), null, {renderer:'canvas'}); charts[id]=c; return c; }
+
+/* ---------- 筛选状态 ---------- */
+const SEL = { m:null, wh:new Set(), pf:new Set(), cr:new Set(), cn:new Set() };
+const SEARCH = {};                      // 各下拉的关键词
+let OPEN = null;                        // 当前展开的下拉
+
+const DIMS = [
+  { key:'wh', name:'仓库',   list:WHS,        labels:WHS,        pos:1 },
+  { key:'pf', name:'平台',   list:PFS,        labels:PFS,        pos:2 },
+  { key:'cr', name:'物流商', list:CRS,        labels:CRS,        pos:3 },
+  { key:'cn', name:'国家',   list:CTRY,       labels:CTRY_LABEL, pos:4 },
+];
+
+function keep(mi, wi, pi, ci, ni, skip){
+  if (SEL.m !== null && mi !== SEL.m) return false;
+  if (skip!=='wh' && SEL.wh.size && !SEL.wh.has(wi)) return false;
+  if (skip!=='pf' && SEL.pf.size && !SEL.pf.has(pi)) return false;
+  if (skip!=='cr' && SEL.cr.size && !SEL.cr.has(ci)) return false;
+  if (skip!=='cn' && SEL.cn.size && !SEL.cn.has(ni)) return false;
+  return true;
+}
+const ZERO = () => ({n:0,items:0,hS:0,hC:0,tS:0,tC:0,sg:0});
+function addInto(o, i){
+  o.n+=DAY[i+5]; o.items+=DAY[i+6];
+  o.hS+=DAY[i+7]; o.hC+=DAY[i+8]; o.tS+=DAY[i+9]; o.tC+=DAY[i+10]; o.sg+=DAY[i+11];
+}
+function scan(fn, skip){
+  for (let i=0;i<DAY.length;i+=DAY_S){
+    const di=DAY[i], wi=DAY[i+1], pi=DAY[i+2], ci=DAY[i+3], ni=DAY[i+4];
+    if (!keep(DAYM[di], wi, pi, ci, ni, skip)) continue;
+    fn(i, di, wi, pi, ci, ni);
+  }
+}
+/* 统一成可展示的统计量。样本太少时不给均值 —— 例如「C端承运商=未填」的 2.8 万单里
+   只有 1 张已签收，算出「2.1 天」纯属噪声，宁可显示 — 也不要误导。 */
+const MIN_N = 30;
+function stat(o){
+  return {
+    n:o.n, items:o.items,
+    hours:  o.hC >= MIN_N ? o.hS/o.hC/60 : null,
+    days:   o.tC >= MIN_N ? o.tS/o.tC/1440 : null,
+    sign:   o.n  >= MIN_N ? 100*o.sg/o.n : null,
+  };
+}
+function aggAll(){ const o=ZERO(); scan(i=>addInto(o,i)); return o; }
+function aggMonthly(){
+  const arr = MONTHS.map(ZERO);
+  scan((i,di)=>addInto(arr[DAYM[di]], i));
+  return arr;
+}
+function aggDaily(mi){
+  const out = {};
+  scan((i,di)=>{
+    if (DAYM[di] !== mi) return;
+    const k = +DAYS[di].slice(8);
+    if (!out[k]) out[k] = ZERO();
+    addInto(out[k], i);
+  });
+  return out;
+}
+function aggByDim(pos, n){
+  const arr = new Array(n).fill(null).map(ZERO);
+  scan(i=>addInto(arr[DAY[i+pos]], i));
+  return arr;
+}
+function facetCounts(key, pos){
+  const n = DIMS.find(d=>d.key===key).list.length;
+  const arr = new Array(n).fill(0);
+  scan((i)=>arr[DAY[i+pos]] += DAY[i+5], key);
+  return arr;
+}
+/* C 端承运商立方体 */
+function ccarAgg(){
+  const m = new Map();
+  for (let i=0;i<CCA.length;i+=CCA_S){
+    if (!keep(CCA[i],CCA[i+1],CCA[i+2],CCA[i+3],CCA[i+4])) continue;
+    const k=CCA[i+5];
+    let o=m.get(k); if(!o){o={n:0,tS:0,tC:0}; m.set(k,o);}
+    o.n+=CCA[i+6]; o.tS+=CCA[i+7]; o.tC+=CCA[i+8];
+  }
+  return m;
+}
+function countAgg(arr, stride){
+  const m = new Map();
+  for (let i=0;i<arr.length;i+=stride){
+    if (!keep(arr[i],arr[i+1],arr[i+2],arr[i+3],arr[i+4])) continue;
+    const k=arr[i+5];
+    m.set(k, (m.get(k)||0) + arr[i+6]);
+  }
+  return m;
+}
+
+/* ---------- 图表 ---------- */
+function emptyChart(id, msg){
+  charts[id].setOption({
+    title:{ text: msg || '当前筛选无数据', left:'center', top:'middle',
+            textStyle:{ fontSize:13, color:'#9aa5b4', fontWeight:'normal' } },
+    series:[]
+  }, true);
+}
+
+function drawTrend(){
+  const isAll = SEL.m === null;
+  const ma = aggMonthly();
+  document.getElementById('trendTitle').textContent =
+    isAll ? '月度单量与时效走势' : (SEL.m+1) + '月 每日单量与物流天数';
+  document.getElementById('trendSeg').style.display = isAll ? 'inline-flex' : 'none';
+  const tipEl = document.getElementById('trendTip');
+
+  if (ma.reduce((s,o)=>s+o.n, 0) === 0){ emptyChart('cTrend'); return; }
+
+  const c = charts.cTrend;
+  if (isAll){
+    const useAvg = METRIC === 'avg';
+    tipEl.style.color = '';
+    tipEl.textContent = useAvg ? '柱：日均单量（单/天）　线：物流天数' : '柱：单量（浅色虚线柱＝当月数据不完整）　线：物流天数';
+    const rows = ma.map((o,t)=>{
+      const dayCnt = MDAYS[t].length || 1;
+      return { ym:MONTHS[t], dayCnt, ...stat(o) };
+    });
+    const barData = rows.map(r=>{
+      const v = useAvg ? Math.round(r.n / r.dayCnt) : r.n;
+      const item = { value: v };
+      const natural = daysInMonth(r.ym);
+      if (r.dayCnt < natural){
+        item.itemStyle = {color:'#c9d8ec', borderColor:'#8fa9cc', borderWidth:1, borderType:'dashed', borderRadius:[4,4,0,0]};
+        if (!useAvg && r.dayCnt < natural*0.6){
+          item.label = {show:true, position:'top', fontSize:10, color:'#b45309', formatter:`仅${r.dayCnt}天`};
+        }
+      } else {
+        item.itemStyle = {color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#4E79A7'},{offset:1,color:'#2F5597'}]), borderRadius:[4,4,0,0]};
+      }
+      return item;
+    });
+    const barName = useAvg ? '日均单量' : '单量';
+    c.setOption({
+      grid:{left:8,right:8,top:42,bottom:8,containLabel:true},
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},
+        formatter:p=>{
+          const r = rows[p[0].dataIndex];
+          const natural = daysInMonth(r.ym);
+          const bad = r.dayCnt < natural ? `　<span style="color:#b45309">仅 ${r.dayCnt}/${natural} 天</span>` : '';
+          return `<b>${r.ym}</b>${bad}`
+            + `<br/>单量：${fmt(r.n)}`
+            + `<br/>日均单量：${fmt(Math.round(r.n/r.dayCnt))} 单/天`
+            + `<br/>物流天数：${fmt1(r.days)} 天`
+            + `<br/>仓内处理：${fmt1(r.hours)} 小时`
+            + `<br/>签收覆盖率：${fmt1(r.sign)}%`;
+        }},
+      legend:{data:[barName,'物流天数'],right:0,top:0,itemWidth:10,itemHeight:10,textStyle:{fontSize:11,color:'#5b6675'}},
+      xAxis:{type:'category',data:MONTHS.map(m=>m.slice(5)+'月'),axisLine:{lineStyle:{color:'#e6ebf2'}},axisTick:{show:false},axisLabel:{color:'#5b6675',fontSize:11}},
+      yAxis:[
+        {type:'value',name:useAvg?'单/天':'单量',nameTextStyle:{fontSize:11,color:'#9aa5b4'},splitLine:{lineStyle:{color:'#f0f3f8'}},
+         axisLabel:{color:'#5b6675',fontSize:11,formatter:v=>useAvg ? v : (v>=10000? (v/10000)+'万':v)}},
+        {type:'value',name:'天',nameTextStyle:{fontSize:11,color:'#9aa5b4'},splitLine:{show:false},axisLabel:{color:'#5b6675',fontSize:11},
+         min:v=>Math.max(0,Math.floor((v.min-0.4)*2)/2),max:v=>Math.ceil((v.max+0.3)*2)/2}
+      ],
+      series:[
+        {name:barName,type:'bar',barMaxWidth:34,data:barData},
+        {name:'物流天数',type:'line',yAxisIndex:1,smooth:true,symbolSize:7,
+         lineStyle:{width:2.5,color:'#E8A33D'},itemStyle:{color:'#E8A33D'},
+         areaStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'rgba(232,163,61,.22)'},{offset:1,color:'rgba(232,163,61,0)'}])},
+         data:rows.map(r=>r.days)}
+      ]
+    }, true);
+  } else {
+    const dm = aggDaily(SEL.m);
+    const ds = MDAYS[SEL.m].slice().sort((a,b)=>a-b);
+    const natural = daysInMonth(MONTHS[SEL.m]);
+    if (ds.length < natural){
+      tipEl.style.color = '#b45309';
+      tipEl.innerHTML = `<b>该月仅 ${ds.length}/${natural} 天有数据</b>，总量不代表整月`;
+    } else {
+      tipEl.style.color = '';
+      tipEl.textContent = '按日，柱：单量　线：物流天数';
+    }
+    const rows = ds.map(k=>{
+      const o = dm[k] || ZERO();
+      return { k, ...stat(o), n:o.n };
+    });
+    c.setOption({
+      grid:{left:8,right:8,top:36,bottom:8,containLabel:true},
+      tooltip:{trigger:'axis',axisPointer:{type:'shadow'},
+        formatter:p=>{
+          const r = rows[p[0].dataIndex];
+          return `<b>${MONTHS[SEL.m]}-${String(r.k).padStart(2,'0')}</b>`
+            +`<br/>单量：${fmt(r.n)}<br/>物流天数：${fmt1(r.days)} 天<br/>仓内处理：${fmt1(r.hours)} 小时`;
+        }},
+      legend:{data:['单量','物流天数'],right:0,top:0,itemWidth:10,itemHeight:10,textStyle:{fontSize:11,color:'#5b6675'}},
+      xAxis:{type:'category',data:rows.map(r=>String(r.k)),
+        axisLine:{lineStyle:{color:'#e6ebf2'}},axisTick:{show:false},
+        axisLabel:{color:'#5b6675',fontSize:11,interval:Math.max(0,Math.floor(rows.length/16)-1)}},
+      yAxis:[
+        {type:'value',name:'单量',nameTextStyle:{fontSize:11,color:'#9aa5b4'},splitLine:{lineStyle:{color:'#f0f3f8'}},axisLabel:{color:'#5b6675',fontSize:11}},
+        {type:'value',name:'天',nameTextStyle:{fontSize:11,color:'#9aa5b4'},splitLine:{show:false},axisLabel:{color:'#5b6675',fontSize:11},
+         min:v=>Math.max(0,Math.floor((v.min-0.4)*2)/2),max:v=>Math.ceil((v.max+0.3)*2)/2}
+      ],
+      series:[
+        {name:'单量',type:'bar',barMaxWidth:18,
+         itemStyle:{color:new echarts.graphic.LinearGradient(0,0,0,1,[{offset:0,color:'#4E79A7'},{offset:1,color:'#2F5597'}]),borderRadius:[3,3,0,0]},
+         data:rows.map(r=>r.n)},
+        {name:'物流天数',type:'line',yAxisIndex:1,smooth:true,symbolSize:5,
+         lineStyle:{width:2,color:'#E8A33D'},itemStyle:{color:'#E8A33D'},data:rows.map(r=>r.days)}
+      ]
+    }, true);
+  }
+}
+
+/* 横向条形: 排行类图表通用 */
+function drawRank(id, rows, color, labelFmt){
+  if (!rows.length){ emptyChart(id); return; }
+  charts[id].setOption({
+    grid:{left:8,right:64,top:8,bottom:8,containLabel:true},
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},
+      formatter:p=>{const r=rows[p[0].dataIndex];
+        return `<b>${esc(r.name)}</b><br/>单量：${fmt(r.n)}（${fmt1(r.pct)}%）<br/>物流天数：${fmt1(r.days)} 天`;}},
+    xAxis:{type:'value',splitLine:{lineStyle:{color:'#f0f3f8'}},
+      axisLabel:{color:'#5b6675',fontSize:11,formatter:v=>v>=10000?(v/10000)+'万':v}},
+    yAxis:{type:'category',data:rows.map(r=>r.name),axisLine:{show:false},axisTick:{show:false},
+      axisLabel:{color:'#1b2430',fontSize:11.5}},
+    series:[{type:'bar',barMaxWidth:16,
+      itemStyle:{color: typeof color==='function'? (p=>color(rows[p.dataIndex])) : color, borderRadius:[0,3,3,0]},
+      data:rows.map(r=>r.n),
+      label:{show:true,position:'right',fontSize:10.5,color:'#5b6675',
+        formatter:p=>labelFmt(rows[p.dataIndex])}}]
+  }, true);
+}
+
+function drawWh(){
+  const arr = aggByDim(1, WHS.length);
+  const total = arr.reduce((s,o)=>s+o.n,0) || 1;
+  let rows = arr.map((o,i)=>({ name:WHS[i], ...stat(o) })).filter(r=>r.n>0);
+  rows.sort((a,b)=>b.n-a.n);
+  rows = rows.slice(0,12).reverse().map(r=>({...r, pct:100*r.n/total}));
+  drawRank('cWh', rows, '#2F5597', r=>r.days==null?'—':fmt1(r.days)+'天');
+}
+
+function drawCarrier(){
+  const arr = aggByDim(3, CRS.length);
+  const total = arr.reduce((s,o)=>s+o.n,0) || 1;
+  let rows = arr.map((o,i)=>({ name:CRS[i], ...stat(o) })).filter(r=>r.n>0);
+  rows.sort((a,b)=>b.n-a.n);
+  rows = rows.slice(0,12).reverse().map(r=>({...r, pct:100*r.n/total}));
+  drawRank('cCarrier', rows, '#59A14F', r=>r.days==null?'—':fmt1(r.days)+'天');
+}
+
+function drawCcar(){
+  const m = ccarAgg();
+  const total = [...m.values()].reduce((s,o)=>s+o.n,0) || 1;
+  let rows = [...m.entries()].map(([k,o])=>({
+    name: CCARS[k],
+    n:o.n, pct:100*o.n/total,
+    days:   o.tC >= MIN_N ? o.tS/o.tC/1440 : null
+  })).filter(r=>r.n>0);
+  rows.sort((a,b)=>b.n-a.n);
+  rows = rows.slice(0,12).reverse();
+  drawRank('cCcar', rows, '#B07AA1', r=>r.days==null?'—':fmt1(r.days)+'天');
+}
+
+function drawCountry(){
+  const arr = aggByDim(4, CTRY.length);
+  const total = arr.reduce((s,o)=>s+o.n,0) || 1;
+  let rows = arr.map((o,i)=>({ name:CTRY_LABEL[i], ...stat(o) })).filter(r=>r.n>0);
+  rows.sort((a,b)=>b.n-a.n);
+  rows = rows.slice(0,12).reverse().map(r=>({...r, pct:100*r.n/total}));
+  drawRank('cCountry', rows, '#4E79A7', r=>r.days==null?'—':fmt1(r.days)+'天');
+}
+
+function drawPlatform(){
+  const arr = aggByDim(2, PFS.length);
+  let rows = arr.map((o,i)=>({name:PFS[i], value:o.n})).filter(r=>r.value>0);
+  if (!rows.length){ emptyChart('cPlatform'); return; }
+  rows.sort((a,b)=>b.value-a.value);
+  const top = rows.slice(0,8);
+  const rest = rows.slice(8).reduce((s,r)=>s+r.value,0);
+  const data = top.map(r=>({name:r.name, value:r.value}));
+  if (rest>0) data.push({name:'其他', value:rest});
+  charts.cPlatform.setOption({
+    tooltip:{trigger:'item',formatter:p=>`${esc(p.name)}<br/>${fmt(p.value)} 单（${p.percent}%）`},
+    legend:{type:'scroll',orient:'vertical',right:6,top:'center',itemWidth:9,itemHeight:9,textStyle:{fontSize:11,color:'#5b6675'}},
+    color:COLORS,
+    series:[{type:'pie',radius:['46%','72%'],center:['34%','52%'],avoidLabelOverlap:true,
+      itemStyle:{borderColor:'#fff',borderWidth:2},
+      label:{show:false},labelLine:{show:false},data:data}]
+  }, true);
+}
+
+function drawBands(id, order, map, colors){
+  const vals = order.map((_,i)=>map.get(i)||0);
+  if (!vals.some(v=>v>0)){ emptyChart(id); return; }
+  charts[id].setOption({
+    grid:{left:8,right:14,top:26,bottom:8,containLabel:true},
+    tooltip:{trigger:'axis',formatter:p=>`${p[0].name}<br/>${fmt(p[0].value)} 单`},
+    xAxis:{type:'category',data:order,axisLine:{lineStyle:{color:'#e6ebf2'}},axisTick:{show:false},
+      axisLabel:{color:'#5b6675',fontSize:11}},
+    yAxis:{type:'value',splitLine:{lineStyle:{color:'#f0f3f8'}},
+      axisLabel:{color:'#5b6675',fontSize:11,formatter:v=>v>=10000?(v/10000)+'万':v}},
+    series:[{type:'bar',barMaxWidth:44,itemStyle:{borderRadius:[4,4,0,0]},
+      data:vals.map((v,i)=>({value:v, itemStyle:{color: colors[i]}})),
+      label:{show:true,position:'top',fontSize:10.5,color:'#5b6675',formatter:p=>p.value?fmt(p.value):''}}]
+  }, true);
+}
+
+function drawAging(){
+  const m = countAgg(AGE, AGE_S);
+  const colors = ['#59A14F','#76B7B2','#E8A33D','#F28E2B','#D9534F','#c8ced8'];
+  drawBands('cAging', ABANDS, m, colors);
+}
+
+function drawStatus(){
+  const m = countAgg(STA, STA_S);
+  const total = [...m.values()].reduce((s,v)=>s+v,0) || 1;
+  let rows = [...m.entries()].map(([k,v])=>({ name:STATUSES[k], n:v, pct:100*v/total }))
+    .filter(r=>r.n>0);
+  if (!rows.length){ emptyChart('cStatus'); return; }
+  rows.sort((a,b)=>b.n-a.n);
+  rows = rows.slice(0,13).reverse();
+  const cMap = {'已完成':'#59A14F','已签出':'#4E79A7','已取消':'#c8ced8','待收货':'#76B7B2',
+                '物流异常':'#D9534F','待分配':'#E8A33D','待加工':'#E8A33D','待打包':'#E8A33D','待签出':'#E8A33D'};
+  charts.cStatus.setOption({
+    grid:{left:8,right:60,top:8,bottom:8,containLabel:true},
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},
+      formatter:p=>{const r=rows[p[0].dataIndex];return `${esc(r.name)}<br/>${fmt(r.n)} 单（${fmt1(r.pct)}%）`;}},
+    xAxis:{type:'value',splitLine:{lineStyle:{color:'#f0f3f8'}},
+      axisLabel:{color:'#5b6675',fontSize:11,formatter:v=>v>=10000?(v/10000)+'万':v}},
+    yAxis:{type:'category',data:rows.map(r=>r.name),axisLine:{show:false},axisTick:{show:false},
+      axisLabel:{color:'#1b2430',fontSize:11}},
+    series:[{type:'bar',barMaxWidth:16,
+      itemStyle:{borderRadius:[0,3,0,0]},
+      data:rows.map(r=>({value:r.n,itemStyle:{color:cMap[r.name]||'#4E79A7',borderRadius:[0,3,3,0]}})),
+      label:{show:true,position:'right',fontSize:10.5,color:'#5b6675',formatter:p=>fmt(p.value)}}]
+  }, true);
+}
+
+/* ---------- KPI ---------- */
+function drawKPI(){
+  const o = aggAll(), s = stat(o);
+  const nDays = SEL.m===null ? D.meta.daysCovered : (MDAYS[SEL.m]||[]).length;
+
+  document.getElementById('kOrders').textContent = fmt(o.n);
+  const subEl = document.getElementById('kOrdersSub');
+  if (SEL.m === null){
+    subEl.innerHTML = `${MONTHS.length} 个月 · ${D.meta.daysCovered}/${D.meta.daysTotal} 天 · 日均 ${fmt(Math.round(o.n/nDays))}`;
+  } else {
+    const natural = daysInMonth(MONTHS[SEL.m]);
+    subEl.innerHTML = nDays < natural
+      ? `${SEL.m+1}月 · <span style="color:#d9534f;font-weight:600">仅 ${nDays}/${natural} 天</span>`
+      : `${SEL.m+1}月 · ${nDays} 天`;
+  }
+  document.getElementById('kItems').textContent = fmt(o.items);
+  document.getElementById('kItemsSub').textContent = o.n ? `单均 ${fmt1(o.items/o.n)} 件` : '—';
+  document.getElementById('kAging').innerHTML = fmt1(s.hours)+'<small>小时</small>';
+  document.getElementById('kTransit').innerHTML = fmt1(s.days)+'<small>天</small>';
+  document.getElementById('kSign').innerHTML = fmt1(s.sign)+'<small>%</small>';
+}
+
+/* ---------- 筛选条 ---------- */
+function renderFilterBar(){
+  DIMS.forEach(d=>{
+    const box = document.getElementById('fs-'+d.key);
+    box.innerHTML =
+      `<button class="fbtn" data-k="${d.key}">`
+        + `<span class="lbl">${d.name}</span><span class="n"></span><i class="car"></i>`
+      + `</button>`
+      + `<div class="fpop" data-pop="${d.key}"></div>`;
+    box.querySelector('.fbtn').onclick = e=>{
+      e.stopPropagation();
+      OPEN = (OPEN === d.key) ? null : d.key;
+      applyOpenState();
+      if (OPEN) box.querySelector('.fpop').scrollTop = 0;
+    };
+    // 搜索框: 元素被重建但 pop 容器不重建, 所以监听器挂得住
+    const pop = box.querySelector('.fpop');
+    pop.addEventListener('input', e=>{
+      if (!e.target.matches('input[data-search]')) return;
+      SEARCH[d.key] = e.target.value;
+      const pos = e.target.selectionStart;
+      refreshFilterBar();
+      const again = box.querySelector('input[data-search]');
+      if (again){ again.focus(); again.setSelectionRange(pos, pos); }
+    });
+  });
+  refreshFilterBar();
+}
+
+function applyOpenState(){
+  DIMS.forEach(d=>{
+    const pop = document.querySelector('#fs-'+d.key+' .fpop');
+    if (pop) pop.classList.toggle('open', OPEN === d.key);
+  });
+}
+
+function refreshFilterBar(){
+  DIMS.forEach(d=>{
+    const box  = document.getElementById('fs-'+d.key);
+    const btn  = box.querySelector('.fbtn');
+    const sel  = SEL[d.key];
+    const lbl  = sel.size === 0 ? '全部'
+               : (sel.size === 1 ? d.labels[[...sel][0]] : '已选 ' + sel.size);
+    btn.querySelector('.n').textContent = lbl;
+    btn.classList.toggle('active', sel.size > 0);
+
+    const pop = box.querySelector('.fpop');
+    const st  = pop.scrollTop;
+    pop.innerHTML = buildOptions(d);
+    pop.scrollTop = st;
+    pop.classList.toggle('open', OPEN === d.key);
+  });
+  updateNow();
+}
+
+function buildOptions(d){
+  const q = (SEARCH[d.key]||'').trim().toLowerCase();
+  const counts = facetCounts(d.key, d.pos);
+  const sel = SEL[d.key];
+  let items = d.list.map((v,i)=>({v,i,n:counts[i]})).filter(o=>o.n>0);
+  if (q) items = items.filter(o=>String(d.labels[o.i]).toLowerCase().includes(q));
+  const all = items.reduce((s,o)=>s+o.n, 0);
+
+  let html = '';
+  if (d.list.length > 12){
+    html += `<input class="fsearch" data-search="${d.key}" placeholder="搜索${d.name}…" value="${esc(SEARCH[d.key]||'')}">`;
+  }
+  html += `<label class="fopt fall"><input type="checkbox" ${sel.size===0?'checked':''}`
+    + ` data-k="${d.key}" data-all="1"><span>全部</span><span class="cnt">${fmt(all)}</span></label>`;
+  items.forEach(o=>{
+    html += `<label class="fopt"><input type="checkbox" ${sel.has(o.i)?'checked':''}`
+      + ` data-k="${d.key}" data-i="${o.i}"><span>${esc(d.labels[o.i])}</span>`
+      + `<span class="cnt">${fmt(o.n)}</span></label>`;
+  });
+  if (!items.length) html += `<div class="fempty">没有匹配的${d.name}</div>`;
+  return html;
+}
+
+function bindFilterClick(){
+  document.addEventListener('click', e=>{
+    const inp = e.target.closest('input[data-k]');
+    if (inp){
+      const k = inp.dataset.k;
+      if (!SEL[k]) return;
+      if (inp.dataset.all){
+        SEL[k].clear();
+      } else {
+        const i = +inp.dataset.i;
+        if (inp.checked) SEL[k].add(i); else SEL[k].delete(i);
+      }
+      onFilterChange();
+      return;
+    }
+    if (!e.target.closest('.fsel')){ OPEN = null; applyOpenState(); }
+  });
+}
+
+function updateNow(){
+  const o = aggAll();
+  const parts = [];
+  if (SEL.m !== null) parts.push(`${SEL.m+1}月`);
+  DIMS.forEach(d=>{ if (SEL[d.key].size) parts.push(`${d.name}${SEL[d.key].size}`); });
+  const el = document.getElementById('fNow');
+  el.innerHTML = parts.length
+    ? `当前筛选 <b>${parts.join(' · ')}</b> → ${fmt(o.n)} 单（占全量 ${fmt1(100*o.n/D.meta.orders)}%）`
+    : `未筛选 · 全量 ${fmt(D.meta.orders)} 单`;
+}
+
+function syncURL(){
+  try{
+    const q = new URLSearchParams();
+    if (SEL.m !== null) q.set('m', SEL.m);
+    DIMS.forEach(d=>{ if (SEL[d.key].size) q.set(d.key, [...SEL[d.key]].join(',')); });
+    const qs = q.toString();
+    history.replaceState(null, '', qs ? '?' + qs : location.pathname);
+  }catch(_){}
+}
+function applyURL(){
+  try{
+    const q = new URLSearchParams(location.search);
+    if (q.has('m')){
+      const v = q.get('m');
+      SEL.m = (v===''||v===null) ? null : Math.max(0, Math.min(MONTHS.length-1, +v));
+    }
+    DIMS.forEach(d=>{
+      if (!q.has(d.key)) return;
+      q.get(d.key).split(',').forEach(v=>{
+        const i = +v;
+        if (Number.isInteger(i) && i>=0 && i<d.list.length) SEL[d.key].add(i);
+      });
+    });
+  }catch(_){}
+}
+
+function onFilterChange(){ refreshFilterBar(); renderAll(); syncURL(); }
+
+/* ---------- 覆盖日历(不随筛选变化) ---------- */
+function drawCoverage(){
+  const cov = D.coverage || [];
+  if (!cov.length) return;
+  const grid = document.getElementById('covGrid');
+  const mrow = document.getElementById('covMonths');
+  const first = new Date(cov[0][0] + 'T00:00:00');
+  const dow = first.getDay();
+  const nWeeks = Math.ceil((cov.length + dow) / 7);
+
+  let cells = '';
+  for (let i = 0; i < dow; i++) cells += '<i style="background:transparent"></i>';
+  const monthStart = [];
+  let lastM = '';
+  cov.forEach(([d,n], i) => {
+    const wk = Math.floor((i + dow) / 7);
+    const m = d.slice(0, 7);
+    if (m !== lastM){ monthStart.push([m, wk]); lastM = m; }
+    cells += n > 0
+      ? `<i class="on" title="${d}　${fmt(n)} 单"></i>`
+      : `<i class="gap" title="${d}　无数据（源文件未导出）"></i>`;
+  });
+  grid.innerHTML = cells;
+
+  mrow.style.gridTemplateColumns = `repeat(${nWeeks}, 15px)`;
+  mrow.innerHTML = monthStart.map(([m, wk], i) => {
+    const isLast = i === monthStart.length - 1;
+    const next = isLast ? nWeeks : monthStart[i+1][1];
+    const span = Math.max(1, next - wk);
+    if (!isLast && span < 3) return '';
+    return `<span style="grid-column:${wk+1} / span ${span}">${+m.slice(5)}月</span>`;
+  }).join('');
+
+  document.getElementById('covSum').innerHTML =
+    `区间共 <b>${D.meta.daysTotal}</b> 天，有数据 <b>${D.meta.daysCovered}</b> 天，`
+    + `<b>无缺口</b>。`
+    + `<br>原先两段缺口（01-29~02-22、04-01~04-22）已由补导文件补齐，月度总量现在可直接同比。`;
+  document.getElementById('mGap').textContent = '316/316 天，无缺口';
+}
+
+/* ---------- 渲染 ---------- */
+function renderAll(){
+  drawKPI(); drawTrend(); drawWh(); drawCarrier(); drawCcar();
+  drawCountry(); drawPlatform(); drawAging(); drawStatus();
+}
+
+let METRIC = 'total';
+function buildChips(){
+  const box = document.getElementById('monthChips');
+  box.innerHTML = '';
+  const items = [{ v:null, t:'全部' }, ...MONTHS.map((m,i)=>({ v:i, t:(i+1)+'月' }))];
+  items.forEach(it=>{
+    const b = document.createElement('button');
+    b.className = 'chip' + (SEL.m === it.v ? ' on' : '');
+    b.textContent = it.t;
+    b.title = it.v===null ? '全部月份' : MONTHS[it.v];
+    b.onclick = ()=>{ SEL.m = it.v; buildChips(); refreshFilterBar(); renderAll(); syncURL(); };
+    box.appendChild(b);
+  });
+}
+
+/* ---------- 启动 ---------- */
+document.getElementById('mRange').textContent = D.meta.start + ' ~ ' + D.meta.end;
+document.getElementById('mEnd').textContent = D.meta.end;
+document.getElementById('noteEnd').textContent = D.meta.end;
+document.getElementById('mOrders').textContent = fmt(D.meta.orders);
+
+['cTrend','cWh','cCarrier','cCcar','cCountry','cPlatform','cAging','cStatus'].forEach(init);
+applyURL();
+bindFilterClick();
+buildChips();
+renderFilterBar();
+renderAll();
+drawCoverage();
+
+document.querySelectorAll('#trendSeg button').forEach(b=>{
+  b.onclick = ()=>{
+    METRIC = b.dataset.m;
+    document.querySelectorAll('#trendSeg button').forEach(x=>x.classList.toggle('on', x===b));
+    drawTrend();
+  };
+});
+document.getElementById('fReset').onclick = ()=>{
+  SEL.m = null; SEL.wh.clear(); SEL.pf.clear(); SEL.cr.clear(); SEL.cn.clear();
+  DIMS.forEach(d=>{ SEARCH[d.key] = ''; });
+  OPEN = null;
+  buildChips(); refreshFilterBar(); applyOpenState(); renderAll(); syncURL();
+};
+
+let rt;
+window.addEventListener('resize', ()=>{
+  clearTimeout(rt);
+  rt = setTimeout(()=>Object.values(charts).forEach(c=>c.resize()), 150);
+});
+</script>
+</body>
+</html>

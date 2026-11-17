@@ -1,0 +1,28 @@
+# ---------- 数据源：500MB 的库绝不可能进 git ----------
+*.duckdb
+*.duckdb.wal
+*.parquet
+/tmp/
+
+# ---------- 构建产物（由 assemble.py 生成） ----------
+/public/
+/履约单看板.html
+__pycache__/
+*.pyc
+
+# ---------- 本地临时文件与截图 ----------
+/_*
+*.png
+
+# ---------- 已被取代的旧版 ----------
+/backup/
+/dashboard/
+/build_marts.py
+/render_dashboard.py
+/build_report.json
+
+# ---------- 编辑器 ----------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
