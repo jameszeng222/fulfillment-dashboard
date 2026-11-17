@@ -36,3 +36,8 @@ node_modules/
 .wrangler/
 .wrangler-dry/
 .dev.vars
+node_modules/
+.wrangler/
+.wrangler-dry/
+.dev.vars
+/dist/
