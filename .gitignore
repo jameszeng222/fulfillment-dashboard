@@ -47,3 +47,4 @@ _t_*.py
 *.duckdb.bak
 *.duckdb.wal
 *.bak
+out/

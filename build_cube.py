@@ -244,6 +244,31 @@ if has_trk:
     ri = {s: i for i, s in enumerate(recon_labels)}
     recon_flat = _flat6(raw_recon, I, ri)
 
+# ---------------------------------------------------------------- 业务预警
+# 来自 alerts.py 生成的 fct_alert（每单一行主预警 + 若干次预警）
+alert_rules, alert_cn, alert_flat = [], {}, []
+ALERT_ORDER = ["signout_timeout", "returning", "carrier_exception", "delivery_failure",
+               "customs_hold", "no_update", "stagnation", "not_online", "transport_timeout"]
+
+has_alert = con.execute(
+    "SELECT count(*) FROM information_schema.tables WHERE table_name='fct_alert'"
+).fetchone()[0] > 0
+
+if has_alert:
+    raw_alert = con.execute("""
+        SELECT o2.ym, o2.wh, o2.pf, o2.cr, o2.cn, a.规则, count(*)::BIGINT n
+        FROM fct_alert a JOIN o2 ON o2.履约单号 = a.履约单号
+        WHERE a.是否主预警
+        GROUP BY 1,2,3,4,5,6""").df()
+
+    present = {r[0] for r in con.execute(
+        "SELECT DISTINCT 规则 FROM fct_alert WHERE 是否主预警").fetchall()}
+    alert_rules = [r for r in ALERT_ORDER if r in present] + sorted(present - set(ALERT_ORDER))
+    alert_cn = dict(con.execute(
+        "SELECT DISTINCT 规则, 规则中文 FROM fct_alert").fetchall())
+    ai = {s: i for i, s in enumerate(alert_rules)}
+    alert_flat = _flat6(raw_alert, I, ai)
+
 payload = {
     "meta": {
         "start": days[0], "end": days[-1],
@@ -270,9 +295,11 @@ payload = {
                             "查无此单") for s in trk_statuses},
         "reconLabels": recon_labels,
         "trkExcluded": list(EXCLUDE_TRK),
+        "alertRules": alert_rules,
+        "alertCN": alert_cn,
     },
     "day": day, "ccar": ccar, "status": status, "aging": aging,
-    "track": track_flat, "recon": recon_flat,
+    "track": track_flat, "recon": recon_flat, "alert": alert_flat,
     "coverage": [[r[0], int(r[1])] for r in cov.itertuples(index=False, name=None)],
 }
 
