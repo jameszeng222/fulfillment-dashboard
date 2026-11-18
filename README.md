@@ -38,24 +38,58 @@ python sync.py --push         # 导入 + 重建 + 自动提交推送（线上自
 
 首次上线已用 `python sync.py --seed` 把已有的 29 个文件登记为"库里已有"，不会重跑历史。
 
-## 17track 轨迹接入
+## 17track 轨迹（只拉不注册）
+
+单号由 ERP 同步注册到 17track 账号，本脚本只负责**把轨迹和状态拉回来**，
+不重复注册。未注册的单号会被平台拒绝（`-18019902`），记录下来跳过。
 
 ```powershell
-$env:TRACK17_TOKEN = "你的token"     # 只放环境变量，别写进文件
-python track17.py plan               # 看要注册多少、按承运商分布
-python track17.py register --limit 500   # 先小批量试
-python track17.py poll --limit 500
-python track17.py status
-python track17.py selftest           # 不需要 token，验证解析逻辑
+$env:TRACK17_TOKEN = "你的key"        # 只放环境变量
+python track17.py plan                 # 看要拉多少、按承运商分布
+python track17.py poll --limit 400     # 拉（每批 40 个）
+python track17.py poll --days 7        # 只拉最近 7 天创建的单
+python track17.py poll --carrier postnet
+python track17.py status               # 统计
+python track17.py selftest             # 不需要 token，验证解析逻辑
 ```
 
-**计费模型**：按注册单号数计费，注册成功后自动跟踪不再扣费，
-所以脚本只对「未签收、未取消、有单号、未注册过」的单号发起注册，一个单号只注册一次。
+**配额**：17track 的配额只用于**注册**，`gettrackinfo` 查询不扣配额，只受 3 req/s 限流。
+当前账号剩余配额 100 万+。
 
-当前待注册 **40,919** 个，其中 `postnet`（南非）占 32,825——正是 WMS 签收率 0% 的那条线。
+**实测的注册覆盖率**（决定能拉回多少）：
 
-落两张表：`trk_subscription`（注册台账 + 最新状态）、`trk_event`（轨迹事件），
-外加视图 `trk_order_link` 做 WMS 签收与承运商签收的对账。
+| 承运商 | 已注册 | 说明 |
+|---|---|---|
+| postnet（南非） | **全部** | ERP 同步覆盖，17track 里有真实轨迹 |
+| WYT-USPS（美国） | **0** | ERP 没同步这批号 |
+| YFH-Logistics | 全部 | |
+| DHL | 0 | |
+
+也就是说：**南非线能拉到，美国线拉不到**。要补美国线需要另配注册。
+
+**响应结构**（v2.2，本账号实测）：没有 `events[]`，详细信息在 `milestone[]`：
+
+| 字段 | 内容 |
+|---|---|
+| `track_info.latest_status` | 主状态 / 子状态（9 主 × 30 子） |
+| `track_info.latest_event` | 最新事件的时间、描述、地点 |
+| `track_info.time_metrics` | `days_of_transit` / `days_after_order` / **`estimated_delivery_date`（AI EDD）** |
+| `track_info.milestone[]` | 9 个关键节点：InfoReceived / PickedUp / Departure / Arrival / AvailableForPickup / OutForDelivery / Delivered / Returning / Returned |
+| `track_info.misc_info.risk_factor` | 风险因子 |
+
+落三张表：
+
+| 表 | 内容 |
+|---|---|
+| `trk_status` | 单号级最新状态、签收时间、运输天数、EDD、风险因子 |
+| `trk_milestone` | 9 个关键节点的时间 |
+| `trk_missing` | 未注册的单号（避免反复查） |
+
+外加视图 `trk_order_link`：把轨迹与履约单左连，算 `承运商尾程天` 和签收对账
+（双方已签 / 承运商已签_WMS未签 / WMS已签_承运商未见 / 未注册 / 双方均未签）。
+
+> 注意：该视图是全量左连，未上轨迹的履约单会落在 `WMS已签_承运商未见`，
+> 做对账分析时请先按 `轨迹状态 IS NOT NULL` 过滤。
 
 ## 目录
 
