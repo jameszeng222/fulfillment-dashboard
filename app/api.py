@@ -69,19 +69,20 @@ def meta(request: Request):
     core.require_user(request)
     con = core.duck()
     try:
-        whs = [r[0] for r in con.execute(
-            "SELECT 仓库, count(*) c FROM fct_order GROUP BY 1 ORDER BY c DESC").fetchall()]
-        pfs = [r[0] for r in con.execute(
-            "SELECT 平台, count(*) c FROM fct_order GROUP BY 1 ORDER BY c DESC").fetchall()]
-        crs = [r[0] for r in con.execute(
-            "SELECT 物流商, count(*) c FROM fct_order GROUP BY 1 ORDER BY c DESC").fetchall()]
-        cns = [r[0] for r in con.execute(
-            "SELECT 目的国, count(*) c FROM fct_order WHERE 目的国 IS NOT NULL "
-            "GROUP BY 1 ORDER BY c DESC LIMIT 120").fetchall()]
-        months = [r[0] for r in con.execute(
-            "SELECT DISTINCT 创建月份 FROM fct_order ORDER BY 1").fetchall()]
-        sts = [r[0] for r in con.execute(
-            "SELECT 状态, count(*) c FROM fct_order GROUP BY 1 ORDER BY c DESC").fetchall()]
+        def col(sql):
+            return [r[0] for r in con.execute(sql).fetchall() if r[0] not in (None, "")]
+
+        whs = col("SELECT 仓库, any_value(c) FROM (SELECT 仓库, count(*) c FROM fct_order "
+                  "WHERE 仓库 IS NOT NULL GROUP BY 1) t GROUP BY 1 ORDER BY 2 DESC")
+        pfs = col("SELECT 平台, any_value(c) FROM (SELECT 平台, count(*) c FROM fct_order "
+                  "WHERE 平台 IS NOT NULL GROUP BY 1) t GROUP BY 1 ORDER BY 2 DESC")
+        crs = col("SELECT 物流商, any_value(c) FROM (SELECT 物流商, count(*) c FROM fct_order "
+                  "WHERE 物流商 IS NOT NULL GROUP BY 1) t GROUP BY 1 ORDER BY 2 DESC")
+        cns = col("SELECT 目的国, any_value(c) FROM (SELECT 目的国, count(*) c FROM fct_order "
+                  "WHERE 目的国 IS NOT NULL GROUP BY 1) t GROUP BY 1 ORDER BY 2 DESC LIMIT 120")
+        months = col("SELECT DISTINCT 创建月份 FROM fct_order ORDER BY 1")
+        sts = col("SELECT 状态, any_value(c) FROM (SELECT 状态, count(*) c FROM fct_order "
+                  "WHERE 状态 IS NOT NULL GROUP BY 1) t GROUP BY 1 ORDER BY 2 DESC")
         b = con.execute("SELECT min(创建日期), max(创建日期), count(*) FROM fct_order").fetchone()
     finally:
         con.close()

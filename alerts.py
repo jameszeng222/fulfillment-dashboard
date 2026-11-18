@@ -36,59 +36,17 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
+from app.rules import PRIORITY as RULE_PRIORITY
+from app.rules import RULES_BY_KEY
+
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "履约单.duckdb"
 OUT_CSV = ROOT / "out" / "履约预警清单.csv"
 
-# 优先级：数字越小越优先（PRD 顺序，去掉未接入的三条）
-RULE_PRIORITY = {
-    "signout_timeout": 1,
-    "returning": 2,
-    "carrier_exception": 3,
-    "delivery_failure": 4,
-    "customs_hold": 5,
-    "no_update": 6,
-    "stagnation": 7,
-    "not_online": 8,
-    "transport_timeout": 9,
-}
-
-RULE_CN = {
-    "signout_timeout": "超时未签出",
-    "not_online": "物流未上网",
-    "transport_timeout": "运输超时",
-    "no_update": "物流断更",
-    "stagnation": "物流停滞",
-    "customs_hold": "海关卡关",
-    "delivery_failure": "派送异常",
-    "returning": "包裹退运",
-    "carrier_exception": "其他异常",
-}
-
-RULE_SEVERITY = {
-    "signout_timeout": "高",
-    "returning": "紧急",
-    "carrier_exception": "紧急",
-    "delivery_failure": "紧急",
-    "customs_hold": "高",
-    "no_update": "高",
-    "stagnation": "中",
-    "not_online": "高",
-    "transport_timeout": "高",
-}
-
-# 六个一级业务分类（PRD 第 6.4 节）
-RULE_GROUP = {
-    "signout_timeout": "履约准备异常",
-    "not_online": "未上网异常",
-    "transport_timeout": "运输异常",
-    "no_update": "运输异常",
-    "stagnation": "运输异常",
-    "customs_hold": "海关卡关",
-    "delivery_failure": "派送异常",
-    "returning": "包裹退运",
-    "carrier_exception": "其他异常",
-}
+# 名称/级别/分类全部来自 app/rules.py，保证页面文案与判定口径一致
+RULE_CN = {k: v["name"] for k, v in RULES_BY_KEY.items()}
+RULE_SEVERITY = {k: v["level"] for k, v in RULES_BY_KEY.items()}
+RULE_GROUP = {k: v["category"] for k, v in RULES_BY_KEY.items()}
 
 DDL = """
 CREATE OR REPLACE TABLE fct_alert (
@@ -290,6 +248,7 @@ def build(con, asof: str | None):
     total = con.execute("SELECT count(*) FROM fct_alert").fetchone()[0]
     main_cnt = con.execute("SELECT count(*) FROM fct_alert WHERE 是否主预警").fetchone()[0]
     print(f"写入 fct_alert: {total:,} 行（主预警 {main_cnt:,} 单）")
+    write_order_alert(con)
     push_to_ops(con)
 
 
@@ -322,6 +281,22 @@ def push_to_ops(dcon):
     n = scon.execute("SELECT count(*) FROM alerts").fetchone()[0]
     scon.close()
     print(f"  已镜像到 ops.db: {n:,} 条预警")
+
+
+def write_order_alert(dcon):
+    """把每单的主预警写回事实层，供轨迹监控页按「自定义物流异常」筛选。"""
+    dcon.execute("""
+        CREATE OR REPLACE TABLE fct_order_alert AS
+        SELECT 履约单号,
+               any_value(规则) FILTER (WHERE 是否主预警) AS 主预警规则,
+               any_value(规则中文) FILTER (WHERE 是否主预警) AS 主预警名称,
+               any_value(级别) FILTER (WHERE 是否主预警)   AS 主预警级别,
+               count(*)::BIGINT                            AS 预警数
+        FROM fct_alert
+        GROUP BY 履约单号
+    """)
+    n = dcon.execute("SELECT count(*) FROM fct_order_alert").fetchone()[0]
+    print(f"  fct_order_alert: {n:,} 单")
 
 
 def summary(con):

@@ -9,13 +9,15 @@ from fastapi.staticfiles import StaticFiles
 
 from . import core
 from .api import router
+from .pages_api import router as pages_router
 
 ROOT = Path(__file__).resolve().parent.parent
 TPL = ROOT / "templates"
 STATIC = ROOT / "static"
 
-app = FastAPI(title="履约追踪系统", version="0.1.0", docs_url="/api/docs", redoc_url=None)
+app = FastAPI(title="履约追踪系统", version="0.2.0", docs_url="/api/docs", redoc_url=None)
 app.include_router(router)
+app.include_router(pages_router)
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 

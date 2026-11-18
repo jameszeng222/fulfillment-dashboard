@@ -15,10 +15,10 @@
       <div><b>履约追踪系统</b><small>FULFILLMENT TRACKING</small></div>
     </div>
     <nav class="nav" id="nav">
-      <button data-v="dash" class="on"><span class="ni">◎</span><div><strong>数据总览</strong><em>规模 · 时效 · 预警</em></div></button>
-      <button data-v="orders"><span class="ni">▤</span><div><strong>履约单</strong><em>查询 · 详情 · 备注</em></div></button>
-      <button data-v="alerts"><span class="ni">!</span><div><strong>预警处理</strong><em>认领 · 处理 · 归档</em></div></button>
-      <button data-v="track"><span class="ni">➤</span><div><strong>轨迹追踪</strong><em>按运单号查</em></div></button>
+      <button data-v="dash" class="on"><span class="ni">◎</span><div><strong>数据总览</strong><em>单量 · 渠道 · 国家 · 仓库</em></div></button>
+      <button data-v="track"><span class="ni">➤</span><div><strong>轨迹监控</strong><em>17track 状态 · 物流异常</em></div></button>
+      <button data-v="channels"><span class="ni">◷</span><div><strong>渠道时效</strong><em>达标率 · 超时 · 对比</em></div></button>
+      <button data-v="rules"><span class="ni">⚙</span><div><strong>数据与规则</strong><em>预警口径 · 渠道 SLA</em></div></button>
     </nav>
     <div class="sidefoot">
       <div><span class="dot"></span>服务在线</div>
@@ -35,70 +35,83 @@
 
     <div class="content">
 
-      <!-- 总览 -->
+      <!-- ============ 数据总览 ============ -->
       <section class="view on" id="v-dash">
-        <div class="kpis" id="kpis"></div>
+        <div class="filters" id="dashFilters"></div>
+        <div class="kpis" id="dashKpi"></div>
         <div class="grid">
-          <div class="card wide"><div class="ct"><h2>月度单量与时效</h2><div class="tip">柱：单量　线：物流天数</div></div><div class="chart tall" id="cTrend"></div></div>
-          <div class="card"><div class="ct"><h2>物流商分布</h2><div class="tip">按履约单数</div></div><div class="chart" id="cCarrier"></div></div>
-          <div class="card"><div class="ct"><h2>仓库分布</h2><div class="tip">按履约单数</div></div><div class="chart" id="cWh"></div></div>
+          <div class="card wide"><div class="ct"><h2>月度单量与时效</h2><div class="tip">柱：单量　线：物流天数（签出→签收）</div></div><div class="chart tall" id="cMonthly"></div></div>
+          <div class="card"><div class="ct"><h2>物流渠道占比</h2><div class="tip">按履约单数</div></div><div class="chart" id="cCarrier"></div></div>
+          <div class="card"><div class="ct"><h2>发货仓分布</h2><div class="tip">按履约单数</div></div><div class="chart" id="cWarehouse"></div></div>
+          <div class="card"><div class="ct"><h2>目的国家分布</h2><div class="tip">Top 15 · 按履约单数</div></div><div class="chart" id="cCountry"></div></div>
+          <div class="card"><div class="ct"><h2>出库单状态</h2><div class="tip">按履约单数</div></div><div class="chart" id="cStatus"></div></div>
         </div>
       </section>
 
-      <!-- 订单 -->
-      <section class="view" id="v-orders">
-        <div class="filters" id="orderFilters"></div>
-        <div class="card" style="padding:0">
-          <div class="tblwrap">
-            <table class="tbl">
-              <thead><tr>
-                <th>履约单号</th><th>快递单号</th><th>平台</th><th>仓库</th><th>物流商</th>
-                <th>目的国</th><th>状态</th><th>创建</th><th>签出</th><th>签收</th><th>件数</th><th>轨迹</th>
-              </tr></thead>
-              <tbody id="orderBody"></tbody>
-            </table>
-          </div>
-        </div>
-        <div class="pager" id="orderPager"></div>
-      </section>
-
-      <!-- 预警 -->
-      <section class="view" id="v-alerts">
-        <div class="filters" id="alertFilters"></div>
-        <div class="card" style="padding:0">
-          <div class="tblwrap">
-            <table class="tbl">
-              <thead><tr>
-                <th>履约单号</th><th>预警</th><th>级别</th><th>已过天数</th><th>物流商</th>
-                <th>国家</th><th>轨迹状态</th><th>处理状态</th><th>负责人</th><th>操作</th>
-              </tr></thead>
-              <tbody id="alertBody"></tbody>
-            </table>
-          </div>
-        </div>
-        <div class="pager" id="alertPager"></div>
-      </section>
-
-      <!-- 轨迹 -->
+      <!-- ============ 轨迹监控 ============ -->
       <section class="view" id="v-track">
-        <div class="card">
-          <div class="ct"><h2>按运单号查询</h2><div class="tip">支持模糊匹配，回车查询</div></div>
-          <div class="filters" style="box-shadow:none;border:0;padding:0">
-            <input id="trackQ" placeholder="输入快递单号 / 履约单号" style="width:320px">
-            <button class="btn sm" id="trackGo">查询</button>
-            <span class="grow"></span>
-            <span style="font-size:11.5px;color:#8b98ab" id="trackHint"></span>
-          </div>
-        </div>
+        <div class="filters" id="trackFilters"></div>
+        <div class="chips" id="trackChips"></div>
         <div class="card" style="padding:0">
-          <div class="tblwrap" style="max-height:520px">
+          <div class="tblwrap">
             <table class="tbl">
               <thead><tr>
-                <th>履约单号</th><th>运单号</th><th>物流商</th><th>轨迹状态</th><th>最新事件</th><th>地点</th><th>停滞</th>
+                <th>履约单号</th><th>运单号</th><th>物流商</th><th>目的国</th>
+                <th>17track 官方状态</th><th>自定义物流异常</th><th>最新事件</th><th>停滞</th>
               </tr></thead>
               <tbody id="trackBody"></tbody>
             </table>
           </div>
+        </div>
+        <div class="pager" id="trackPager"></div>
+      </section>
+
+      <!-- ============ 渠道时效 ============ -->
+      <section class="view" id="v-channels">
+        <div class="filters" id="channelFilters"></div>
+        <div class="kpis" id="channelKpi"></div>
+        <div class="card" style="padding:0">
+          <div class="ct" style="padding:12px 14px 0"><h2>渠道表现对比</h2><div class="tip">签出→签收天数 · 达标判定按各渠道 SLA</div></div>
+          <div class="tblwrap" style="max-height:none">
+            <table class="tbl">
+              <thead><tr>
+                <th>物流渠道</th><th>单量</th><th>已签收</th><th>平均妥投</th><th>P90</th>
+                <th>3天达成</th><th>5天达成</th><th>6天达成</th><th>SLA目标</th>
+                <th>在途</th><th>超时在途</th><th>结论</th>
+              </tr></thead>
+              <tbody id="channelBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card" style="padding:0">
+          <div class="ct" style="padding:12px 14px 0"><h2>渠道 × 国家</h2><div class="tip">单量 ≥ 200 的组合</div></div>
+          <div class="tblwrap" style="max-height:460px">
+            <table class="tbl">
+              <thead><tr><th>渠道</th><th>国家</th><th>单量</th><th>平均妥投</th><th>6天达成</th></tr></thead>
+              <tbody id="chanCountryBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 数据与规则 ============ -->
+      <section class="view" id="v-rules">
+        <div class="card">
+          <div class="ct"><h2>业务预警规则</h2><div class="tip" id="ruleAsof">—</div></div>
+          <div id="ruleList"></div>
+        </div>
+        <div class="card" style="padding:0">
+          <div class="ct" style="padding:12px 14px 0"><h2>渠道 SLA 规则</h2><div class="tip">承诺时效：签出 → 签收（自然日）</div></div>
+          <div class="tblwrap" style="max-height:none">
+            <table class="tbl">
+              <thead><tr><th>渠道</th><th>单量</th><th>承诺时效</th><th>3天目标</th><th>5天目标</th><th>6天目标</th><th>实际6天达成</th><th>实际平均</th><th>判定</th></tr></thead>
+              <tbody id="slaBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="ct"><h2>暂未接入的规则</h2><div class="tip">缺数据源，不做假替身</div></div>
+          <div id="notImpl"></div>
         </div>
       </section>
 
