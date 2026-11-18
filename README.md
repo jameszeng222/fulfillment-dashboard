@@ -2,20 +2,15 @@
 
 ## 线上地址
 
-**https://logistics-dashboard-git.pages.dev**
+**https://logistics-dashboard.pages.dev**
 
-托管在 Cloudflare Pages，**已绑定本仓库的 `main` 分支**：
-推一次代码，Cloudflare 自动执行 `python assemble.py` → 校验 → 发布，不需要 GitHub Actions。
+托管在 Cloudflare Pages，由 `.github/workflows/deploy-pages.yml` 自动发布：
+**推一次 `main`，GitHub Actions 自动** `python assemble.py` → 校验产物 → `wrangler pages deploy`，
+约 25 秒上线。
 
-构建配置（Cloudflare 侧）：
+需要的两个仓库 Secret（已配置）：`CLOUDFLARE_API_TOKEN`、`CLOUDFLARE_ACCOUNT_ID`。
 
-| 项 | 值 |
-|---|---|
-| 构建命令 | `(command -v python3 >/dev/null && python3 assemble.py \|\| python assemble.py) && mkdir -p dist && cp public/index.html dist/index.html` |
-| 输出目录 | `dist` |
-| 分支 | `main` |
-
-所以**更新数据只需要**：改完 `dashboard_src/cube.json` 后 `git push`，两三分钟后线上就是新的。
+所以**更新数据只需要**：改完 `dashboard_src/cube.json` 后 `git push`，半分钟内线上就是新的。
 
 > **要看看板，请打开 `履约单看板.html`。**
 > `dashboard_src/app.template.html` 是模板，只有占位符没有数据，直接打开会看到一句提示。
