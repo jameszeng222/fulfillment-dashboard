@@ -19,6 +19,44 @@
 `履约单看板.html` 是**单文件、零依赖**的：ECharts 与数据全部内嵌，双击即可打开，
 可以直接发微信/邮件。数据更新后按下文重跑两个脚本即可。
 
+## 数据同步（ERP 导出 → 数据库）
+
+从 ERP 下载的 `履约单数据_YYYY_MM_DD_HH_MM.xlsx` 放进 `%USERPROFILE%\Downloads`
+或 `Desktop\履约单2026`，然后：
+
+```powershell
+python sync.py                # 导入新文件 + 重建看板
+python sync.py --dry-run      # 只看会导入哪些
+python sync.py --push         # 导入 + 重建 + 自动提交推送（线上自动更新）
+```
+
+**已配置 Windows 计划任务「履约单看板同步」，每 30 分钟自动跑一次 `sync.py --push`**，
+日志在 `sync.log`。也就是说：**下载文件放进 Downloads，半小时内线上就更新了**，不用管。
+
+去重靠 `sync_ledger` 表按文件内容 sha256 记录，同一个文件改名再放一次也不会重复导入。
+合并语义是按「创建日期」区间整体替换，重复导入幂等。
+
+首次上线已用 `python sync.py --seed` 把已有的 29 个文件登记为"库里已有"，不会重跑历史。
+
+## 17track 轨迹接入
+
+```powershell
+$env:TRACK17_TOKEN = "你的token"     # 只放环境变量，别写进文件
+python track17.py plan               # 看要注册多少、按承运商分布
+python track17.py register --limit 500   # 先小批量试
+python track17.py poll --limit 500
+python track17.py status
+python track17.py selftest           # 不需要 token，验证解析逻辑
+```
+
+**计费模型**：按注册单号数计费，注册成功后自动跟踪不再扣费，
+所以脚本只对「未签收、未取消、有单号、未注册过」的单号发起注册，一个单号只注册一次。
+
+当前待注册 **40,919** 个，其中 `postnet`（南非）占 32,825——正是 WMS 签收率 0% 的那条线。
+
+落两张表：`trk_subscription`（注册台账 + 最新状态）、`trk_event`（轨迹事件），
+外加视图 `trk_order_link` 做 WMS 签收与承运商签收的对账。
+
 ## 目录
 
 ```
