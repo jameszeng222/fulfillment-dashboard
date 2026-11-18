@@ -256,6 +256,16 @@ footer{text-align:center;font-size:11.5px;color:#9aa5b4;margin-top:26px;line-hei
     <div class="chart" id="cAging"></div>
   </div>
 
+  <div class="card">
+    <div class="ct"><h2>17track 轨迹状态</h2><div class="tip">官方 9 大状态，仅统计有轨迹的单（不含南非）</div></div>
+    <div class="chart" id="cTrack"></div>
+  </div>
+
+  <div class="card">
+    <div class="ct"><h2>签收对账</h2><div class="tip">17track 承运商签收 vs WMS 签收</div></div>
+    <div class="chart" id="cRecon"></div>
+  </div>
+
   <div class="card wide">
     <div class="ct"><h2>出库单状态分布</h2><div class="tip">按履约单数</div></div>
     <div class="chart" id="cStatus"></div>
@@ -335,6 +345,12 @@ const DAY = D.day,    DAY_S = 12;  // di wi pi ci ni | n items hS hC tS tC sg
 const CCA = D.ccar,   CCA_S = 9;   // mi wi pi ci ni xi | n tS tC
 const STA = D.status, STA_S = 7;   // mi wi pi ci ni si | n
 const AGE = D.aging,  AGE_S = 7;   // mi wi pi ci ni abi | n
+// 17track 轨迹立方体：mi wi pi ci ni 分类码 | n（已排除南非 postnet）
+const TRK = D.track || [], TRK_S = 7;
+const RCN = D.recon || [], RCN_S = 7;
+const TRK_STATUSES = DM.trkStatuses || [];
+const TRK_CN = DM.trkStatusCN || {};
+const RECON_LABELS = DM.reconLabels || [];
 
 /* 每月有数据的天(日号) */
 const MDAYS = MONTHS.map(()=>[]);
@@ -438,6 +454,24 @@ function countAgg(arr, stride){
     m.set(k, (m.get(k)||0) + arr[i+6]);
   }
   return m;
+}
+
+/* 17track 轨迹 / 签收对账（只有部分单有轨迹，算的是"有轨迹的单"） */
+function trackAgg(){
+  const arr = new Array(TRK_STATUSES.length).fill(0);
+  for (let i=0;i<TRK.length;i+=TRK_S){
+    if (!keep(TRK[i],TRK[i+1],TRK[i+2],TRK[i+3],TRK[i+4])) continue;
+    arr[TRK[i+5]] += TRK[i+6];
+  }
+  return arr;
+}
+function reconAgg(){
+  const arr = new Array(RECON_LABELS.length).fill(0);
+  for (let i=0;i<RCN.length;i+=RCN_S){
+    if (!keep(RCN[i],RCN[i+1],RCN[i+2],RCN[i+3],RCN[i+4])) continue;
+    arr[RCN[i+5]] += RCN[i+6];
+  }
+  return arr;
 }
 
 /* ---------- 图表 ---------- */
@@ -682,6 +716,58 @@ function drawStatus(){
   }, true);
 }
 
+/* ---------- 17track 轨迹状态 ---------- */
+function drawTrack(){
+  const vals = trackAgg();
+  const total = vals.reduce((a,b)=>a+b,0);
+  const items = TRK_STATUSES.map((s,i)=>({ name: TRK_CN[s] || s, code:s, n: vals[i] }))
+    .filter(r=>r.n>0).sort((a,b)=>b.n-a.n);
+  if (!items.length){ emptyChart('cTrack', '当前筛选没有 17track 轨迹数据（南非 postnet 已排除）'); return; }
+  const rows = items.slice().reverse();
+  const cMap = { '已签收':'#59A14F','派送中':'#4E79A7','运输中':'#76B7B2','待自提':'#B07AA1',
+                 '已收到信息':'#86BCB6','投递失败':'#F28E2B','异常':'#D9534F',
+                 '长时间未更新':'#9C755F','查无此单':'#c8ced8' };
+  charts.cTrack.setOption({
+    grid:{left:8,right:70,top:8,bottom:8,containLabel:true},
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},
+      formatter:p=>{const r=rows[p[0].dataIndex];
+        return `<b>${r.name}</b><br/>${fmt(r.n)} 单（${fmt1(100*r.n/total)}%）<br/><span style="color:#9aa5b4">${r.code}</span>`;}},
+    xAxis:{type:'value',splitLine:{lineStyle:{color:'#f0f3f8'}},
+      axisLabel:{color:'#5b6675',fontSize:11,formatter:v=>v>=10000?(v/10000)+'万':v}},
+    yAxis:{type:'category',data:rows.map(r=>r.name),axisLine:{show:false},axisTick:{show:false},
+      axisLabel:{color:'#1b2430',fontSize:11.5}},
+    series:[{type:'bar',barMaxWidth:16,
+      itemStyle:{borderRadius:[0,3,3,0]},
+      data:rows.map(r=>({value:r.n,itemStyle:{color:cMap[r.name]||'#4E79A7',borderRadius:[0,3,3,0]}})),
+      label:{show:true,position:'right',fontSize:10.5,color:'#5b6675',formatter:p=>fmt(p.value)}}]
+  }, true);
+}
+
+/* ---------- 签收对账 ---------- */
+function drawRecon(){
+  const vals = reconAgg();
+  const total = vals.reduce((a,b)=>a+b,0);
+  if (!total){ emptyChart('cRecon', '当前筛选没有可对账的轨迹'); return; }
+  // 用条形而不是饼图：排除南非后 99% 落在同一类，饼图看不出差异
+  const colors = ['#59A14F','#4E79A7','#F28E2B','#c8ced8'];
+  const order = RECON_LABELS.map((s,i)=>({ s, v: vals[i], i }));
+  charts.cRecon.setOption({
+    grid:{left:8,right:70,top:26,bottom:8,containLabel:true},
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},
+      formatter:p=>{const r=order[p[0].dataIndex];
+        return `<b>${r.s}</b><br/>${fmt(r.v)} 单（${fmt1(100*r.v/total)}%）`;}},
+    xAxis:{type:'category',data:order.map(r=>r.s),
+      axisLine:{lineStyle:{color:'#e6ebf2'}},axisTick:{show:false},
+      axisLabel:{color:'#5b6675',fontSize:10.5,interval:0,rotate:16}},
+    yAxis:{type:'value',splitLine:{lineStyle:{color:'#f0f3f8'}},
+      axisLabel:{color:'#5b6675',fontSize:11,formatter:v=>v>=10000?(v/10000)+'万':v}},
+    series:[{type:'bar',barMaxWidth:46,itemStyle:{borderRadius:[4,4,0,0]},
+      data:order.map(r=>({value:r.v,itemStyle:{color:colors[r.i],borderRadius:[4,4,0,0]}})),
+      label:{show:true,position:'top',fontSize:10.5,color:'#5b6675',
+        formatter:p=>p.value?fmt(p.value):''}}]
+  }, true);
+}
+
 /* ---------- KPI ---------- */
 function drawKPI(){
   const o = aggAll(), s = stat(o);
@@ -883,7 +969,7 @@ function drawCoverage(){
 /* ---------- 渲染 ---------- */
 function renderAll(){
   drawKPI(); drawTrend(); drawWh(); drawCarrier(); drawCcar();
-  drawCountry(); drawPlatform(); drawAging(); drawStatus();
+  drawCountry(); drawPlatform(); drawAging(); drawTrack(); drawRecon(); drawStatus();
 }
 
 let METRIC = 'total';
@@ -907,7 +993,7 @@ document.getElementById('mEnd').textContent = D.meta.end;
 document.getElementById('noteEnd').textContent = D.meta.end;
 document.getElementById('mOrders').textContent = fmt(D.meta.orders);
 
-['cTrend','cWh','cCarrier','cCcar','cCountry','cPlatform','cAging','cStatus'].forEach(init);
+['cTrend','cWh','cCarrier','cCcar','cCountry','cPlatform','cAging','cTrack','cRecon','cStatus'].forEach(init);
 applyURL();
 bindFilterClick();
 buildChips();

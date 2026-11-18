@@ -55,6 +55,41 @@ STATUS_CN = {
     "Exception": "异常",
 }
 
+# 17track 官方状态字典：9 个主状态 + 30 个子状态（中文为官方文档释义）
+OFFICIAL_STATUS = [
+    # (主状态, 子状态, 中文主状态, 中文子状态)
+    ("NotFound", "NotFound_Other", "查无此单", "承运商未返回任何信息"),
+    ("NotFound", "NotFound_InvalidCode", "查无此单", "单号无效"),
+    ("InfoReceived", "InfoReceived", "已收到信息", "已收到订单信息，等待揽收"),
+    ("InTransit", "InTransit_PickedUp", "运输中", "已揽收"),
+    ("InTransit", "InTransit_Other", "运输中", "运输中"),
+    ("InTransit", "InTransit_Departure", "运输中", "已离开始发地"),
+    ("InTransit", "InTransit_Arrival", "运输中", "已到达目的地"),
+    ("InTransit", "InTransit_CustomsProcessing", "运输中", "清关中"),
+    ("InTransit", "InTransit_CustomsReleased", "运输中", "清关完成"),
+    ("InTransit", "InTransit_CustomsRequiringInformation", "运输中", "清关需补充材料"),
+    ("Expired", "Expired_Other", "长时间未更新", "超期未更新"),
+    ("AvailableForPickup", "AvailableForPickup_Other", "待自提", "已到达取件点"),
+    ("OutForDelivery", "OutForDelivery_Other", "派送中", "派送中"),
+    ("DeliveryFailure", "DeliveryFailure_Other", "投递失败", "投递失败"),
+    ("DeliveryFailure", "DeliveryFailure_NoBody", "投递失败", "投递时收件人不在"),
+    ("DeliveryFailure", "DeliveryFailure_Security", "投递失败", "安全/清关/费用问题"),
+    ("DeliveryFailure", "DeliveryFailure_Rejected", "投递失败", "收件人拒收"),
+    ("DeliveryFailure", "DeliveryFailure_InvalidAddress", "投递失败", "地址错误无法投递"),
+    ("Delivered", "Delivered_Other", "已签收", "已妥投签收"),
+    ("Exception", "Exception_Other", "异常", "异常"),
+    ("Exception", "Exception_Returning", "异常", "退件中"),
+    ("Exception", "Exception_Returned", "异常", "已退回寄件人"),
+    ("Exception", "Exception_NoBody", "异常", "查无收件人"),
+    ("Exception", "Exception_Security", "异常", "安全/清关/费用异常"),
+    ("Exception", "Exception_Damage", "异常", "运输中损坏"),
+    ("Exception", "Exception_Rejected", "异常", "派送前被拒收"),
+    ("Exception", "Exception_Delayed", "异常", "延误"),
+    ("Exception", "Exception_Lost", "异常", "丢件"),
+    ("Exception", "Exception_Destroyed", "异常", "无法投递已销毁"),
+    ("Exception", "Exception_Cancel", "异常", "订单已取消"),
+]
+
 STAGES = ["InfoReceived", "PickedUp", "Departure", "Arrival", "AvailableForPickup",
           "OutForDelivery", "Delivered", "Returning", "Returned"]
 
@@ -77,6 +112,16 @@ CREATE TABLE IF NOT EXISTS trk_status (
     EDD止           DATE,
     风险因子        INTEGER,
     查询时间        TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS dim_trk_status (
+    主状态      VARCHAR,
+    子状态      VARCHAR,
+    主状态中文  VARCHAR,
+    子状态中文  VARCHAR,
+    是否终结    BOOLEAN,
+    是否异常    BOOLEAN,
+    PRIMARY KEY (主状态, 子状态)
 );
 
 CREATE TABLE IF NOT EXISTS trk_milestone (
@@ -137,6 +182,13 @@ def connect(db: str) -> duckdb.DuckDBPyConnection:
     for stmt in DDL.strip().split(";"):
         if stmt.strip():
             con.execute(stmt)
+    # 官方 9 主 + 30 子状态字典，每次连接时刷新（幂等）
+    con.executemany(
+        "INSERT OR REPLACE INTO dim_trk_status VALUES (?,?,?,?,?,?)",
+        [(m, sub, cn_m, cn_s,
+          m in ("Delivered", "Exception", "Expired"),
+          m in ("Exception", "DeliveryFailure", "Expired", "NotFound"))
+         for m, sub, cn_m, cn_s in OFFICIAL_STATUS])
     return con
 
 

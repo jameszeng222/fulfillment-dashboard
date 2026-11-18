@@ -95,6 +95,7 @@ WITH o AS (
          coalesce(nullif(trim(目的国家英文名称),''), '(未知)')   AS cn,
          any_value(目的国家中文名称)   AS cn_zh,
          any_value(coalesce({CCAR_NORM}, '(未填)'))              AS ccr,
+         upper(regexp_replace(coalesce(any_value(快递单号),''), '[^A-Za-z0-9]', '', 'g')) AS tn,
          出库单状态                   AS st,
          strftime(创建日期,'%Y-%m-%d') AS d,
          sum(数量)                    AS items,
@@ -165,6 +166,16 @@ def to_flat(df, keymaps):
     return out
 
 
+def _flat6(df, I, keymap):
+    """[月, 仓, 平台, 物流商, 国家, 分类码, 单量] —— 轨迹/对账立方体用。
+    输入是原始维度值（ym/wh/pf/cr/cn），这里映射成索引。"""
+    out = []
+    for ym, wh, pf, cr, cn, code, n in df.itertuples(index=False, name=None):
+        out.extend([I["m"][ym], I["w"][wh], I["p"][pf], I["c"][cr], I["k"][cn],
+                    keymap[code], int(n)])
+    return out
+
+
 day    = to_flat(raw_day,  [I["d"], I["w"], I["p"], I["c"], I["k"]])
 ccar   = to_flat(raw_ccar, [I["m"], I["w"], I["p"], I["c"], I["k"], I["x"]])
 status = to_flat(raw_stat, [I["m"], I["w"], I["p"], I["c"], I["k"], I["s"]])
@@ -175,6 +186,63 @@ cov = con.execute(
     "SELECT strftime(创建日期,'%Y-%m-%d') d, count(DISTINCT 履约单号) n "
     "FROM 履约单明细 GROUP BY 1 ORDER BY 1").df()
 dm = con.execute("SELECT DISTINCT d, ym FROM o2 ORDER BY 1").df()
+
+# ---------------------------------------------------------------- 17track 轨迹
+# 南非 postnet 不纳入时效监控（业务决定），这里整条排除。
+EXCLUDE_TRK = ("postnet",)
+excl = ",".join("'" + c + "'" for c in EXCLUDE_TRK)
+
+has_trk = con.execute(
+    "SELECT count(*) FROM information_schema.tables WHERE table_name='trk_status'"
+).fetchone()[0] > 0
+
+trk_statuses, recon_labels = [], []
+track_flat, recon_flat = [], []
+
+if has_trk:
+    con.execute(f"""
+    CREATE OR REPLACE TEMP TABLE o2_trk AS
+    SELECT o2.ym, o2.wh, o2.pf, o2.cr, o2.cn,
+           t.主状态, t.主状态中文, t.子状态中文,
+           CASE
+             WHEN t.签收时间 IS NOT NULL AND o2.sg = 1 THEN '双方已签'
+             WHEN t.签收时间 IS NOT NULL AND o2.sg = 0 THEN '承运商已签_WMS未签'
+             WHEN t.签收时间 IS NULL     AND o2.sg = 1 THEN 'WMS已签_承运商未见'
+             ELSE '双方均未签'
+           END AS 对账
+    FROM o2
+    JOIN (
+        SELECT 单号,
+               coalesce(g.主状态, s.状态) 主状态,
+               coalesce(g.主状态中文, s.状态中文) 主状态中文,
+               coalesce(g.子状态中文, s.子状态) 子状态中文,
+               s.签收时间
+        FROM trk_status s
+        LEFT JOIN dim_trk_status g ON g.子状态 = s.子状态
+        WHERE coalesce(s.状态,'') <> ''
+    ) t ON t.单号 = o2.tn
+    WHERE o2.cr NOT IN ({excl})
+      AND coalesce(o2.tn,'') <> ''
+    """)
+
+    order = ["Delivered", "OutForDelivery", "InTransit", "AvailableForPickup",
+             "InfoReceived", "DeliveryFailure", "Exception", "Expired", "NotFound"]
+    present = [r[0] for r in con.execute(
+        "SELECT DISTINCT 主状态 FROM o2_trk WHERE 主状态 IS NOT NULL").fetchall()]
+    trk_statuses = [s for s in order if s in present] + [s for s in present if s not in order]
+
+    raw_trk = con.execute("""
+        SELECT ym, wh, pf, cr, cn, 主状态, count(*)::BIGINT n
+        FROM o2_trk GROUP BY 1,2,3,4,5,6""").df()
+    ti = {s: i for i, s in enumerate(trk_statuses)}
+    track_flat = _flat6(raw_trk, I, ti)
+
+    recon_labels = ["双方已签", "承运商已签_WMS未签", "WMS已签_承运商未见", "双方均未签"]
+    raw_recon = con.execute("""
+        SELECT ym, wh, pf, cr, cn, 对账, count(*)::BIGINT n
+        FROM o2_trk GROUP BY 1,2,3,4,5,6""").df()
+    ri = {s: i for i, s in enumerate(recon_labels)}
+    recon_flat = _flat6(raw_recon, I, ri)
 
 payload = {
     "meta": {
@@ -190,8 +258,21 @@ payload = {
         "countryZH": {r[0]: (r[1] or r[0]) for r in ctry},
         "ccars": ccars,
         "statuses": stats, "abands": ABANDS,
+        "trkStatuses": trk_statuses,
+        "trkStatusCN": {s: ("已签收" if s == "Delivered" else
+                            "派送中" if s == "OutForDelivery" else
+                            "运输中" if s == "InTransit" else
+                            "待自提" if s == "AvailableForPickup" else
+                            "已收到信息" if s == "InfoReceived" else
+                            "投递失败" if s == "DeliveryFailure" else
+                            "异常" if s == "Exception" else
+                            "长时间未更新" if s == "Expired" else
+                            "查无此单") for s in trk_statuses},
+        "reconLabels": recon_labels,
+        "trkExcluded": list(EXCLUDE_TRK),
     },
     "day": day, "ccar": ccar, "status": status, "aging": aging,
+    "track": track_flat, "recon": recon_flat,
     "coverage": [[r[0], int(r[1])] for r in cov.itertuples(index=False, name=None)],
 }
 
