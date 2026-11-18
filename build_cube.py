@@ -110,6 +110,10 @@ WITH o AS (
 SELECT *,
   CASE WHEN hm IS NULL OR hm <= 0 THEN NULL ELSE hm END AS h,
   CASE WHEN tm IS NULL OR tm <= 0 THEN NULL ELSE tm END AS t,
+  CASE WHEN tm IS NULL OR tm <= 0 THEN 0 ELSE 1 END AS sd,
+  CASE WHEN tm IS NOT NULL AND tm > 0 AND tm <= 4320  THEN 1 ELSE 0 END AS s3,
+  CASE WHEN tm IS NOT NULL AND tm > 0 AND tm <= 7200  THEN 1 ELSE 0 END AS s5,
+  CASE WHEN tm IS NOT NULL AND tm > 0 AND tm <= 10080 THEN 1 ELSE 0 END AS s7,
   CASE WHEN hm IS NULL OR hm <= 0 THEN '未签出'
        WHEN hm <= 720  THEN '12h内'
        WHEN hm <= 1440 THEN '12-24h'
@@ -122,7 +126,8 @@ FROM o
 MEAS = """count(*) AS n, sum(items)::BIGINT AS items,
           coalesce(sum(h),0)::BIGINT AS hS, count(h)::BIGINT AS hC,
           coalesce(sum(t),0)::BIGINT AS tS, count(t)::BIGINT AS tC,
-          sum(sg)::BIGINT AS sg"""
+          sum(sg)::BIGINT AS sg,
+          sum(s3)::BIGINT AS s3, sum(s5)::BIGINT AS s5, sum(s7)::BIGINT AS s7"""
 
 
 def col(sql):
@@ -246,7 +251,7 @@ if has_trk:
 
 # ---------------------------------------------------------------- 业务预警
 # 来自 alerts.py 生成的 fct_alert（每单一行主预警 + 若干次预警）
-alert_rules, alert_cn, alert_flat = [], {}, []
+alert_rules, alert_cn, alert_flat, alert_top = [], {}, [], []
 ALERT_ORDER = ["signout_timeout", "returning", "carrier_exception", "delivery_failure",
                "customs_hold", "no_update", "stagnation", "not_online", "transport_timeout"]
 
@@ -268,6 +273,38 @@ if has_alert:
         "SELECT DISTINCT 规则, 规则中文 FROM fct_alert").fetchall())
     ai = {s: i for i, s in enumerate(alert_rules)}
     alert_flat = _flat6(raw_alert, I, ai)
+
+    # 预警明细：每条规则取最严重的 60 条，让各规则都有代表
+    top_rows = con.execute("""
+        WITH r AS (
+            SELECT a.履约单号, a.规则, a.天数, a.轨迹状态, o2.ym, o2.wh, o2.pf, o2.cr, o2.cn,
+                   row_number() OVER (PARTITION BY a.规则 ORDER BY a.天数 DESC) rn
+            FROM fct_alert a JOIN o2 ON o2.履约单号 = a.履约单号
+            WHERE a.是否主预警
+        )
+        SELECT 履约单号, 规则, round(coalesce(天数,0), 1), ym, wh, pf, cr, cn, coalesce(轨迹状态,'')
+        FROM r WHERE rn <= 60
+    """).fetchall()
+    alert_top = [[rec[0], ai[rec[1]], rec[2], I["m"][rec[3]], I["w"][rec[4]], I["p"][rec[5]],
+                  I["c"][rec[6]], I["k"][rec[7]], rec[8]] for rec in top_rows]
+
+# ---------------------------------------------------------------- 数据健康
+health = {"trkOrders": 0, "noTrk": 0, "missingNo": 0}
+if has_trk:
+    health["trkOrders"] = sum(track_flat[i] for i in range(6, len(track_flat), 7))
+    health["missingNo"] = con.execute("SELECT count(*) FROM trk_missing").fetchone()[0]
+    health["noTrk"] = con.execute("""
+        WITH o AS (
+            SELECT 履约单号,
+                   upper(regexp_replace(coalesce(any_value(快递单号),''),'[^A-Za-z0-9]','','g')) tn
+            FROM 履约单明细
+            WHERE 出库单状态 IN ('已签出','物流异常') AND 签收时间_ts IS NULL
+            GROUP BY 履约单号
+        )
+        SELECT count(*) FROM o
+        WHERE coalesce(tn,'') <> ''
+          AND NOT EXISTS (SELECT 1 FROM trk_status s WHERE s.单号 = o.tn)
+    """).fetchone()[0]
 
 payload = {
     "meta": {
@@ -300,6 +337,7 @@ payload = {
     },
     "day": day, "ccar": ccar, "status": status, "aging": aging,
     "track": track_flat, "recon": recon_flat, "alert": alert_flat,
+    "alertTop": alert_top, "health": health,
     "coverage": [[r[0], int(r[1])] for r in cov.itertuples(index=False, name=None)],
 }
 

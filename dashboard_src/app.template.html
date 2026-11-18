@@ -156,25 +156,170 @@ footer{text-align:center;font-size:11.5px;color:#9aa5b4;margin-top:26px;line-hei
   header{margin:0 -14px 18px;padding:14px}
   .chart{height:260px}
 }
+
+/* ================= 控制台外壳 ================= */
+.app{display:grid;grid-template-columns:206px minmax(0,1fr);min-height:100vh}
+.side{
+  background:#0d1524;color:#9fb0c8;padding:16px 12px 14px;
+  display:flex;flex-direction:column;gap:16px;position:sticky;top:0;height:100vh;overflow:auto;
+}
+.brand{display:flex;gap:9px;align-items:center;padding:0 4px}
+.brand .logo{
+  width:32px;height:32px;border-radius:9px;flex:none;
+  background:linear-gradient(135deg,#2f6bed,#63a0ff);display:grid;place-items:center;
+  color:#fff;font-weight:700;font-size:14px;
+}
+.brand b{color:#fff;font-size:13.5px;display:block;letter-spacing:.2px;font-weight:650}
+.brand small{font-size:9px;color:#5d7091;letter-spacing:1.3px}
+.nav{display:flex;flex-direction:column;gap:3px}
+.nav button{
+  all:unset;display:flex;gap:9px;align-items:center;padding:8px 9px;border-radius:9px;
+  cursor:pointer;color:#93a5bf;transition:background .15s,color .15s;
+}
+.nav button:hover{background:#16223a;color:#dbe4f0}
+.nav button.on{background:#2f6bed;color:#fff;box-shadow:0 5px 16px rgba(47,107,237,.32)}
+.nav .ni{
+  width:25px;height:25px;border-radius:7px;flex:none;display:grid;place-items:center;
+  background:rgba(255,255,255,.07);font-size:12px;
+}
+.nav button.on .ni{background:rgba(255,255,255,.2)}
+.nav strong{font-size:12.5px;font-weight:600;display:block;line-height:1.25}
+.nav em{font-style:normal;font-size:9.5px;color:#5d7091;display:block;line-height:1.3}
+.nav button.on em{color:#cfe0ff}
+.nav .badge{
+  margin-left:auto;background:#e8563f;color:#fff;font-size:9.5px;font-weight:600;
+  padding:1px 6px;border-radius:99px;
+}
+.sidefoot{
+  margin-top:auto;font-size:10.5px;color:#5d7091;border-top:1px solid #1b2740;
+  padding-top:11px;display:flex;flex-direction:column;gap:6px;line-height:1.55;
+}
+.sidefoot .dot{
+  width:6px;height:6px;border-radius:99px;background:#43c07f;display:inline-block;
+  margin-right:5px;box-shadow:0 0 0 3px rgba(67,192,127,.16);
+}
+.main{min-width:0;display:flex;flex-direction:column;background:var(--bg)}
+
+/* 顶栏 */
+.top{
+  display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:11px 22px;background:#fff;border-bottom:1px solid var(--line);
+  position:sticky;top:0;z-index:30;
+}
+.crumb{font-size:12px;color:#98a4b6;display:flex;align-items:center;gap:7px}
+.crumb b{color:var(--ink);font-weight:600}
+.crumb .sep{color:#ccd5e2}
+.topR{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+
+/* 筛选条 */
+.fstrip{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:10px 22px;background:#fff;border-bottom:1px solid var(--line);
+  position:sticky;top:52px;z-index:29;
+}
+.content{padding:16px 22px 40px;display:flex;flex-direction:column;gap:14px}
+.view{display:none;flex-direction:column;gap:14px}
+.view.on{display:flex}
+
+/* KPI 六列 */
+.kpis.six{grid-template-columns:repeat(6,minmax(0,1fr))}
+.kpi.sm .val{font-size:22px}
+.kpi .tag{
+  position:absolute;top:9px;right:10px;font-size:9.5px;padding:1px 6px;border-radius:99px;
+  background:#eef2f9;color:#5b6675;
+}
+.kpi{position:relative}
+
+/* 运行状态条 */
+.strip{
+  display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+  background:#fff;border:1px solid var(--line);border-radius:12px;
+  padding:9px 14px;box-shadow:var(--shadow);font-size:12px;color:var(--ink2);
+}
+.strip .ok{display:flex;align-items:center;gap:7px;color:#1f8f5f;font-weight:600;font-size:12px}
+.strip .ok i{width:7px;height:7px;border-radius:99px;background:#43c07f;box-shadow:0 0 0 3px rgba(67,192,127,.16)}
+.strip .sp{flex:1}
+.strip .it{display:flex;align-items:center;gap:6px}
+.strip .it b{color:var(--ink);font-weight:650;font-variant-numeric:tabular-nums}
+.strip .it.warn b{color:#c8791f}
+
+/* 三块数据卡 */
+.dcards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.dcard{
+  display:flex;align-items:center;gap:11px;background:#fff;border:1px solid var(--line);
+  border-radius:12px;padding:12px 14px;box-shadow:var(--shadow);
+}
+.dcard .ic{
+  width:32px;height:32px;border-radius:9px;flex:none;display:grid;place-items:center;
+  font-size:13px;background:#eef4ff;color:#2f6bed;
+}
+.dcard.warn .ic{background:#fff4e8;color:#c8791f}
+.dcard.bad .ic{background:#fdeceb;color:#c0392b}
+.dcard .tx{min-width:0}
+.dcard .tx strong{display:block;font-size:12.5px;font-weight:650}
+.dcard .tx span{font-size:10.5px;color:#8b98ab;display:block;line-height:1.45}
+.dcard .rt{margin-left:auto;text-align:right;font-variant-numeric:tabular-nums}
+.dcard .rt b{font-size:16px;font-weight:650;display:block;letter-spacing:-.3px}
+.dcard .rt small{font-size:10px;color:#8b98ab}
+
+/* 预警表 */
+.atable{width:100%;border-collapse:collapse;font-size:12px}
+.atable th{
+  text-align:left;font-weight:600;color:#8b98ab;font-size:10.5px;letter-spacing:.4px;
+  padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap;position:sticky;top:0;background:#fff;
+}
+.atable td{padding:7px 8px;border-bottom:1px solid #f2f5fa;white-space:nowrap;font-variant-numeric:tabular-nums}
+.atable tr:hover td{background:#f8fafd}
+.atable .mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px;color:#2c3a4d}
+.tbwrap{max-height:520px;overflow:auto;border-radius:8px}
+.sev{font-size:10px;font-weight:600;padding:1px 6px;border-radius:5px}
+.sev.e{background:#fdeceb;color:#c0392b}
+.sev.h{background:#fff4e8;color:#b9741a}
+.sev.m{background:#eef2f9;color:#5b6675}
+
+@media (max-width:1400px){
+  .kpis.six{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .dcards{grid-template-columns:1fr}
+}
+
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="app">
 
-<header>
-  <div class="hd">
-    <div>
-      <h1>履约单数据看板<span>.</span></h1>
-      <div class="sub">
-        数据区间 <b id="mRange">—</b> · 共 <b id="mOrders">—</b> 张履约单 · 来源：履约系统导出
-      </div>
+<aside class="side">
+  <div class="brand">
+    <span class="logo">履</span>
+    <div><b>履约控制台</b><small>FULFILLMENT OPS</small></div>
+  </div>
+  <nav class="nav" id="nav">
+    <button data-v="overview" class="on"><span class="ni">◎</span><div><strong>数据总览</strong><em>规模 · 结构 · 健康</em></div></button>
+    <button data-v="sla"><span class="ni">◷</span><div><strong>时效监控</strong><em>仓内 · 干线 · 达成率</em></div></button>
+    <button data-v="alert"><span class="ni">!</span><div><strong>业务预警</strong><em>规则判定 · 待处理</em></div><b class="badge" id="navAlert">—</b></button>
+    <button data-v="track"><span class="ni">➤</span><div><strong>轨迹监控</strong><em>17track · 签收对账</em></div></button>
+    <button data-v="dim"><span class="ni">⊞</span><div><strong>维度明细</strong><em>平台 · 国家 · 状态</em></div></button>
+  </nav>
+  <div class="sidefoot">
+    <div><span class="dot"></span>数据就绪</div>
+    <div>覆盖 <b id="sideCov" style="color:#9fb0c8">—</b></div>
+    <div>由 DuckDB 聚合生成</div>
+  </div>
+</aside>
+
+<div class="main">
+
+  <div class="top">
+    <div class="crumb">履约控制台 <span class="sep">/</span> <b id="crumb">数据总览</b>
+      <span class="sep">·</span>
+      <span>数据区间 <b id="mRange">—</b> · 共 <b id="mOrders">—</b> 张履约单</span>
     </div>
-    <div class="filters">
+    <div class="topR">
       <span class="flabel">时间</span>
       <div id="monthChips" style="display:flex;gap:6px;flex-wrap:wrap"></div>
     </div>
   </div>
-  <div class="fbar">
+
+  <div class="fstrip">
     <span class="flabel">筛选</span>
     <div class="fsel" id="fs-wh"></div>
     <div class="fsel" id="fs-pf"></div>
@@ -183,138 +328,175 @@ footer{text-align:center;font-size:11.5px;color:#9aa5b4;margin-top:26px;line-hei
     <button class="freset" id="fReset">重置</button>
     <span class="fnow" id="fNow"></span>
   </div>
-</header>
 
-<!-- KPI -->
-<div class="kpis">
-  <div class="kpi">
-    <div class="lbl">履约单数</div>
-    <div class="val" id="kOrders">—</div>
-    <div class="fl" id="kOrdersSub">—</div>
-  </div>
-  <div class="kpi">
-    <div class="lbl">总件数</div>
-    <div class="val" id="kItems">—</div>
-    <div class="fl" id="kItemsSub">—</div>
-  </div>
-  <div class="kpi w">
-    <div class="lbl">仓内处理时长</div>
-    <div class="val" id="kAging">—<small>小时</small></div>
-    <div class="fl">创建 → 签出</div>
-  </div>
-  <div class="kpi g">
-    <div class="lbl">物流运输天数</div>
-    <div class="val" id="kTransit">—<small>天</small></div>
-    <div class="fl">签出 → 签收</div>
-  </div>
-  <div class="kpi b">
-    <div class="lbl">签收覆盖率</div>
-    <div class="val" id="kSign">—<small>%</small></div>
-    <div class="fl">已签收单 / 总单</div>
-  </div>
-</div>
+  <div class="content">
 
-<!-- 图表 -->
-<div class="grid">
-  <div class="card wide">
-    <div class="ct"><h2 id="trendTitle">月度单量与时效走势</h2>
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end">
-        <div class="seg" id="trendSeg"><button data-m="total" class="on">总量</button><button data-m="avg">日均</button></div>
-        <div class="tip" id="trendTip">柱：单量　线：物流天数</div>
+    <!-- ================= 总览 ================= -->
+    <section class="view on" id="v-overview">
+      <div class="kpis six">
+        <div class="kpi"><div class="lbl">履约单数</div><div class="val" id="kOrders">—</div><div class="fl" id="kOrdersSub">—</div></div>
+        <div class="kpi b"><div class="lbl">签收覆盖率</div><div class="val" id="kSign">—<small>%</small></div><div class="fl">已签收单 / 总单</div></div>
+        <div class="kpi g"><div class="lbl">7 天达成率</div><div class="val" id="k7">—<small>%</small></div><div class="fl">已签收中 7 天内达成的占比</div></div>
+        <div class="kpi w"><div class="lbl">仓内处理时长</div><div class="val" id="kAging">—<small>小时</small></div><div class="fl">创建 → 签出</div></div>
+        <div class="kpi g"><div class="lbl">物流运输天数</div><div class="val" id="kTransit">—<small>天</small></div><div class="fl">签出 → 签收</div></div>
+        <div class="kpi"><div class="lbl">活跃预警</div><div class="val" id="kAlert" style="color:#c0392b">—</div><div class="fl">命中主预警的履约单</div></div>
       </div>
-    </div>
-    <div class="chart tall" id="cTrend"></div>
-  </div>
 
-  <div class="card">
-    <div class="ct"><h2>仓库对比</h2><div class="tip">按单量排序，右侧为物流天数</div></div>
-    <div class="chart" id="cWh"></div>
-  </div>
+      <div class="strip">
+        <div class="ok"><i></i>数据链路正常</div>
+        <div class="it">总件数 <b id="kItems">—</b></div>
+        <div class="it">覆盖天数 <b id="stripCover">—</b></div>
+        <div class="it">有轨迹单 <b id="stripTrk">—</b></div>
+        <div class="it warn">无轨迹在途 <b id="stripNoTrk">—</b></div>
+        <div class="sp"></div>
+        <div class="it" style="color:#98a4b6">17track 未注册 <b id="stripMissing">—</b></div>
+      </div>
 
-  <div class="card">
-    <div class="ct"><h2>后台物流商对比</h2><div class="tip">系统里的承运商字段，右侧为物流天数</div></div>
-    <div class="chart" id="cCarrier"></div>
-  </div>
-
-  <div class="card">
-    <div class="ct"><h2>C 端显示物流服务商</h2><div class="tip">客户实际看到的末端承运商，右侧为物流天数</div></div>
-    <div class="chart" id="cCcar"></div>
-  </div>
-
-  <div class="card">
-    <div class="ct"><h2>目的国 Top 12</h2><div class="tip">按单量排序，右侧为物流天数</div></div>
-    <div class="chart" id="cCountry"></div>
-  </div>
-
-  <div class="card">
-    <div class="ct"><h2>平台分布</h2><div class="tip">按履约单数</div></div>
-    <div class="chart" id="cPlatform"></div>
-  </div>
-
-  <div class="card">
-    <div class="ct"><h2>仓内时效分布</h2><div class="tip">创建到签出的耗时分段</div></div>
-    <div class="chart" id="cAging"></div>
-  </div>
-
-  <div class="card">
-    <div class="ct"><h2>业务预警分布</h2><div class="tip">按 PRD 规则判定，每单只计主预警</div></div>
-    <div class="chart" id="cAlert"></div>
-  </div>
-
-  <div class="card">
-    <div class="ct"><h2>17track 轨迹状态</h2><div class="tip">官方 9 大状态，仅统计有轨迹的单（不含南非）</div></div>
-    <div class="chart" id="cTrack"></div>
-  </div>
-
-  <div class="card wide">
-    <div class="ct"><h2>签收对账</h2><div class="tip">17track 承运商签收 vs WMS 签收</div></div>
-    <div class="chart" id="cRecon"></div>
-  </div>
-
-  <div class="card wide">
-    <div class="ct"><h2>出库单状态分布</h2><div class="tip">按履约单数</div></div>
-    <div class="chart" id="cStatus"></div>
-  </div>
-
-  <div class="card wide">
-    <div class="ct"><h2>数据覆盖日历</h2><div class="tip">每日是否存在履约单数据（不随筛选变化）</div></div>
-    <div class="covsum" id="covSum">—</div>
-    <div class="cov">
-      <div class="covinner">
-        <div class="covmonths" id="covMonths"></div>
-        <div class="covbody">
-          <div class="covdow"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
-          <div class="covgrid" id="covGrid"></div>
+      <div class="dcards">
+        <div class="dcard">
+          <div class="ic">◎</div>
+          <div class="tx"><strong>物流事实</strong><span>17track 轨迹覆盖的在途与近期单</span></div>
+          <div class="rt"><b id="dcTrk">—</b><small>单</small></div>
+        </div>
+        <div class="dcard bad">
+          <div class="ic">!</div>
+          <div class="tx"><strong>业务预警</strong><span>按 PRD 规则判定，每单只计主预警</span></div>
+          <div class="rt"><b id="dcAlert">—</b><small>单待处理</small></div>
+        </div>
+        <div class="dcard warn">
+          <div class="ic">△</div>
+          <div class="tx"><strong>数据健康</strong><span>在途但 17track 无轨迹，无法判定</span></div>
+          <div class="rt"><b id="dcNoTrk">—</b><small>单</small></div>
         </div>
       </div>
+
+      <div class="grid">
+        <div class="card wide">
+          <div class="ct"><h2 id="trendTitle">月度单量与时效走势</h2>
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:flex-end">
+              <div class="seg" id="trendSeg"><button data-m="total" class="on">总量</button><button data-m="avg">日均</button></div>
+              <div class="tip" id="trendTip">柱：单量　线：物流天数</div>
+            </div>
+          </div>
+          <div class="chart tall" id="cTrend"></div>
+        </div>
+        <div class="card">
+          <div class="ct"><h2>每日签出趋势</h2><div class="tip">最近 30 天 · 签出日期口径</div></div>
+          <div class="chart" id="cDaily"></div>
+        </div>
+        <div class="card">
+          <div class="ct"><h2>物流商占比</h2><div class="tip">后台承运商字段 · 按履约单数</div></div>
+          <div class="chart" id="cChan"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 时效 ================= -->
+    <section class="view" id="v-sla">
+      <div class="grid">
+        <div class="card wide">
+          <div class="ct"><h2>时效达成率</h2><div class="tip">已签收单中，物流运输天数落在对应区间的占比</div></div>
+          <div class="chart" id="cSla"></div>
+        </div>
+        <div class="card">
+          <div class="ct"><h2>仓内时效分布</h2><div class="tip">创建到签出的耗时分段</div></div>
+          <div class="chart" id="cAging"></div>
+        </div>
+        <div class="card">
+          <div class="ct"><h2>仓库对比</h2><div class="tip">按单量排序，右侧为物流天数</div></div>
+          <div class="chart" id="cWh"></div>
+        </div>
+        <div class="card">
+          <div class="ct"><h2>后台物流商对比</h2><div class="tip">与我方签约的承运商，右侧为物流天数</div></div>
+          <div class="chart" id="cCarrier"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 预警 ================= -->
+    <section class="view" id="v-alert">
+      <div class="grid">
+        <div class="card wide">
+          <div class="ct"><h2>业务预警分布</h2><div class="tip">按 PRD 规则判定，每单只计主预警 · 随上方筛选变化</div></div>
+          <div class="chart" id="cAlert"></div>
+        </div>
+        <div class="card wide">
+          <div class="ct"><h2>待处理预警明细</h2><div class="tip">每条规则取最严重的 60 条 · 随筛选变化</div></div>
+          <div class="tbwrap">
+            <table class="atable">
+              <thead><tr><th>履约单号</th><th>预警</th><th>级别</th><th>已过天数</th><th>物流商</th><th>国家</th><th>轨迹状态</th></tr></thead>
+              <tbody id="alertBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 轨迹 ================= -->
+    <section class="view" id="v-track">
+      <div class="grid">
+        <div class="card">
+          <div class="ct"><h2>17track 轨迹状态</h2><div class="tip">官方 9 大状态，仅统计有轨迹的单</div></div>
+          <div class="chart" id="cTrack"></div>
+        </div>
+        <div class="card">
+          <div class="ct"><h2>C 端显示物流服务商</h2><div class="tip">客户实际看到的末端承运商，右侧为物流天数</div></div>
+          <div class="chart" id="cCcar"></div>
+        </div>
+        <div class="card wide">
+          <div class="ct"><h2>签收对账</h2><div class="tip">17track 承运商签收 vs WMS 签收</div></div>
+          <div class="chart" id="cRecon"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= 维度 ================= -->
+    <section class="view" id="v-dim">
+      <div class="grid">
+        <div class="card"><div class="ct"><h2>平台分布</h2><div class="tip">按履约单数</div></div><div class="chart" id="cPlatform"></div></div>
+        <div class="card"><div class="ct"><h2>目的国 Top 12</h2><div class="tip">按单量排序，右侧为物流天数</div></div><div class="chart" id="cCountry"></div></div>
+        <div class="card wide"><div class="ct"><h2>出库单状态分布</h2><div class="tip">按履约单数</div></div><div class="chart" id="cStatus"></div></div>
+        <div class="card wide">
+          <div class="ct"><h2>数据覆盖日历</h2><div class="tip">每日是否存在履约单数据（不随筛选变化）</div></div>
+          <div class="covsum" id="covSum">—</div>
+          <div class="cov">
+            <div class="covinner">
+              <div class="covmonths" id="covMonths"></div>
+              <div class="covbody">
+                <div class="covdow"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+                <div class="covgrid" id="covGrid"></div>
+              </div>
+            </div>
+          </div>
+          <div class="covlegend">
+            <em><s style="background:#4E79A7"></s>有数据</em>
+            <em id="lgGap" style="display:none"><s style="background:#fbe0de;box-shadow:inset 0 0 0 1px #ee8f89"></s>缺口</em>
+            <em style="color:#9aa5b4">鼠标悬停查看每日单量</em>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="note">
+      <b>口径说明</b>
+      <ul>
+        <li><b>筛选</b>：时间（单选月份）与仓库 / 平台 / 后台物流商 / 国家（多选）相互叠加，作用到全部 KPI 与图表。下拉里的数字是「其他筛选条件下该选项的单量」。国家较多，下拉可直接搜索。</li>
+        <li style="color:#b45309"><b>「后台物流商」与「C 端显示物流服务商」不是一回事。</b>后台字段是与我方签约的承运商，往往只是总包（如 WYT-USPS）；C 端字段才是客户实际看到的末端派送商（GOFO、SpeedX、OnTrac、USPS 等）。判断「客户觉得慢不慢」要看 C 端这张。</li>
+        <li><b>单量</b>按「履约单号」去重；件数为各 SKU 数量之和。<b>物流运输天数</b> = 签收 − 签出，仅有签收的单参与。</li>
+        <li><b>7 天达成率</b> = 已签收单中，物流运输天数 ≤ 7 天的占比。</li>
+        <li><b>业务预警</b>按 PRD 规则判定：运输超时用「仓库×物流商×目的国」历史 P90 + 2 工作日；物流未上网只认有轨迹但停在 InfoReceived/NotFound 的单，<b>完全无轨迹的单不报</b>（那是数据缺口，不是运输异常）。</li>
+        <li style="color:#b45309"><b>11 月是不完整月份</b>：数据截止 <span id="noteEnd">—</span>，跨月比较请切到「日均」口径。</li>
+        <li style="color:#b45309"><b>金额类字段不可用于运费看板</b>：「当前物流预估价」98.2% 为 0，「申报金额」仅 12% 有值，故不呈现运费与费比。</li>
+      </ul>
     </div>
-    <div class="covlegend">
-      <em><s style="background:#4E79A7"></s>有数据</em>
-      <em id="lgGap" style="display:none"><s style="background:#fbe0de;box-shadow:inset 0 0 0 1px #ee8f89"></s>缺口（源数据未导出）</em>
-      <em style="color:#9aa5b4">鼠标悬停查看每日单量</em>
-    </div>
+
+    <footer>
+      履约控制台 · 数据截止 <span id="mEnd">—</span> · 由 DuckDB 聚合生成<br>
+      日期覆盖 <span id="mGap">—</span> · 跨月比较建议用「日均」口径
+    </footer>
+
   </div>
 </div>
-
-<div class="note">
-  <b>看板口径说明</b>
-  <ul>
-    <li><b>筛选</b>：时间（单选月份）与仓库 / 平台 / 后台物流商 / 国家（多选）相互叠加，作用到全部 KPI 与图表；下拉里的数字是「其他筛选条件下该选项的单量」，方便判断该选哪个。国家较多，下拉里可直接搜索。</li>
-    <li style="color:#b45309"><b>「后台物流商」与「C 端显示物流服务商」不是一回事，别混用。</b>后台字段是与我方签约的承运商，往往只是总包（例如 WYT-USPS）；C 端字段才是客户实际看到的末端派送商（GOFO、SpeedX、OnTrac、USPS 等）。判断「客户觉得慢不慢」要看 C 端这一张。</li>
-    <li><b>平台</b>名称取自 <code>平台对照表.xlsx</code>（PC 编码 → 正式名称），如 PC1 → Luvme-Global-SHOPIFY。</li>
-    <li><b>单量</b>按「履约单号」去重统计，一个履约单含多个 SKU 时只计 1 单；件数为各 SKU 数量之和。</li>
-    <li><b>物流运输天数</b> = 签收时间 − 签出时间，仅统计两者都有值的单，未签收单不参与。</li>
-    <li><b>签收覆盖率</b>偏低时多为在途未签收，最近月份（尤其 11 月）数值偏低属正常。</li>
-    <li style="color:#b45309"><b>11 月是不完整月份</b>：数据截止 <span id="noteEnd">—</span>，该月只有 12 天，柱状图上的「下降」是截断假象。跨月比较请切到<b>「日均」</b>口径。</li>
-    <li style="color:#b45309"><b>金额类字段不可用于运费看板</b>：「当前物流预估价」98.2% 为 0，「申报金额」仅 12% 有值，两者均无法作为成本口径，故本看板不呈现运费与费比。</li>
-  </ul>
-</div>
-
-<footer>
-  履约单数据看板 · 数据截止 <span id="mEnd">—</span> · 由 DuckDB 聚合生成<br>
-  数据已清洗：删除 199 行测试单、置空 298 行脏签收时间 · 日期覆盖 <span id="mGap">—</span> · 跨月比较建议用「日均」口径
-</footer>
-
 </div>
 
 <script>
@@ -346,7 +528,7 @@ const CTRY_LABEL = CTRY.map(c => CTRY_ZH[c] || c);
 const CCARS = DM.ccars, STATUSES = DM.statuses, ABANDS = DM.abands;
 const DAYM = DM.dayMonth;
 
-const DAY = D.day,    DAY_S = 12;  // di wi pi ci ni | n items hS hC tS tC sg
+const DAY = D.day,    DAY_S = 15;  // di wi pi ci ni | n items hS hC tS tC sg s3 s5 s7
 const CCA = D.ccar,   CCA_S = 9;   // mi wi pi ci ni xi | n tS tC
 const STA = D.status, STA_S = 7;   // mi wi pi ci ni si | n
 const AGE = D.aging,  AGE_S = 7;   // mi wi pi ci ni abi | n
@@ -394,10 +576,11 @@ function keep(mi, wi, pi, ci, ni, skip){
   if (skip!=='cn' && SEL.cn.size && !SEL.cn.has(ni)) return false;
   return true;
 }
-const ZERO = () => ({n:0,items:0,hS:0,hC:0,tS:0,tC:0,sg:0});
+const ZERO = () => ({n:0,items:0,hS:0,hC:0,tS:0,tC:0,sg:0,s3:0,s5:0,s7:0});
 function addInto(o, i){
   o.n+=DAY[i+5]; o.items+=DAY[i+6];
   o.hS+=DAY[i+7]; o.hC+=DAY[i+8]; o.tS+=DAY[i+9]; o.tC+=DAY[i+10]; o.sg+=DAY[i+11];
+  o.s3+=DAY[i+12]; o.s5+=DAY[i+13]; o.s7+=DAY[i+14];
 }
 function scan(fn, skip){
   for (let i=0;i<DAY.length;i+=DAY_S){
@@ -415,6 +598,9 @@ function stat(o){
     hours:  o.hC >= MIN_N ? o.hS/o.hC/60 : null,
     days:   o.tC >= MIN_N ? o.tS/o.tC/1440 : null,
     sign:   o.n  >= MIN_N ? 100*o.sg/o.n : null,
+    rate3:  o.sg >= MIN_N ? 100*o.s3/o.sg : null,
+    rate5:  o.sg >= MIN_N ? 100*o.s5/o.sg : null,
+    rate7:  o.sg >= MIN_N ? 100*o.s7/o.sg : null,
   };
 }
 function aggAll(){ const o=ZERO(); scan(i=>addInto(o,i)); return o; }
@@ -829,11 +1015,28 @@ function drawKPI(){
       ? `${SEL.m+1}月 · <span style="color:#d9534f;font-weight:600">仅 ${nDays}/${natural} 天</span>`
       : `${SEL.m+1}月 · ${nDays} 天`;
   }
-  document.getElementById('kItems').textContent = fmt(o.items);
-  document.getElementById('kItemsSub').textContent = o.n ? `单均 ${fmt1(o.items/o.n)} 件` : '—';
+  document.getElementById('kItems').textContent = fmt(o.items) + (o.n ? ` （单均 ${fmt1(o.items/o.n)} 件）` : '');
   document.getElementById('kAging').innerHTML = fmt1(s.hours)+'<small>小时</small>';
   document.getElementById('kTransit').innerHTML = fmt1(s.days)+'<small>天</small>';
   document.getElementById('kSign').innerHTML = fmt1(s.sign)+'<small>%</small>';
+  const k7 = document.getElementById('k7');
+  if (k7) k7.innerHTML = fmt1(s.rate7)+'<small>%</small>';
+
+  /* 预警与数据健康：来自 alert 立方体与 health 标量 */
+  const aSum = alertAgg().reduce((a,b)=>a+b,0);
+  const kA = document.getElementById('kAlert'); if (kA) kA.textContent = fmt(aSum);
+  const dcA = document.getElementById('dcAlert'); if (dcA) dcA.textContent = fmt(aSum);
+  const navA = document.getElementById('navAlert');
+  if (navA) navA.textContent = aSum >= 10000 ? (aSum/10000).toFixed(1)+'万' : fmt(aSum);
+  const H = D.health || {trkOrders:0, noTrk:0, missingNo:0};
+  const setTx = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setTx('dcTrk', fmt(H.trkOrders));
+  setTx('dcNoTrk', fmt(H.noTrk));
+  setTx('stripTrk', fmt(H.trkOrders));
+  setTx('stripNoTrk', fmt(H.noTrk));
+  setTx('stripMissing', fmt(H.missingNo));
+  setTx('stripCover', D.meta.daysCovered+'/'+D.meta.daysTotal);
+  setTx('sideCov', D.meta.daysCovered+'/'+D.meta.daysTotal+' 天');
 }
 
 /* ---------- 筛选条 ---------- */
@@ -1016,6 +1219,7 @@ function drawCoverage(){
 function renderAll(){
   drawKPI(); drawTrend(); drawWh(); drawCarrier(); drawCcar();
   drawCountry(); drawPlatform(); drawAging(); drawAlert(); drawTrack(); drawRecon(); drawStatus();
+  drawDaily(); drawChan(); drawSla(); renderAlertTable();
 }
 
 let METRIC = 'total';
@@ -1033,14 +1237,127 @@ function buildChips(){
   });
 }
 
+
+/* ---------- 视图切换 ---------- */
+const VIEW_META = { overview:'数据总览', sla:'时效监控', alert:'业务预警', track:'轨迹监控', dim:'维度明细' };
+function bindNav(){
+  const nav = document.getElementById('nav');
+  if (nav) nav.querySelectorAll('button[data-v]').forEach(b=>{ b.onclick = ()=> showView(b.dataset.v); });
+  const v = (location.hash||'').replace('#','');
+  showView(VIEW_META[v] ? v : 'overview');
+}
+function showView(v){
+  document.querySelectorAll('.view').forEach(el=> el.classList.toggle('on', el.id === 'v-'+v));
+  document.querySelectorAll('#nav button').forEach(b=> b.classList.toggle('on', b.dataset.v === v));
+  const c = document.getElementById('crumb'); if (c) c.textContent = VIEW_META[v] || v;
+  history.replaceState(null, '', '#' + v);
+  // 隐藏的容器宽度为 0，切回来要重算
+  setTimeout(()=>{ Object.keys(charts).forEach(k=> charts[k] && charts[k].resize()); }, 30);
+}
+
+/* ---------- 每日签出趋势 ---------- */
+function drawDaily(){
+  const map = new Map();
+  scan((i, di)=>{ const k = DAYS[di]; map.set(k, (map.get(k)||0) + DAY[i+5]); });
+  let arr = [...map.entries()].sort((a,b)=> a[0] < b[0] ? -1 : 1);
+  if (!arr.length){ emptyChart('cDaily','当前筛选没有数据'); return; }
+  if (arr.length > 30) arr = arr.slice(-30);
+  const vals = arr.map(r=>r[1]);
+  const avg = vals.reduce((a,b)=>a+b,0)/vals.length;
+  charts.cDaily.setOption({
+    grid:{left:8,right:12,top:18,bottom:8,containLabel:true},
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},formatter:p=>`${p[0].axisValue}<br/>签出 <b>${fmt(p[0].value)}</b> 单`},
+    xAxis:{type:'category',data:arr.map(r=>r[0].slice(5)),axisLine:{lineStyle:{color:'#e6ebf2'}},
+      axisTick:{show:false},axisLabel:{color:'#8b98ab',fontSize:10,interval:Math.ceil(arr.length/8)}},
+    yAxis:{type:'value',splitLine:{lineStyle:{color:'#f0f3f8'}},
+      axisLabel:{color:'#8b98ab',fontSize:10,formatter:v=>v>=1000?(v/1000)+'k':v}},
+    series:[{type:'bar',barMaxWidth:16,itemStyle:{borderRadius:[3,3,0,0],color:'#4E79A7'},
+      data:vals,markLine:{silent:true,symbol:'none',
+        lineStyle:{color:'#e8a33d',type:'dashed'},
+        label:{formatter:'日均 '+fmt(Math.round(avg)),fontSize:10,color:'#b9741a',position:'insideEndTop'},
+        data:[{yAxis:avg}]}}]
+  }, true);
+}
+
+/* ---------- 物流商占比 ---------- */
+function drawChan(){
+  const arr = aggByDim(3, CRS.length);
+  const items = CRS.map((name,i)=>({ name, n: arr[i].n })).filter(r=>r.n>0).sort((a,b)=>b.n-a.n);
+  if (!items.length){ emptyChart('cChan','当前筛选没有数据'); return; }
+  const top = items.slice(0,6);
+  const rest = items.slice(6).reduce((a,r)=>a+r.n,0);
+  if (rest > 0) top.push({ name:'其他渠道', n:rest });
+  const total = top.reduce((a,r)=>a+r.n,0);
+  const palette = ['#2f6bed','#4E79A7','#59A14F','#F28E2B','#B07AA1','#76B7B2','#c8ced8'];
+  charts.cChan.setOption({
+    tooltip:{trigger:'item',formatter:p=>`${p.name}<br/>${fmt(p.value)} 单（${p.percent}%）`},
+    legend:{orient:'vertical',right:4,top:'center',itemWidth:9,itemHeight:9,itemGap:8,
+      textStyle:{fontSize:10.5,color:'#5b6675'},
+      formatter:(n)=>{ const it = top.find(x=>x.name===n); return `${n}  ${it?fmt(it.n):''}`; }},
+    series:[{type:'pie',radius:['42%','70%'],center:['32%','50%'],
+      itemStyle:{borderColor:'#fff',borderWidth:2},
+      label:{show:true,position:'center',formatter:`{a|${fmt(total)}}\n{b|履约单}`,
+        rich:{a:{fontSize:17,fontWeight:650,color:'#1b2430',lineHeight:22},
+              b:{fontSize:10,color:'#8b98ab'}}},
+      labelLine:{show:false},
+      data:top.map((r,i)=>({name:r.name,value:r.n,itemStyle:{color:palette[i]||'#c8ced8'}}))}]
+  }, true);
+}
+
+/* ---------- 时效达成率 ---------- */
+function drawSla(){
+  const o = aggAll(), s = stat(o);
+  if (s.rate7 === null){ emptyChart('cSla','已签收样本不足，无法计算达成率'); return; }
+  const cats = ['≤3 天', '≤5 天', '≤7 天'];
+  const vals = [s.rate3, s.rate5, s.rate7];
+  const colors = ['#2f6bed','#4E79A7','#76B7B2'];
+  charts.cSla.setOption({
+    grid:{left:8,right:20,top:34,bottom:8,containLabel:true},
+    tooltip:{trigger:'axis',axisPointer:{type:'shadow'},
+      formatter:p=>`${p[0].axisValue} 达成率<br/><b>${fmt1(p[0].value)}%</b><br/><span style="color:#8b98ab">占已签收 ${fmt(o.sg)} 单</span>`},
+    xAxis:{type:'category',data:cats,axisLine:{lineStyle:{color:'#e6ebf2'}},axisTick:{show:false},
+      axisLabel:{color:'#5b6675',fontSize:11.5}},
+    yAxis:{type:'value',max:100,splitLine:{lineStyle:{color:'#f0f3f8'}},
+      axisLabel:{color:'#8b98ab',fontSize:10,formatter:'{value}%'}},
+    series:[{type:'bar',barMaxWidth:92,
+      itemStyle:{borderRadius:[5,5,0,0]},
+      data:vals.map((v,i)=>({value:v,itemStyle:{color:colors[i],borderRadius:[5,5,0,0]}})),
+      label:{show:true,position:'top',fontSize:12,fontWeight:600,color:'#1b2430',
+        formatter:p=>fmt1(p.value)+'%'}}]
+  }, true);
+}
+
+/* ---------- 预警明细表 ---------- */
+const SEV_CN = { returning:'e', carrier_exception:'e', delivery_failure:'e',
+                 customs_hold:'h', no_update:'h', stagnation:'m',
+                 not_online:'h', transport_timeout:'h', signout_timeout:'h' };
+const SEV_TX = { e:'紧急', h:'高', m:'中' };
+function renderAlertTable(){
+  const tb = document.getElementById('alertBody'); if (!tb) return;
+  const AT = D.alertTop || [];
+  const rows = AT.filter(r => keep(DM.months[r[3]], r[4], r[5], r[6], r[7]));
+  const sev = k => SEV_CN[k] || 'm';
+  const order = { e:0, h:1, m:2 };
+  rows.sort((a,b)=> (order[sev(ALERT_RULES[a[1]])] - order[sev(ALERT_RULES[b[1]])]) || (b[2]-a[2]));
+  const html = rows.slice(0, 200).map(r=>{
+    const rule = ALERT_RULES[r[1]], sv = sev(rule);
+    return `<tr><td class="mono">${r[0]}</td><td>${ALERT_CN[rule]||rule}</td>`
+      + `<td><span class="sev ${sv}">${SEV_TX[sv]}</span></td>`
+      + `<td>${fmt1(r[2])}</td><td>${CRS[r[5]]||'—'}</td><td>${DM.countries[r[7]]||'—'}</td>`
+      + `<td style="color:#8b98ab">${r[8]||'—'}</td></tr>`;
+  }).join('');
+  tb.innerHTML = html || `<tr><td colspan="7" style="text-align:center;color:#9aa5b4;padding:26px">当前筛选下没有匹配的预警明细</td></tr>`;
+}
+
 /* ---------- 启动 ---------- */
 document.getElementById('mRange').textContent = D.meta.start + ' ~ ' + D.meta.end;
 document.getElementById('mEnd').textContent = D.meta.end;
 document.getElementById('noteEnd').textContent = D.meta.end;
 document.getElementById('mOrders').textContent = fmt(D.meta.orders);
 
-['cTrend','cWh','cCarrier','cCcar','cCountry','cPlatform','cAging','cAlert','cTrack','cRecon','cStatus'].forEach(init);
+['cTrend','cWh','cCarrier','cCcar','cCountry','cPlatform','cAging','cAlert','cTrack','cRecon','cStatus','cDaily','cChan','cSla'].forEach(init);
 applyURL();
+bindNav();
 bindFilterClick();
 buildChips();
 renderFilterBar();
