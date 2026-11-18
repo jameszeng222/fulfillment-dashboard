@@ -44,3 +44,6 @@ node_modules/
 sync.log
 _t_*.duckdb
 _t_*.py
+*.duckdb.bak
+*.duckdb.wal
+*.bak

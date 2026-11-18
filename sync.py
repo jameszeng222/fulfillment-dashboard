@@ -16,7 +16,8 @@ ERP 导出文件 → 本地数据库 → 看板，一条龙同步。
 去重：按文件**内容 sha256** 记入 sync_ledger 表。同一个文件换个名字再放一次不会重复导入；
 真·重导请从 ledger 里删掉那一行。
 
-合并语义沿用 ingest.py：按「创建日期」区间整体替换，重复导入幂等。
+合并语义沿用 ingest.py：默认按主键（履约单号+sku+批次码）upsert，
+部分导出不会误删同期的其它单；确需整段替换时加 --mode replace。
 """
 from __future__ import annotations
 
@@ -133,6 +134,8 @@ def main() -> int:
     ap.add_argument("--max", type=int, default=0, help="本次最多处理几个文件，0=不限")
     ap.add_argument("--no-build", action="store_true", help="不重建看板")
     ap.add_argument("--push", action="store_true", help="重建后自动提交并推送")
+    ap.add_argument("--mode", choices=["upsert", "replace"], default="upsert",
+                    help="合并方式，默认 upsert（按主键覆盖，部分导出也不会误删）")
     args = ap.parse_args()
 
     dirs = DEFAULT_DIRS
@@ -180,7 +183,7 @@ def main() -> int:
             df = ingest.read_one(p)
             batch = p.stem
             try:
-                stats = ingest.ingest_df(con, df, batch=batch, dry_run=args.dry_run)
+                stats = ingest.ingest_df(con, df, batch=batch, dry_run=args.dry_run, mode=args.mode)
             except SystemExit as e:
                 print(f"  [跳过] {e}")
                 continue

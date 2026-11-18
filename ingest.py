@@ -9,9 +9,11 @@
     python ingest.py 导出.xlsx --batch 2026_11_20
     python ingest.py 导出.xlsx --asof 2026-11-16   # 固定「数据日」，用于复现历史导入
 
-合并策略：**按「创建日期」区间整体替换**。
-同一个导出窗口重复导入不会产生重复行；代价是新导出只覆盖某天的一部分时，
-那一天的旧数据会被整个替换掉。
+合并策略（mode）：
+  upsert（默认）—— 只删除「主键（履约单号+sku+批次码）与本文件相同」的行再插入。
+      部分导出（只导最近几天、或只导某些状态）不会误删同期的其它单。开工单更新状态时也走这条。
+  replace —— 删除整个「创建日期区间」再插入。
+      **仅当确认文件是该区间的全量导出时使用**，否则会丢数据。
 
 派生列（时间戳、创建日期/月份、时间异常）由本脚本按与清洗时一致的规则重新计算。
 本模块的 `load_input` / `ingest_df` 也被 sync.py 复用。
@@ -100,11 +102,19 @@ def load_input(target: Path, verbose: bool = True) -> pd.DataFrame:
 # ---------------------------------------------------------------- 清洗与合并
 
 def ingest_df(con, df: pd.DataFrame, batch: str | None = None,
-              asof: str | None = None, dry_run: bool = False) -> dict:
+              asof: str | None = None, dry_run: bool = False,
+              mode: str = "upsert") -> dict:
     """
     把 DataFrame 合并进库。返回统计信息 dict。
-    清理规则与历史上的「清洗记录」保持一致。
+
+    mode:
+      upsert（默认，安全）—— 只删除「主键与本文件相同」的行，再插入。
+          部分导出（例如只导最近几天、或只导某些状态）不会误删同期的其它单。
+      replace —— 删除整个「创建日期区间」再插入。
+          仅在确认文件是该区间的**全量**导出时使用，否则会丢数据。
     """
+    if mode not in ("upsert", "replace"):
+        raise SystemExit(f"未知合并模式: {mode}")
     existing_ordered = [r[0] for r in con.execute(
         "SELECT column_name FROM information_schema.columns "
         "WHERE table_name='履约单明细' ORDER BY ordinal_position").fetchall()]
@@ -166,44 +176,59 @@ def ingest_df(con, df: pd.DataFrame, batch: str | None = None,
     print(f"  履约单 {int(df['履约单号'].nunique()):,} 个")
     print(f"  清洗: 签收越界 {n_out} 行、签收早于签出 {n_bad} 行（已置空并打标）")
 
-    will_del = con.execute(
-        "SELECT count(*) FROM 履约单明细 WHERE 创建日期 BETWEEN ? AND ?", [dmin, dmax]
-    ).fetchone()[0]
-    print(f"\n合并策略: 删除该日期区间已有 {will_del:,} 行，再插入 {len(df):,} 行")
+    # 主键：履约单号 + sku + 批次码（该组合在库里唯一）
+    KEY = "(\"履约单号\" || '|' || coalesce(\"sku\",'') || '|' || coalesce(\"批次码\",''))"
+    all_cols = [c for c in existing_ordered if c in df.columns]
+    con.register("incoming", df[all_cols])
 
     stats = {
         "batch": batch, "rows": len(df), "orders": int(df["履约单号"].nunique()),
         "dmin": str(dmin), "dmax": str(dmax), "days": n_days,
-        "deleted": int(will_del), "bad_sign": n_bad, "out_of_range": n_out,
+        "bad_sign": n_bad, "out_of_range": n_out, "mode": mode,
     }
 
+    if mode == "upsert":
+        will_del = con.execute(
+            f"SELECT count(*) FROM 履约单明细 WHERE {KEY} IN (SELECT {KEY} FROM incoming)"
+        ).fetchone()[0]
+        print(f"\n合并策略: 按主键 upsert —— 覆盖已有 {will_del:,} 行，"
+              f"新增 {len(df) - will_del:,} 行")
+        print(f"  同区间内未出现在本文件里的单**不受影响**")
+    else:
+        will_del = con.execute(
+            "SELECT count(*) FROM 履约单明细 WHERE 创建日期 BETWEEN ? AND ?", [dmin, dmax]
+        ).fetchone()[0]
+        print(f"\n合并策略: 替换整个日期区间 —— 删除 {will_del:,} 行，再插入 {len(df):,} 行")
+    stats["deleted"] = int(will_del)
+
     if dry_run:
+        con.unregister("incoming")
         print("\n--dry-run：未写入。")
         return stats
 
-    all_cols = [c for c in existing_ordered if c in df.columns]
     con.execute("BEGIN TRANSACTION")
     try:
-        con.execute("DELETE FROM 履约单明细 WHERE 创建日期 BETWEEN ? AND ?", [dmin, dmax])
-        con.register("incoming", df[all_cols])
+        if mode == "upsert":
+            con.execute(
+                f"DELETE FROM 履约单明细 WHERE {KEY} IN (SELECT {KEY} FROM incoming)")
+        else:
+            con.execute("DELETE FROM 履约单明细 WHERE 创建日期 BETWEEN ? AND ?", [dmin, dmax])
         cols = ", ".join(f'"{c}"' for c in all_cols)
         con.execute(f'INSERT INTO 履约单明细 ({cols}) SELECT {cols} FROM incoming')
         con.unregister("incoming")
         con.execute("COMMIT")
     except Exception:
+        con.unregister("incoming")
         con.execute("ROLLBACK")
         raise
 
     total = con.execute("SELECT count(*) FROM 履约单明细").fetchone()[0]
-    got = con.execute(
+    span = con.execute(
         "SELECT count(*) FROM 履约单明细 WHERE 创建日期 BETWEEN ? AND ?", [dmin, dmax]
     ).fetchone()[0]
     print("\n写入完成。")
     print(f"  库内总行数: {total:,}")
-    print(f"  该区间行数: {got:,}（履约单 "
-          f"{con.execute('SELECT count(DISTINCT 履约单号) FROM 履约单明细 WHERE 创建日期 BETWEEN ? AND ?', [dmin, dmax]).fetchone()[0]:,}）")
-    if got != len(df):
-        print(f"  [警告] 区间行数 {got:,} 与写入 {len(df):,} 不一致，检查是否有重复键")
+    print(f"  本文件区间现共 {span:,} 行")
     stats["db_total"] = int(total)
     return stats
 
@@ -217,12 +242,14 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="只统计，不写入")
     ap.add_argument("--batch", help="批次名，默认按当前时间生成")
     ap.add_argument("--asof", help="把「数据日」固定为某天（如 2026-11-16），用于复现历史导入")
+    ap.add_argument("--mode", choices=["upsert", "replace"], default="upsert",
+                    help="upsert=按主键覆盖（默认，安全）；replace=整段日期替换（仅全量导出时用）")
     args = ap.parse_args()
 
     con = duckdb.connect(args.db)
     try:
         df = load_input(Path(args.input))
-        ingest_df(con, df, batch=args.batch, asof=args.asof, dry_run=args.dry_run)
+        ingest_df(con, df, batch=args.batch, asof=args.asof, dry_run=args.dry_run, mode=args.mode)
         return 0
     finally:
         con.close()
