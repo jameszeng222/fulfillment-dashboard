@@ -236,3 +236,59 @@ C 端承运商名称做了归一：`FedEx/Fedex/fedex`、`FedEx SmartPost/Fedex 
 
 `assemble.py` 会检查两个占位符各出现且仅出现一次——提示文案里如果写了占位符字面量，
 数据会被注入多次，文件直接翻倍，脚本会拦住并报错。
+
+## 履约追踪系统（服务版）
+
+上面那个单文件看板是**只读快照**。要做"谁在处理哪张单"这类事，用系统版：
+
+```powershell
+python init_ops.py          # 建操作库 ops.db（首次）
+python build_orders.py      # 物化订单级事实表 fct_order
+python alerts.py build      # 重算预警并镜像到 ops.db
+python -m uvicorn app.main:app --port 8000
+```
+
+打开 http://127.0.0.1:8000 ，默认账号：
+
+| 账号 | 密码 | 角色 |
+|---|---|---|
+| admin | admin123 | 系统管理员 |
+| wuliu | wuliu123 | 物流专员 |
+| kefu | kefu123 | 客服专员 |
+
+> 上线前务必改掉这三个密码。
+
+### 架构
+
+| 层 | 实现 | 说明 |
+|---|---|---|
+| 事实层 | DuckDB `履约单.duckdb` | 只读。订单、轨迹、预警计算结果，由管道重建 |
+| 操作层 | SQLite `ops.db` | 可写。用户、会话、预警处理状态、备注、审计日志 |
+| 服务层 | FastAPI | 服务端分页筛选，前端不再下载全量数据 |
+| 界面层 | 服务端渲染 + 原生 JS | 四个工作区：总览 / 履约单 / 预警处理 / 轨迹追踪 |
+
+**关键设计**：预警明细（`alerts` 表）由管道从 DuckDB 镜像到 SQLite，
+处理状态（`alert_state`）以 `(履约单号, 规则)` 为键独立保存。
+所以**重算预警不会冲掉人已经处理过的记录**——这是系统和看板的本质区别。
+
+### API
+
+| 接口 | 用途 |
+|---|---|
+| `POST /api/login` `POST /api/logout` `GET /api/me` | 会话 |
+| `GET /api/meta` | 筛选项（仓库/平台/物流商/国家/月份/规则） |
+| `GET /api/orders` | 订单分页查询，支持 q/wh/pf/cr/cn/status/month/signed/tracked |
+| `GET /api/orders/{no}` | 详情：SKU、轨迹节点、预警、备注 |
+| `POST /api/orders/{no}/notes` | 写备注 |
+| `GET /api/alerts` | 预警分页查询，支持 rule/level/state/assignee/wh/cr/cn |
+| `POST /api/alerts/action` | 认领 / 处理中 / 已解决 / 归档 / 重开 |
+| `GET /api/stats` `GET /api/health` | 统计与健康 |
+
+交互式文档在 `/api/docs`。
+
+### 还没做的
+
+- 定时任务（ERP 同步、17track 拉取、预警重算）——目前需手动跑
+- 批量操作、导出
+- 角色数据范围（物流部只看自己团队）
+- 部署方案（Docker / 服务器）

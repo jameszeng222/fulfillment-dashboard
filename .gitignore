@@ -48,3 +48,8 @@ _t_*.py
 *.duckdb.wal
 *.bak
 out/
+ops.db
+ops.db-*
+__pycache__/
+*.pyc
+.pytest_cache/

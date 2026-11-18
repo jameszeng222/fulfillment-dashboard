@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import duckdb
@@ -190,7 +190,7 @@ def build(con, asof: str | None):
     -- R02 超时未签出：生成 >24h 仍未签出
     SELECT 履约单号, 'signout_timeout' AS 规则,
            'FS' AS 证据,
-           round(下单已过天 * 24.0, 1) AS 天数
+           round(下单已过天, 1) AS 天数
     FROM b
     WHERE 签出时间 IS NULL AND 签出已过天 IS NULL AND 下单已过天 >= 1
 
@@ -290,6 +290,38 @@ def build(con, asof: str | None):
     total = con.execute("SELECT count(*) FROM fct_alert").fetchone()[0]
     main_cnt = con.execute("SELECT count(*) FROM fct_alert WHERE 是否主预警").fetchone()[0]
     print(f"写入 fct_alert: {total:,} 行（主预警 {main_cnt:,} 单）")
+    push_to_ops(con)
+
+
+
+def push_to_ops(dcon):
+    """把 fct_alert 镜像到 SQLite 的 alerts 表，供 API 直接查询。
+    alert_state（处理状态）不受影响 —— 重算预警不会清掉人已经处理过的记录。"""
+    import sqlite3
+    ops = ROOT / "ops.db"
+    if not ops.exists():
+        print("  ops.db 不存在，跳过镜像（先跑 python init_ops.py）")
+        return
+    rows = dcon.execute("""
+        SELECT 履约单号, 规则, 规则中文, 业务分类, 级别, 是否主预警, 证据, 天数,
+               出库单状态, 物流服务商, 仓库代码, 目的国, 快递单号,
+               轨迹状态, 轨迹子状态, 创建日期::VARCHAR, 签出日期::VARCHAR, 评估基准日::VARCHAR
+        FROM fct_alert
+    """).fetchall()
+    now = datetime.now().isoformat(timespec="seconds")
+    scon = sqlite3.connect(ops, timeout=15)
+    scon.execute("PRAGMA journal_mode=WAL")
+    scon.execute("DELETE FROM alerts")
+    scon.executemany(
+        "INSERT OR REPLACE INTO alerts (order_no,rule,rule_cn,category,level,is_main,evidence,days,"
+        "order_status,carrier,warehouse,country,tracking_no,track_status,track_sub,"
+        "created_date,shipped_date,base_date,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        [(r[0], r[1], r[2], r[3], r[4], 1 if r[5] else 0, r[6], r[7], r[8], r[9], r[10], r[11], r[12],
+          r[13], r[14], r[15], r[16], r[17], now) for r in rows])
+    scon.commit()
+    n = scon.execute("SELECT count(*) FROM alerts").fetchone()[0]
+    scon.close()
+    print(f"  已镜像到 ops.db: {n:,} 条预警")
 
 
 def summary(con):

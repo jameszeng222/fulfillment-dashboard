@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>履约追踪系统</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="side">
+    <div class="brand">
+      <span class="logo">履</span>
+      <div><b>履约追踪系统</b><small>FULFILLMENT TRACKING</small></div>
+    </div>
+    <nav class="nav" id="nav">
+      <button data-v="dash" class="on"><span class="ni">◎</span><div><strong>数据总览</strong><em>规模 · 时效 · 预警</em></div></button>
+      <button data-v="orders"><span class="ni">▤</span><div><strong>履约单</strong><em>查询 · 详情 · 备注</em></div></button>
+      <button data-v="alerts"><span class="ni">!</span><div><strong>预警处理</strong><em>认领 · 处理 · 归档</em></div></button>
+      <button data-v="track"><span class="ni">➤</span><div><strong>轨迹追踪</strong><em>按运单号查</em></div></button>
+    </nav>
+    <div class="sidefoot">
+      <div><span class="dot"></span>服务在线</div>
+      <div class="who" id="who">—</div>
+      <button class="btn ghost sm" id="logout" style="margin-top:2px">退出登录</button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <div class="top">
+      <div class="crumb">履约追踪系统 <span>/</span> <b id="crumb">数据总览</b></div>
+      <div style="font-size:11.5px;color:#8b98ab" id="topMeta">—</div>
+    </div>
+
+    <div class="content">
+
+      <!-- 总览 -->
+      <section class="view on" id="v-dash">
+        <div class="kpis" id="kpis"></div>
+        <div class="grid">
+          <div class="card wide"><div class="ct"><h2>月度单量与时效</h2><div class="tip">柱：单量　线：物流天数</div></div><div class="chart tall" id="cTrend"></div></div>
+          <div class="card"><div class="ct"><h2>物流商分布</h2><div class="tip">按履约单数</div></div><div class="chart" id="cCarrier"></div></div>
+          <div class="card"><div class="ct"><h2>仓库分布</h2><div class="tip">按履约单数</div></div><div class="chart" id="cWh"></div></div>
+        </div>
+      </section>
+
+      <!-- 订单 -->
+      <section class="view" id="v-orders">
+        <div class="filters" id="orderFilters"></div>
+        <div class="card" style="padding:0">
+          <div class="tblwrap">
+            <table class="tbl">
+              <thead><tr>
+                <th>履约单号</th><th>快递单号</th><th>平台</th><th>仓库</th><th>物流商</th>
+                <th>目的国</th><th>状态</th><th>创建</th><th>签出</th><th>签收</th><th>件数</th><th>轨迹</th>
+              </tr></thead>
+              <tbody id="orderBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="pager" id="orderPager"></div>
+      </section>
+
+      <!-- 预警 -->
+      <section class="view" id="v-alerts">
+        <div class="filters" id="alertFilters"></div>
+        <div class="card" style="padding:0">
+          <div class="tblwrap">
+            <table class="tbl">
+              <thead><tr>
+                <th>履约单号</th><th>预警</th><th>级别</th><th>已过天数</th><th>物流商</th>
+                <th>国家</th><th>轨迹状态</th><th>处理状态</th><th>负责人</th><th>操作</th>
+              </tr></thead>
+              <tbody id="alertBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="pager" id="alertPager"></div>
+      </section>
+
+      <!-- 轨迹 -->
+      <section class="view" id="v-track">
+        <div class="card">
+          <div class="ct"><h2>按运单号查询</h2><div class="tip">支持模糊匹配，回车查询</div></div>
+          <div class="filters" style="box-shadow:none;border:0;padding:0">
+            <input id="trackQ" placeholder="输入快递单号 / 履约单号" style="width:320px">
+            <button class="btn sm" id="trackGo">查询</button>
+            <span class="grow"></span>
+            <span style="font-size:11.5px;color:#8b98ab" id="trackHint"></span>
+          </div>
+        </div>
+        <div class="card" style="padding:0">
+          <div class="tblwrap" style="max-height:520px">
+            <table class="tbl">
+              <thead><tr>
+                <th>履约单号</th><th>运单号</th><th>物流商</th><th>轨迹状态</th><th>最新事件</th><th>地点</th><th>停滞</th>
+              </tr></thead>
+              <tbody id="trackBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<div class="mask" id="mask"></div>
+<aside class="drawer" id="drawer">
+  <header>
+    <div><h3 id="dTitle">履约单详情</h3><div style="font-size:11.5px;color:#8b98ab;margin-top:3px" id="dSub">—</div></div>
+    <button class="x" id="dClose">✕</button>
+  </header>
+  <div class="body" id="dBody"></div>
+</aside>
+<div class="toast" id="toast"></div>
+
+<script src="/static/echarts.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

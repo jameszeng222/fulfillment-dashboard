@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>登录 · 履约追踪系统</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="login-wrap">
+  <form class="login-card" id="form">
+    <div class="logo">履</div>
+    <h1>履约追踪系统</h1>
+    <p class="sub">物流部 · 客服部内部系统</p>
+    <div class="field">
+      <label>用户名</label>
+      <input id="u" autocomplete="username" autofocus>
+    </div>
+    <div class="field">
+      <label>密码</label>
+      <input id="p" type="password" autocomplete="current-password">
+    </div>
+    <button class="btn" style="width:100%;margin-top:6px" id="go">登 录</button>
+    <div class="err" id="err"></div>
+  </form>
+</div>
+<script>
+const form = document.getElementById('form');
+form.onsubmit = async (e) => {
+  e.preventDefault();
+  const err = document.getElementById('err'), go = document.getElementById('go');
+  err.textContent = ''; go.disabled = true; go.textContent = '登录中…';
+  try {
+    const r = await fetch('/api/login', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: document.getElementById('u').value.trim(),
+                            password: document.getElementById('p').value})
+    });
+    const d = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(d.detail || '登录失败');
+    location.href = '/';
+  } catch (ex) {
+    err.textContent = ex.message;
+    go.disabled = false; go.textContent = '登 录';
+  }
+};
+</script>
+</body>
+</html>
