@@ -32,6 +32,7 @@ try {
     $env:FULFILLMENT_ONLINE_USERS = 'fulfillment-online'
     $env:FULFILLMENT_EDGE_KEY = Read-ProtectedValue 'edge-key.dpapi'
     if ($Component -eq 'Snapshot') {
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
         & $PythonPath -u -m cloudflare.publish_snapshot *>> (Join-Path $state 'snapshot-sync.log')
         exit $LASTEXITCODE
     }
