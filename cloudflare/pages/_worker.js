@@ -21,6 +21,7 @@ function privateHeaders(headers) {
   result.set("Cache-Control", "no-store");
   result.set("X-Content-Type-Options", "nosniff");
   result.set("Referrer-Policy", "no-referrer");
+  result.set("X-Robots-Tag", "noindex");
   return result;
 }
 

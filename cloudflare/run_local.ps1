@@ -27,6 +27,7 @@ try {
         exit $LASTEXITCODE
     }
     $env:OPS_LOCAL_LOGIN = 'false'
+    $env:FULFILLMENT_PUBLIC_PREVIEW = 'true'
     $env:FULFILLMENT_CLOUD_TICKETS = 'true'
     $env:FULFILLMENT_ONLINE_USERS = 'fulfillment-online'
     $env:FULFILLMENT_EDGE_KEY = Read-ProtectedValue 'edge-key.dpapi'

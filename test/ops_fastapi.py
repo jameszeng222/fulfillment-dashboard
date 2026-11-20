@@ -29,6 +29,7 @@ ENV = {
     "OPS_MCP_ALLOWED_TOOLS": "warehouse_summary",
     "OPS_SITE_AI_URL": HUB + "/ai", "OPS_SITE_AI_KEY": "mock-ai-key", "OPS_AI_PROTOCOL": "",
     "OPS_ASSISTANT_ROLES": "admin", "OPS_SITE_SKILLS_URL": HUB + "/skills",
+    "FULFILLMENT_PUBLIC_PREVIEW": "false",
 }
 
 
@@ -257,6 +258,12 @@ class OpsTests(unittest.TestCase):
             self.assertFalse(profile["can_edit"])
             self.assertFalse(profile["cloudSharing"])
             self.assertEqual(viewer.request(manage)[0], 403)
+            with patch.dict("os.environ", {"FULFILLMENT_PUBLIC_PREVIEW": "true"}):
+                profile_after_toggle = json.loads(viewer.request("/api/me")[2])
+                self.assertTrue(profile_after_toggle["preview"])
+                self.assertEqual(self.browser.request(manage)[0], 404)
+                self.assertEqual(viewer.request(accept, "POST", ticket, origin)[0], 404)
+                self.assertEqual(viewer.request("/api/orders")[0], 401)
             path = manage + "/" + profile["username"]
             replacement = self.browser.request(path + "/renew", "POST", headers=admin)
             self.assertEqual(replacement[0], 200)
@@ -264,6 +271,31 @@ class OpsTests(unittest.TestCase):
             self.assertEqual(viewer.request("/api/me")[0], 401)
             renewed = {"ticket": parse_qs(urlsplit(json.loads(replacement[2])["link"]).fragment)["invite"][0]}
             self.assertEqual(Browser().request(accept, "POST", renewed, origin)[0], 401)
+
+    def test_public_preview_without_cookie_preserves_management_permissions(self):
+        with patch.dict("os.environ", {"FULFILLMENT_PUBLIC_PREVIEW": "true"}):
+            visitor = Browser()
+            self.assertEqual(visitor.request("/")[0], 200)
+            status, headers, body = visitor.request("/api/me")
+            self.assertEqual(status, 200)
+            self.assertNotIn(b"set-cookie", headers)
+            identity = json.loads(body)
+            self.assertTrue(identity["preview"])
+            self.assertFalse(identity["can_edit"])
+            self.assertNotIn("csrf", identity)
+            for query in ("", "?q=%25", "?q=%23"):
+                self.assertEqual(json.loads(visitor.request("/api/track" + query)[2])["rows"], [])
+            self.assertEqual(visitor.request("/api/orders/TEST123")[0], 404)
+            for path in ("/api/orders", "/api/alerts", "/api/health", "/api/rules"):
+                self.assertEqual(visitor.request(path)[0], 401)
+            self.assertEqual(visitor.request("/sharing")[0], 404)
+            self.assertEqual(visitor.request("/api/orders/TEST123/notes", "POST",
+                                             {"body": "blocked"}, {"origin": SITE})[0], 401)
+            self.login()
+            admin = json.loads(self.browser.request("/api/me")[2])
+            self.assertTrue(admin["can_edit"])
+            self.assertFalse(admin["preview"])
+            self.assertFalse(admin["cloudSharing"])
 
     def test_mcp(self):
         csrf = self.login()

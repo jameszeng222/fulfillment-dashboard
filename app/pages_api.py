@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 import pandas as pd
 
-from . import core, rules
+from . import core, public_preview, rules
 from .carrier_delivery import DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts
 from .channel_timing import ONLINE_START, TimingBasis, online_scan_join, timing_start
 from .order_time import delivery_facts
@@ -76,7 +76,7 @@ def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="
 @router.get("/overview")
 def overview(request: Request, month: str = "", wh: str = "", pf: str = "", cr: str = "",
              cn: str = "", start: str = "", end: str = "", lastmile: str = "", channel: str = ""):
-    core.require_user(request)
+    core.require_reader(request)
     return _overview(core.snapshot_key(), month, wh, pf, cr, cn, start, end, lastmile, channel)
 
 
@@ -186,8 +186,17 @@ def track(request: Request,
           sort: str = "停滞天数", order: str = "desc",
           start: str = "", end: str = "", lastmile: str = "",
           sub: str = "", coverage: str = "", channel: str = ""):
-    core.require_user(request)
-    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q=q, lastmile=lastmile, channel=channel)
+    preview = core.require_reader(request)["preview"]
+    match = public_preview.lookup(q) if preview else None
+    if preview and not match:
+        return {"total": 0, "page": page, "size": size, "rows": [], "statusSummary": [], "ruleSummary": []}
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q="" if preview else q,
+                       lastmile=lastmile, channel=channel)
+    if match:
+        match_sql, match_args = match
+        cond += match_sql
+        args.extend(match_args)
+        rule = ""
 
     for column, value in (("t.状态", tstat), ("t.子状态", sub), ("a.主预警规则", rule)):
         vals = core.filter_values(value)
@@ -220,12 +229,14 @@ def track(request: Request,
     try:
         facts = delivery_facts(con, core.active_facts(core.order_facts(con)))
         tracking, missing, archive = tracking_sources(con)
-        with core.ops() as ops:
-            summaries = ops.execute("""
-                SELECT order_no, max(rule_cn) FILTER (WHERE is_main), max(rule) FILTER (WHERE is_main),
-                       max(level) FILTER (WHERE is_main), count(*)
-                FROM alerts GROUP BY order_no
-            """).fetchall()
+        summaries = []
+        if not preview:
+            with core.ops() as ops:
+                summaries = ops.execute("""
+                    SELECT order_no, max(rule_cn) FILTER (WHERE is_main), max(rule) FILTER (WHERE is_main),
+                           max(level) FILTER (WHERE is_main), count(*)
+                    FROM alerts GROUP BY order_no
+                """).fetchall()
         con.register("live_alerts", pd.DataFrame.from_records(
             summaries, columns=["履约单号", "主预警名称", "主预警规则", "主预警级别", "预警数"]
         ).astype({"履约单号": "string", "主预警名称": "string", "主预警规则": "string",
@@ -306,6 +317,11 @@ def track(request: Request,
     finally:
         con.close()
 
+    if preview:
+        rows = [public_preview.select(row, public_preview.TRACK_FIELDS) for row in rows]
+        for row in rows:
+            row["最新描述"] = row.get("轨迹状态中文")
+        rule_summary = []
     return core.clean({"total": int(total), "page": page, "size": size,
                        "rows": rows,
                        "statusSummary": status_summary, "ruleSummary": rule_summary})
@@ -318,7 +334,7 @@ def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
              cn: str = "", min_n: int = Query(100, ge=1), cr: str = "", lastmile: str = "",
              start: str = "", end: str = "", channel: str = "",
              basis: TimingBasis = "shipped"):
-    core.require_user(request)
+    core.require_reader(request)
     if basis == "created":
         basis = "paid"  # Value used by earlier clients for 下单到签收.
     cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel)

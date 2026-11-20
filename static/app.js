@@ -129,6 +129,7 @@ let VIEW = 'dash';
 let trackMode = 'tracking';
 
 function showView(v) {
+  if (ME.preview && v === 'rules') v = 'dash';
   VIEW = v;
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#nav button').forEach(b => {
@@ -254,8 +255,10 @@ function makeFilters(host, defs, onChange) {
       let timer;
       const submit = () => { clearTimeout(timer); onChange(1, 'search'); };
       const schedule = () => { clearTimeout(timer); timer = setTimeout(submit, 350); };
-      i.oninput = event => { if (!event.isComposing) schedule(); };
-      i.oncompositionend = schedule;
+      if (d.auto !== false) {
+        i.oninput = event => { if (!event.isComposing) schedule(); };
+        i.oncompositionend = schedule;
+      }
       i.onkeydown = event => {
         if (event.key === 'Enter' && !event.isComposing) {
           event.preventDefault();
@@ -403,16 +406,16 @@ async function loadDash() {
   drawDailyVolume();
 
   drawRank('cCarrier', d.byCarrier, 10,
-    value => openTracking({ ...f, cr: value }));
+    ME.preview ? null : value => openTracking({ ...f, cr: value }));
   drawRank('cLastMile', d.byLastMile.map(r => ({ ...r, k: r.k || '未填写 C 端渠道', filter: r.k || '__empty__' })), 10,
-    value => openTracking({ ...f, lastmile: value }));
+    ME.preview ? null : value => openTracking({ ...f, lastmile: value }));
   drawRank('cTrackingStatus', d.byTrackingStatus, 10,
-    value => filterByTrackStatus(value, f));
+    ME.preview ? null : value => filterByTrackStatus(value, f));
   drawRank('cWarehouse', d.byWarehouse, 10,
-    value => openTracking({ ...f, wh: value }));
+    ME.preview ? null : value => openTracking({ ...f, wh: value }));
   drawRank('cCountry', d.byCountry, 15);
   drawRank('cCurrentChannel', d.byCurrentChannel || [], 10,
-    value => openTracking({ ...f, channel: value }));
+    ME.preview ? null : value => openTracking({ ...f, channel: value }));
   drawDispatchStatus(d.byStatus);
 }
 
@@ -437,7 +440,7 @@ function drawDailyVolume() {
   const last = trend.days.at(-1);
   const latest = last ? clock(last.day) : 0;
   const days = trend.span ? trend.days.filter(row => clock(row.day) >= latest - (trend.span - 1) * dayMs) : trend.days;
-  $('#dailyNote').hidden = !days.length;
+  $('#dailyNote').hidden = ME.preview || !days.length;
   $('#cDaily').hidden = !days.length;
   $('#dailyRange').textContent = days.length ?
     `${days[0].day} 至 ${days.at(-1).day} · 按履约单创建日` : '当前筛选无履约单';
@@ -489,6 +492,7 @@ function drawDailyVolume() {
   });
   const pointer = chart.getZr();
   pointer.off('click');
+  if (ME.preview) return;
   pointer.on('click', event => {
     const point = [event.offsetX, event.offsetY];
     if (!chart.containPixel('grid', point)) return;
@@ -549,6 +553,7 @@ const coverageOptions = [
 ];
 
 function setTrackMode(mode) {
+  if (ME.preview) mode = 'tracking';
   trackMode = mode;
   $('#trackingPane').hidden = mode !== 'tracking';
   $('#alertsPane').hidden = mode !== 'alerts';
@@ -566,8 +571,15 @@ function updateSubstates() {
 
 function prepareTrack() {
   if (TF) return;
+  const lookup = { type: 'text', label: '履约单号 / 运单号 / 订单号 / 平台订单号',
+    key: 'q', w: 275, submit: true, auto: !ME.preview };
+  if (ME.preview) {
+    TF = makeFilters($('#trackFilters'), [lookup], () => run(loadTrack));
+    TF._info.setAttribute('role', 'status');
+    return;
+  }
   TF = makeFilters($('#trackFilters'), [
-    { type: 'text', label: '履约单号 / 运单号 / 订单号 / 平台订单号', key: 'q', w: 275, submit: true },
+    lookup,
     ...dashFilterDefs(),
     { type: 'select', label: '17TRACK 状态', key: 'tstat', options: trackingGroups() },
     { type: 'select', label: '子状态', key: 'sub' },
@@ -583,7 +595,7 @@ function prepareTrack() {
 function openTracking(values = {}) {
   prepareTrack();
   Object.entries(TF).forEach(([key, control]) => { if (key !== '_info') control.value = values[key] || ''; });
-  updateSubstates();
+  if (!ME.preview) updateSubstates();
   setTrackMode('tracking');
   showView('track');
 }
@@ -594,12 +606,14 @@ function filterByTrackStatus(label, scope = {}) {
   if (state || coverage) openTracking({ ...scope, tstat: state?.v, coverage });
 }
 
+let lastTrackingQuery = '';
+
 async function loadTrack(page = 1, fromSearch = false) {
   prepareTrack();
   const f = { sort: '签出时间', ...readF(TF) };
   const query = f.q?.trim();
   const {q, sort, ...scope} = f;
-  TF._info.textContent = query ? '正在搜索…' : '正在读取履约单…';
+  TF._info.textContent = query ? '正在搜索…' : ME.preview ? '' : '正在读取履约单…';
   let d = await latest('track', '/api/track?' + qs(f, page, 40));
   if (!d || VIEW !== 'track' || trackMode !== 'tracking') return;
   let clearedFilters = false;
@@ -614,10 +628,12 @@ async function loadTrack(page = 1, fromSearch = false) {
     }
   }
   trackRows = d.rows;
-  TF._info.textContent = `${clearedFilters ? '已切换至全部履约单搜索 · ' : ''}共 ${fmt(d.total)} 单`;
+  lastTrackingQuery = query || '';
+  TF._info.textContent = ME.preview && !query ? '' :
+    `${clearedFilters ? '已切换至全部履约单搜索 · ' : ''}共 ${fmt(d.total)} 单`;
   if (renderedTrack === d) return;
   renderedTrack = d;
-  $('#trackChips').innerHTML = (d.statusSummary || []).slice(0, 7).map(row =>
+  $('#trackChips').innerHTML = ME.preview ? '' : (d.statusSummary || []).slice(0, 7).map(row =>
     `<button type="button" class="chipstat" data-track-status="${esc(row.状态)}">${esc(row.状态)} <b>${fmt(row.n)}</b></button>`).join('');
 
   $('#trackBody').innerHTML = d.rows.length ? d.rows.map(r => `
@@ -628,11 +644,12 @@ async function loadTrack(page = 1, fromSearch = false) {
         r.回补状态 === 'empty' ? '已查询 · 未返回轨迹' :
         r.已签收 ? '已签收 · 轨迹未入库' :
         r.签出时间 ? '已出库 · 待同步轨迹' : undefined)}</td>
-      <td>${r.主预警名称 ? `<span class="badge ${levelTone(r.主预警级别)}">${esc(r.主预警名称)}</span>
-      ${r.预警数 > 1 ? `<small class="cell-sub">另有 ${fmt(r.预警数 - 1)} 条</small>` : ''}` : '—'}</td>
+      ${ME.preview ? '' : `<td>${r.主预警名称 ? `<span class="badge ${levelTone(r.主预警级别)}">${esc(r.主预警名称)}</span>
+      ${r.预警数 > 1 ? `<small class="cell-sub">另有 ${fmt(r.预警数 - 1)} 条</small>` : ''}` : '—'}</td>`}
       <td class="mono">${dt(r.签出时间)}</td>
       <td><span class="cell-truncate" title="${esc(r.最新描述 || '')}">${esc(r.最新描述 || '—')}</span>
-        <small class="cell-sub mono">${r.最新事件当地时间 || r.最新事件时间 ? esc(trackTime(r.最新事件当地时间, r.最新事件时间)) : '—'}${r.逐条事件数 ? ` · ${fmt(r.逐条事件数)} 条事件` : ''}</small></td></tr>`).join('') : blankRow(7, '没有匹配的履约单');
+        <small class="cell-sub mono">${r.最新事件当地时间 || r.最新事件时间 ? esc(trackTime(r.最新事件当地时间, r.最新事件时间)) : '—'}${r.逐条事件数 ? ` · ${fmt(r.逐条事件数)} 条事件` : ''}</small></td></tr>`).join('') :
+    blankRow(ME.preview ? 6 : 7, ME.preview && !query ? '输入完整单号查询物流轨迹' : '没有匹配的履约单');
   pager($('#trackPager'), d.total, d.page, d.size, p => run(() => loadTrack(p)));
 }
 
@@ -758,7 +775,8 @@ async function loadChannels() {
 
   $('#channelBody').innerHTML = rows.length ? rows.map(r => {
     return `<tr>
-      <td><button type="button" class="order-link" data-channel-track="${esc(r.key)}">${esc(r.channel)}</button></td>
+      <td>${ME.preview ? esc(r.channel) :
+        `<button type="button" class="order-link" data-channel-track="${esc(r.key)}">${esc(r.channel)}</button>`}</td>
       <td>${fmt(r.orders)}</td><td>${fmt(r.signed)}</td><td>${fmt(r.samples)}</td>
       <td>${measure(r.avgDays, ' 天')}</td><td>${measure(r.p90Days, ' 天')}</td>
       <td>${measure(r.rate3, '%')}</td><td>${measure(r.rate5, '%')}</td>
@@ -817,7 +835,7 @@ function drawChannelBars(id, rows, metrics, unit, basisLabel, filters) {
     })),
   });
   chart.off('click');
-  chart.on('click', point => openTracking({ ...filters, lastmile: rows[point.dataIndex].key }));
+  if (!ME.preview) chart.on('click', point => openTracking({ ...filters, lastmile: rows[point.dataIndex].key }));
 }
 
 /* ================= 数据与规则 ================= */
@@ -1077,19 +1095,20 @@ let drawerTrigger = null;
 async function openOrder(no, refresh = false) {
   if (!refresh) drawerTrigger = document.activeElement;
   const oldScroll = refresh ? $('#dBody').scrollTop : 0;
-  const d = await latest('drawer', '/api/orders/' + encodeURIComponent(no));
+  const lookup = ME.preview ? '?q=' + encodeURIComponent(lastTrackingQuery) : '';
+  const d = await latest('drawer', '/api/orders/' + encodeURIComponent(no) + lookup);
   if (!d) return;
   const o = d.order;
   $('#dTitle').textContent = o.履约单号;
   $('#dSub').textContent = [platformName(o.平台), o.仓库, o.当前渠道 || o.物流商, o.目的国中文 || o.目的国].filter(Boolean).join(' · ');
 
   const kv = [
-    ['订单号', o.订单号], ['平台订单号', o.平台订单号], ['运单号', o.快递单号],
-    ['收货国家', o.目的国中文 || o.目的国], ['州 / 省', o.目的州省],
-    ['城市', o.目的城市], ['邮编', o.目的邮编],
+    ...(!ME.preview ? [['订单号', o.订单号], ['平台订单号', o.平台订单号]] : []),
+    ['运单号', o.快递单号], ['收货国家', o.目的国中文 || o.目的国],
+    ...(!ME.preview ? [['州 / 省', o.目的州省], ['城市', o.目的城市], ['邮编', o.目的邮编]] : []),
     ['当前库内节点', o.签出时间 ? '已出库' : o.状态],
     ['ERP 出库单状态', o.状态],
-    [`ERP / WMS 妥投（${o.WMS时间口径 || '原始值'}）`, dt(o.WMS妥投时间 || o.签收时间)],
+    ...(!ME.preview ? [[`ERP / WMS 妥投（${o.WMS时间口径 || '原始值'}）`, dt(o.WMS妥投时间 || o.签收时间)]] : []),
     ['17TRACK 妥投', o.签收当地时间 || o.承运商签收时间 ?
       trackTime(o.签收当地时间, o.承运商签收时间) : '—'],
     ['妥投统计来源', o.妥投统计来源 === 'WMS' ? 'WMS 补算' : o.妥投统计来源 || '—'],
@@ -1143,7 +1162,7 @@ async function openOrder(no, refresh = false) {
 
   $('#dBody').innerHTML = `
     <div class="kv">${kv.map(([k, v]) => `<div class="i">${k}<b>${esc(v) || '—'}</b></div>`).join('')}</div>
-    <div class="sect">业务预警</div>${alerts}
+    ${ME.preview ? '' : `<div class="sect">业务预警</div>${alerts}`}
     <div class="sect drawer-section">
       <span>物流时间线</span>
       ${o.单号归一 ? `<a href="https://t.17track.net/zh-cn#nums=${encodeURIComponent(o.单号归一)}" target="_blank" rel="noopener noreferrer">在 17TRACK 查看 ↗</a>` : ''}
@@ -1156,10 +1175,10 @@ async function openOrder(no, refresh = false) {
       ${!events.length && o.最新描述 ? `<div class="note"><b>最新轨迹</b> · ${esc(trackTime(o.最新事件当地时间, o.最新事件时间))}<br>${esc(o.最新描述)}${o.地点 ? ` · ${esc(o.地点)}` : ''}</div>` : ''}
       ${timeline ? `<div class="tl">${timeline}</div>` : ''}
     </section>
-    <div class="sect">SKU 明细</div>
+    ${ME.preview ? '' : `<div class="sect">SKU 明细</div>
     <div class="tblwrap drawer-table"><table class="tbl"><thead><tr><th>SKU</th><th>商品名称</th><th>数量</th><th>类目</th></tr></thead>
     <tbody>${skus || blankRow(4, '暂无 SKU 明细')}</tbody></table></div>
-    <div class="sect">备注</div>${notes}
+    <div class="sect">备注</div>${notes}`}
     ${ME.can_edit ? `<form class="note-form" id="noteForm">
       <input id="noteIn" aria-label="履约备注" placeholder="写一条备注…" maxlength="2000" required>
       <button class="btn sm" type="submit" id="noteSave">保存备注</button>
@@ -1214,8 +1233,15 @@ run(async function boot() {
   [ME, META] = await Promise.all([api('/api/me'), api('/api/meta')]);
   $('#opsAssistant').hidden = !ME.opsAssistant;
   $('#cloudSharing').hidden = !ME.cloudSharing;
+  if (ME.preview) {
+    for (const selector of ['[data-v="rules"]', '#logout', '#openPending',
+      '#trackTabs', '#showDetailed', '#exportTrack', '#trackAlertHeading']) {
+      $(selector).hidden = true;
+    }
+    $('#trackIntro').textContent = '输入完整的履约单号、运单号、订单号或平台订单号，查看物流状态和时间线。';
+  }
   setTopMeta(META.range.end);
-  $('#who').textContent = `${ME.display_name} · ${ME.role_label}`;
+  $('#who').textContent = ME.preview ? ME.display_name : `${ME.display_name} · ${ME.role_label}`;
   $('#batchAction').append(...allowedActions().map(([key, label]) => new Option(label, key)));
   $('#batchAction').hidden = !ME.can_edit;
   $('#applyBatch').hidden = !ME.can_edit;
@@ -1353,6 +1379,6 @@ run(async function boot() {
   if (v === 'alerts') setTrackMode('alerts');
   if (v === 'detailed') openTracking({ coverage: 'detailed', sort: '逐条事件数' });
   else showView(v === 'alerts' ? 'track' : VIEW_META[v] ? v : 'dash');
-  if (v !== 'rules') run(loadActivity);
+  if (!ME.preview && v !== 'rules') run(loadActivity);
   window.addEventListener('resize', resizeVisibleCharts);
 });

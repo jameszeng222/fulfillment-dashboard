@@ -78,7 +78,7 @@
 
       <!-- ============ 轨迹监控 ============ -->
       <section class="view" id="v-track">
-        <div class="page-head"><div><h1>轨迹监控</h1><p>查看 17TRACK 主子状态、履约节点与预警处理进度。</p></div></div>
+        <div class="page-head"><div><h1>轨迹监控</h1><p id="trackIntro">查看 17TRACK 主子状态、履约节点与预警处理进度。</p></div></div>
         <div class="tabs" id="trackTabs" aria-label="轨迹监控分类">
           <button type="button" data-mode="tracking" aria-pressed="true">运单轨迹</button>
           <button type="button" data-mode="alerts" aria-pressed="false">预警处理 <span class="nav-count" id="alertTabCount"></span></button>
@@ -95,7 +95,7 @@
             <table class="tbl">
               <thead><tr>
                 <th>履约单号 / 运单号</th><th>当前渠道 / 物流商</th><th>仓库 / 国家 / 平台</th>
-                <th>17TRACK 官方状态</th><th>业务预警</th><th>出库（北京时间）</th><th>最新轨迹（当地时间）</th>
+                <th>17TRACK 官方状态</th><th id="trackAlertHeading">业务预警</th><th>出库（北京时间）</th><th>最新轨迹（当地时间）</th>
               </tr></thead>
               <tbody id="trackBody"></tbody>
             </table>
@@ -270,6 +270,6 @@
 </dialog>
 
 <script src="/static/echarts.min.js"></script>
-<script src="/static/app.js?v=20261120-ops-session"></script>
+<script src="/static/app.js?v=20261120-preview"></script>
 </body>
 </html>

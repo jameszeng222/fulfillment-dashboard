@@ -166,6 +166,8 @@ def allowed_online_account(username):
 
 
 def allowed_session_account(user):
+    if public_preview_enabled() and user["username"].startswith("cloud-viewer:"):
+        return False
     return allowed_online_account(user["username"]) or (
         setting("FULFILLMENT_CLOUD_TICKETS").lower() == "true"
         and user["username"].startswith("cloud-viewer:")
@@ -215,6 +217,20 @@ def current_user(request: Request) -> dict | None:
         "can_edit": ROLES.get(row["role"], {}).get("can_edit", False),
         "role_label": ROLES.get(row["role"], {}).get("label", row["role"]),
     }
+
+
+def public_preview_enabled():
+    return setting("FULFILLMENT_PUBLIC_PREVIEW").lower() == "true"
+
+
+def require_reader(request: Request) -> dict:
+    user = current_user(request)
+    if user:
+        return {**user, "preview": False}
+    if public_preview_enabled():
+        return {"username": "preview", "display_name": "只读预览", "role": "viewer",
+                "role_label": "访客", "can_edit": False, "team": None, "preview": True}
+    raise HTTPException(status_code=401, detail="未登录或会话已过期")
 
 
 def require_user(request: Request) -> dict:

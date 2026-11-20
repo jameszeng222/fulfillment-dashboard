@@ -8,7 +8,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from . import cloud_login, core, ops_auth, ops_assistant
+from . import cloud_login, core, ops_auth, ops_assistant, public_preview
 from .carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts
 from .order_time import delivery_facts
 from . import tracking_archive
@@ -65,12 +65,12 @@ def logout(request: Request, response: Response):
 
 @router.get("/me")
 def me(request: Request, response: Response):
-    u = core.current_user(request)
-    if not u:
-        raise HTTPException(status_code=401, detail="未登录")
+    u = core.require_reader(request)
     response.headers["Cache-Control"] = "no-store"
+    if u["preview"]:
+        return {**u, "cloudSharing": False, "opsAssistant": False}
     return {**u, "csrf": core.csrf_token(request.cookies[core.SESSION_COOKIE]),
-            "cloudSharing": u["role"] == "admin" and cloud_login.enabled(),
+            "cloudSharing": u["role"] == "admin" and cloud_login.enabled() and not core.public_preview_enabled(),
             "opsAssistant": ops_assistant.can_use(u) and any(ops_assistant.configured().values())}
 
 
@@ -78,7 +78,7 @@ def me(request: Request, response: Response):
 
 @router.get("/meta")
 def meta(request: Request):
-    core.require_user(request)
+    preview = core.require_reader(request)["preview"]
     con = core.duck()
     try:
         facts = core.active_facts(core.order_facts(con))
@@ -120,14 +120,16 @@ def meta(request: Request):
     finally:
         con.close()
 
-    with core.ops() as o:
-        rules = [dict(r) for r in o.execute(
-            "SELECT rule, rule_cn, category, level, count(*) n FROM alerts "
-            "GROUP BY 1,2,3,4 ORDER BY n DESC").fetchall()]
-        states = [dict(r) for r in o.execute(
-            "SELECT coalesce(s.status,'open') status, count(*) n FROM alerts a "
-            "LEFT JOIN alert_state s ON s.order_no=a.order_no AND s.rule=a.rule "
-            "GROUP BY 1 ORDER BY n DESC").fetchall()]
+    rules, states = [], []
+    if not preview:
+        with core.ops() as o:
+            rules = [dict(r) for r in o.execute(
+                "SELECT rule, rule_cn, category, level, count(*) n FROM alerts "
+                "GROUP BY 1,2,3,4 ORDER BY n DESC").fetchall()]
+            states = [dict(r) for r in o.execute(
+                "SELECT coalesce(s.status,'open') status, count(*) n FROM alerts a "
+                "LEFT JOIN alert_state s ON s.order_no=a.order_no AND s.rule=a.rule "
+                "GROUP BY 1 ORDER BY n DESC").fetchall()]
 
     return {
         "warehouses": whs, "platforms": pfs, "carriers": crs, "countries": cns,
@@ -135,7 +137,7 @@ def meta(request: Request):
         "lastMileCarriers": last_mile, "countryItems": countries, "trackStatuses": tracking_statuses,
         "filterOptions": dimension_counts, "platformNames": platform_names,
         "rules": rules, "alertStates": states,
-        "ruleOptions": [{"v": rule["key"], "t": rule["name"]} for rule in BUSINESS_RULES],
+        "ruleOptions": [] if preview else [{"v": rule["key"], "t": rule["name"]} for rule in BUSINESS_RULES],
         "range": {"start": str(b[0]), "end": str(b[1]), "orders": b[2]},
     }
 
@@ -212,8 +214,12 @@ def list_orders(request: Request,
 
 
 @router.get("/orders/{order_no}")
-def order_detail(order_no: str, request: Request):
-    core.require_user(request)
+def order_detail(order_no: str, request: Request, q: str = ""):
+    preview = core.require_reader(request)["preview"]
+    match = public_preview.lookup(q) if preview else ("", [])
+    if not match:
+        raise HTTPException(status_code=404, detail="履约单不存在")
+    match_sql, match_args = match
     con = core.duck()
     try:
         facts = reporting_facts(con, delivery_facts(con, core.active_facts(core.order_facts(con))))
@@ -228,8 +234,8 @@ def order_detail(order_no: str, request: Request):
                    (t.单号 IS NULL AND o.单号归一 IN (SELECT 单号 FROM {missing})) AS 未注册
             FROM {facts} o LEFT JOIN {tracking} t ON t.单号 = o.单号归一
             LEFT JOIN {archive} h ON h.履约单号=o.履约单号 AND h.单号=o.单号归一
-            WHERE o.履约单号 = ?
-        """, [order_no]).fetchone()
+            WHERE o.履约单号 = ?{match_sql}
+        """, [order_no, *match_args]).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="履约单不存在")
         cols = [d[0] for d in con.description]
@@ -240,7 +246,7 @@ def order_detail(order_no: str, request: Request):
             f"""any_value(nullif(trim("{column}"),'')) AS "{label}" """
             if column in fields else f'NULL AS "{label}"'
             for column, label in (("省、州", "目的州省"), ("城市", "目的城市"), ("邮编", "目的邮编"))
-        ]
+        ] if not preview else []
         steps = [f"max({column}) AS {label}" if column in fields else f"NULL AS {label}"
                  for column, label in (("分配时间_ts", "分配时间"), ("打包时间_ts", "打包时间"))]
         raw_delivery = "max(try_cast(签收时间 AS TIMESTAMP))" if "签收时间" in fields else "NULL"
@@ -250,7 +256,7 @@ def order_detail(order_no: str, request: Request):
         """, [order_no]).fetchone()
         detail.update(zip((column[0] for column in con.description), warehouse))
 
-        skus = con.execute(
+        skus = [] if preview else con.execute(
             "SELECT sku, 商品名称, 数量, 批次码, 类目 FROM v_order_sku WHERE 履约单号 = ?",
             [order_no]).df().to_dict("records")
 
@@ -304,6 +310,14 @@ def order_detail(order_no: str, request: Request):
                         break
     finally:
         con.close()
+
+    if preview:
+        return core.clean({
+            "order": public_preview.select(detail, public_preview.DETAIL_FIELDS),
+            "milestones": [m for m in milestones if m["节点"] in public_preview.MILESTONE_NAMES],
+            "events": [public_preview.event(event) for event in events],
+            "eventSource": event_source,
+        })
 
     with core.ops() as o:
         notes = [dict(r) for r in o.execute(

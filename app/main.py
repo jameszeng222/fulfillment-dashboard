@@ -60,24 +60,30 @@ def login_page(request: Request):
         button = f'<a class="btn" style="display:block;text-align:center" href="{escape(link, quote=True)}">使用智能中枢登录</a>'
     elif not ops_auth.local_login_enabled() and not cloud_login.enabled():
         error = error or ops_auth.ERRORS["unavailable"]
+    if core.public_preview_enabled():
+        access = '<p><a href="/">进入只读预览</a></p>'
+    else:
+        access = '<p>请打开管理员发给你的邀请链接。本机管理员可使用桌面免密码入口。</p>' if cloud_login.enabled() else ""
     html = (TPL / "login.html").read_text(encoding="utf-8")
     return HTMLResponse(html.replace("<!--OPS_LOGIN-->", button)
                         .replace("<!--LOGIN_MESSAGE-->", escape(error))
-                        .replace("<!--CLOUD_LOGIN-->", '<p>请打开管理员发给你的邀请链接。本机管理员可使用桌面免密码入口。</p>' if cloud_login.enabled() else "")
+                        .replace("<!--CLOUD_LOGIN-->", access)
+                        .replace("<!--INVITE_STATE-->", "false" if core.public_preview_enabled() else "true")
                         .replace("<!--LOCAL_LOGIN_STATE-->", "" if ops_auth.local_login_enabled() else "hidden"),
                         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    u = core.current_user(request)
-    if not u:
+    if not core.public_preview_enabled() and not core.current_user(request):
         return RedirectResponse("/login", status_code=302)
     return _page("app.html")
 
 
 @app.get("/sharing")
 def sharing_page(request: Request):
+    if core.public_preview_enabled():
+        raise HTTPException(404, "邀请功能尚未启用")
     if not core.current_user(request):
         return ops_auth.redirect("/login")
     cloud_sharing.require_sharing(request)

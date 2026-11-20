@@ -16,7 +16,7 @@ VIEWER_SESSION_TTL = 7 * 86400
 
 
 def require_sharing(request):
-    if not cloud_login.enabled() or not site_origin():
+    if core.public_preview_enabled() or not cloud_login.enabled() or not site_origin():
         raise HTTPException(404, "邀请功能尚未启用")
     actor = core.require_user(request)
     if actor["role"] != "admin":
@@ -119,7 +119,7 @@ def revoke_invite(username: str, request: Request):
 
 @router.post("/invite/session")
 def redeem_invite(body: cloud_login.TicketIn, request: Request, response: Response):
-    if not cloud_login.enabled() or not site_origin():
+    if core.public_preview_enabled() or not cloud_login.enabled() or not site_origin():
         raise HTTPException(404, "邀请功能尚未启用")
     require_same_origin(request)
     if not TOKEN_FORMAT.fullmatch(body.ticket):

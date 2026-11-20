@@ -32,8 +32,10 @@
 <script>
 const form = document.getElementById('form');
 const loginLink = new URLSearchParams(location.hash.slice(1));
-const invitation = loginLink.get('invite');
+const inviteEnabled = '<!--INVITE_STATE-->' === 'true';
+const invitation = inviteEnabled ? loginLink.get('invite') : null;
 const ticket = invitation || loginLink.get('cloud_ticket');
+if (loginLink.has('invite') && !inviteEnabled) history.replaceState(null, '', location.pathname);
 if (ticket) {
   history.replaceState(null, '', location.pathname);
   fetch(invitation ? '/api/cloud/invite/session' : '/api/cloud/session', {
