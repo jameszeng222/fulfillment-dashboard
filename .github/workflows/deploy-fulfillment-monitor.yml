@@ -44,6 +44,7 @@ jobs:
           FULFILLMENT_VPC_SERVICE_ID: ${{ vars.FULFILLMENT_VPC_SERVICE_ID }}
           FULFILLMENT_PRIVATE_WORKER_BOUND: ${{ vars.FULFILLMENT_PRIVATE_WORKER_BOUND }}
           FULFILLMENT_EDGE_KEY: ${{ secrets.FULFILLMENT_EDGE_KEY }}
+          FULFILLMENT_SNAPSHOT_KV_ID: ${{ vars.FULFILLMENT_SNAPSHOT_KV_ID }}
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
@@ -73,20 +74,28 @@ jobs:
             404) wrangler pages project create "$CF_PAGES_PROJECT" --production-branch main ;;
             *) echo "Cannot inspect the dedicated Pages project (HTTP $code)"; exit 1 ;;
           esac
-          bucket=fulfillment-monitor-preview
-          r2_url="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets"
-          r2_reply=$(mktemp)
-          r2_status=$(curl --silent --show-error --output "$r2_reply" --write-out '%{http_code}' \
-            --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$r2_url/$bucket")
-          if [ "$r2_status" = "404" ]; then
-            r2_status=$(curl --silent --show-error --output "$r2_reply" --write-out '%{http_code}' \
-              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" --header 'Content-Type: application/json' \
-              --data "{\"name\":\"$bucket\",\"storageClass\":\"Standard\",\"locationHint\":\"apac\"}" "$r2_url")
+          namespace="fulfillment-monitor-preview"
+          kv_url="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/storage/kv/namespaces"
+          kv_reply=$(mktemp)
+          kv_id="$FULFILLMENT_SNAPSHOT_KV_ID"
+          if [ -z "$kv_id" ]; then
+            kv_status=$(curl --silent --show-error --output "$kv_reply" --write-out '%{http_code}' \
+              --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$kv_url?per_page=100")
+            if [ "$kv_status" = "200" ] && jq -e '.success == true' "$kv_reply" >/dev/null; then
+              kv_id=$(jq -r --arg title "$namespace" '.result[] | select(.title == $title) | .id' "$kv_reply")
+              if [ -z "$kv_id" ]; then
+                kv_status=$(curl --silent --show-error --output "$kv_reply" --write-out '%{http_code}' \
+                  --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" --header 'Content-Type: application/json' \
+                  --data "{\"title\":\"$namespace\"}" "$kv_url")
+                kv_id=$(jq -r 'if .success then .result.id else empty end' "$kv_reply")
+              fi
+            fi
           fi
-          if [[ "$r2_status" =~ ^20[01]$ ]] && jq -e '.success == true' "$r2_reply" >/dev/null; then
-            printf '\n[[r2_buckets]]\nbinding = "FULFILLMENT_SNAPSHOT"\nbucket_name = "%s"\n' "$bucket" >> cloudflare/wrangler.toml
+          if [[ "$kv_id" =~ ^[0-9a-f]{32}$ ]]; then
+            printf '\n[[kv_namespaces]]\nbinding = "FULFILLMENT_SNAPSHOT"\nid = "%s"\n' "$kv_id" >> cloudflare/wrangler.toml
+            echo "Cloudflare KV snapshot storage bound."
           else
-            echo "::warning::R2 binding unavailable (HTTP $r2_status, codes $(jq -r '[.errors[]?.code] | join(",")' "$r2_reply" 2>/dev/null || true)). Publishing live site."
+            echo "::warning::KV binding unavailable (HTTP ${kv_status:-unset}, codes $(jq -r '[.errors[]?.code] | join(",")' "$kv_reply" 2>/dev/null || true)). Publishing live site."
           fi
           cp templates/app.html cloudflare/pages/index.html
           mkdir -p cloudflare/pages/static
