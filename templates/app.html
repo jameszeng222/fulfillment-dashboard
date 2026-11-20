@@ -3,115 +3,246 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>履约追踪系统</title>
-<link rel="stylesheet" href="/static/app.css">
+<title>履约监控系统</title>
+<link rel="stylesheet" href="/static/app.css?v=20261120-performance">
 </head>
 <body>
 <div class="app">
 
-  <aside class="side">
+  <header class="masthead">
     <div class="brand">
-      <span class="logo">履</span>
-      <div><b>履约追踪系统</b><small>FULFILLMENT TRACKING</small></div>
+      <span class="logo radar-mark" aria-hidden="true"></span>
+      <b>履约监控系统</b>
     </div>
-    <nav class="nav" id="nav">
-      <button data-v="dash" class="on"><span class="ni">◎</span><div><strong>数据总览</strong><em>单量 · 渠道 · 国家 · 仓库</em></div></button>
-      <button data-v="track"><span class="ni">➤</span><div><strong>轨迹监控</strong><em>17track 状态 · 物流异常</em></div></button>
-      <button data-v="channels"><span class="ni">◷</span><div><strong>渠道时效</strong><em>达标率 · 超时 · 对比</em></div></button>
-      <button data-v="rules"><span class="ni">⚙</span><div><strong>数据与规则</strong><em>预警口径 · 渠道 SLA</em></div></button>
+    <nav class="nav" id="nav" aria-label="主导航">
+      <button type="button" data-v="dash" class="on">数据总览</button>
+      <button type="button" data-v="track">轨迹监控</button>
+      <button type="button" data-v="channels">渠道时效</button>
+      <button type="button" data-v="rules">数据与规则</button>
     </nav>
     <div class="sidefoot">
-      <div><span class="dot"></span>服务在线</div>
       <div class="who" id="who">—</div>
-      <button class="btn ghost sm" id="logout" style="margin-top:2px">退出登录</button>
+      <a class="btn ghost sm" id="opsAssistant" href="/assistant.html" hidden>智能助手</a>
+      <button type="button" class="btn ghost sm" id="logout">退出登录</button>
     </div>
-  </aside>
+  </header>
 
   <div class="main">
     <div class="top">
-      <div class="crumb">履约追踪系统 <span>/</span> <b id="crumb">数据总览</b></div>
-      <div style="font-size:11.5px;color:#8b98ab" id="topMeta">—</div>
+      <div class="crumb">履约监控系统 <span>/</span> <b id="crumb">数据总览</b></div>
+      <div class="date-tag" id="topMeta">正在读取数据</div>
     </div>
 
     <div class="content">
 
       <!-- ============ 数据总览 ============ -->
       <section class="view on" id="v-dash">
+        <div class="page-head">
+          <h1>数据总览</h1>
+          <button class="btn" id="openPending" type="button">查看待处理预警</button>
+        </div>
         <div class="filters" id="dashFilters"></div>
         <div class="kpis" id="dashKpi"></div>
-        <div class="grid">
-          <div class="card wide"><div class="ct"><h2>月度单量与时效</h2><div class="tip">柱：单量　线：物流天数（签出→签收）</div></div><div class="chart tall" id="cMonthly"></div></div>
-          <div class="card"><div class="ct"><h2>物流渠道占比</h2><div class="tip">按履约单数</div></div><div class="chart" id="cCarrier"></div></div>
-          <div class="card"><div class="ct"><h2>发货仓分布</h2><div class="tip">按履约单数</div></div><div class="chart" id="cWarehouse"></div></div>
-          <div class="card"><div class="ct"><h2>目的国家分布</h2><div class="tip">Top 15 · 按履约单数</div></div><div class="chart" id="cCountry"></div></div>
-          <div class="card"><div class="ct"><h2>出库单状态</h2><div class="tip">按履约单数</div></div><div class="chart" id="cStatus"></div></div>
+        <div class="grid overview-lead">
+          <section class="card plot-card daily-card" aria-labelledby="dailyTitle">
+            <div class="ct">
+              <div><h2 id="dailyTitle">日单量</h2><p class="tip" id="dailyRange">按履约单创建日期</p></div>
+              <div class="tabs period-tabs" id="dailyPeriod" role="group" aria-label="日单量范围">
+                <button type="button" data-days="45" aria-pressed="true">近 45 天</button>
+                <button type="button" data-days="0" aria-pressed="false">全部</button>
+              </div>
+            </div>
+            <div class="chart" id="cDaily" role="img" aria-label="每日履约单量趋势"></div>
+            <div class="daily-footer"><p class="tip" id="dailyFocus"></p><p class="tip" id="dailyNote" hidden>点击查看当天履约单</p></div>
+          </section>
+          <section class="card plot-card status-card" aria-labelledby="statusTitle">
+            <div class="ct"><div><h2 id="statusTitle">出库单状态</h2><p class="tip">全部出库单状态，含已取消</p></div></div>
+            <div id="cStatus"></div>
+            <button type="button" class="btn ghost sm status-more" id="statusMore" aria-expanded="false" aria-controls="cStatus" hidden>查看全部状态</button>
+          </section>
+        </div>
+        <div class="grid overview-breakdown">
+          <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip">单量按创建月份统计 · 物流时效为出库到妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
+          <section class="card plot-card"><div class="ct"><div><h2>后台物流商单量</h2><p class="tip">单量前 10</p></div></div><div id="cCarrier"></div></section>
+          <section class="card plot-card"><div class="ct"><div><h2>C 端承运商单量</h2><p class="tip">客户看到的末端承运商 · 单量前 10</p></div></div><div id="cLastMile"></div></section>
+          <section class="card plot-card"><div class="ct"><div><h2>17TRACK 轨迹覆盖与状态</h2><p class="tip">按履约单数统计 · 单量前 10</p></div></div><div id="cTrackingStatus"></div></section>
+          <section class="card plot-card"><div class="ct"><div><h2>发货仓分布</h2><p class="tip">单量前 10</p></div></div><div id="cWarehouse"></div></section>
+          <section class="card plot-card"><div class="ct"><div><h2>目的国家分布</h2><p class="tip">单量前 15</p></div></div><div id="cCountry"></div></section>
+          <section class="card plot-card" aria-labelledby="currentChannelTitle">
+            <div class="ct"><div><h2 id="currentChannelTitle">当前渠道单量</h2><p class="tip">单量前 10 · 点击渠道查看履约单</p></div></div>
+            <div id="cCurrentChannel"></div>
+          </section>
         </div>
       </section>
 
       <!-- ============ 轨迹监控 ============ -->
       <section class="view" id="v-track">
+        <div class="page-head"><div><h1>轨迹监控</h1><p>查看 17TRACK 主子状态、履约节点与预警处理进度。</p></div></div>
+        <div class="tabs" id="trackTabs" aria-label="轨迹监控分类">
+          <button type="button" data-mode="tracking" aria-pressed="true">运单轨迹</button>
+          <button type="button" data-mode="alerts" aria-pressed="false">预警处理 <span class="nav-count" id="alertTabCount"></span></button>
+        </div>
+        <div class="workspace-stack" id="trackingPane">
         <div class="filters" id="trackFilters"></div>
         <div class="chips" id="trackChips"></div>
-        <div class="card" style="padding:0">
+        <div class="card table-card">
+          <div class="ct table-head"><h2>履约单列表</h2><div class="toolbar">
+            <button type="button" class="btn ghost sm" id="showDetailed">有逐条轨迹</button>
+            <button type="button" class="btn ghost sm" id="exportTrack">导出本页</button>
+          </div></div>
           <div class="tblwrap">
             <table class="tbl">
               <thead><tr>
-                <th>履约单号</th><th>运单号</th><th>物流商</th><th>目的国</th>
-                <th>17track 官方状态</th><th>自定义物流异常</th><th>最新事件</th><th>停滞</th>
+                <th>履约单号 / 运单号</th><th>当前渠道 / 物流商</th><th>仓库 / 国家 / 平台</th>
+                <th>17TRACK 官方状态</th><th>业务预警</th><th>出库（北京时间）</th><th>最新轨迹（当地时间）</th>
               </tr></thead>
               <tbody id="trackBody"></tbody>
             </table>
           </div>
         </div>
         <div class="pager" id="trackPager"></div>
+        </div>
+        <div class="workspace-stack" id="alertsPane" hidden>
+          <div class="filters" id="alertFilters"></div>
+          <div class="chips" id="alertChips"></div>
+          <div class="card table-card">
+            <div class="ct table-head">
+              <h2>预警处理清单</h2>
+              <div class="toolbar">
+                <span id="selectedAlerts" class="tip"></span>
+                <select id="batchAction" aria-label="批量处理动作"><option value="">批量操作</option></select>
+                <button type="button" class="btn sm" id="applyBatch" disabled>应用</button>
+                <button type="button" class="btn ghost sm" id="exportAlerts">导出本页</button>
+              </div>
+            </div>
+            <div class="tblwrap">
+              <table class="tbl">
+                <thead><tr>
+                  <th class="check"><input id="selectPage" type="checkbox" aria-label="选择本页预警"></th>
+                  <th>履约单号 / 运单号</th><th>业务预警</th><th>后台物流商 / 国家</th>
+                  <th>官方状态</th><th>异常持续</th><th>处理状态</th><th>负责人</th>
+                </tr></thead>
+                <tbody id="alertBody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="pager" id="alertPager"></div>
+        </div>
       </section>
 
       <!-- ============ 渠道时效 ============ -->
       <section class="view" id="v-channels">
+        <div class="page-head"><div><h1>渠道时效</h1><p>按 C 端物流渠道对比，日期按履约单创建日筛选。妥投优先用 17TRACK，缺失时按仓库时间口径用 WMS 补算。</p></div></div>
         <div class="filters" id="channelFilters"></div>
+        <div class="card channel-basis">
+          <div class="tabs" id="channelBasis" role="group" aria-label="时效统计口径">
+            <button type="button" data-basis="paid" aria-pressed="false">下单到签收</button>
+            <button type="button" data-basis="shipped" aria-pressed="true">出库到签收</button>
+            <button type="button" data-basis="online" aria-pressed="false">上网到签收</button>
+          </div>
+          <p id="channelBasisNote" aria-live="polite">从出库（北京时间）到妥投。计算时统一时区。</p>
+        </div>
+        <div id="channelLoading" class="card" role="status">正在读取渠道时效…</div>
+        <div id="channelResults" class="channel-results" hidden>
         <div class="kpis" id="channelKpi"></div>
-        <div class="card" style="padding:0">
-          <div class="ct" style="padding:12px 14px 0"><h2>渠道表现对比</h2><div class="tip">签出→签收天数 · 达标判定按各渠道 SLA</div></div>
+        <div class="grid channel-charts" id="channelCharts">
+          <div class="card">
+            <div class="ct"><div><h2>平均时效与 P90</h2><p class="tip" id="channelChartScope"></p></div></div>
+            <div class="chart" id="channelDurationChart" role="img" aria-label="按渠道比较平均时效及 P90 天数"></div>
+          </div>
+          <div class="card">
+            <div class="ct"><div><h2>3、5、6、7 天内签收比例</h2><p class="tip">时效样本须有可用妥投时间和有效起点</p></div></div>
+            <div class="chart" id="channelRateChart" role="img" aria-label="按渠道比较 3、5、6、7 天内签收比例"></div>
+          </div>
+        </div>
+        <p class="card" id="channelChartEmpty" hidden>当前筛选和口径下没有有效签收样本。</p>
+        <div class="card table-card">
+          <div class="ct table-head"><div><h2>C 端渠道表现对比</h2><p class="tip">SLA 达成率和超时在途按每单「当前渠道」配置的起点与承诺天数计算。超时占比仅统计可计时的在途单。</p></div><button type="button" class="btn ghost sm" id="exportChannels">导出结果</button></div>
           <div class="tblwrap" style="max-height:none">
             <table class="tbl">
               <thead><tr>
-                <th>物流渠道</th><th>单量</th><th>已签收</th><th>平均妥投</th><th>P90</th>
-                <th>3天达成</th><th>5天达成</th><th>6天达成</th><th>SLA目标</th>
-                <th>在途</th><th>超时在途</th><th>结论</th>
+                <th>C 端显示物流渠道</th><th>单量</th><th>有妥投时间</th><th>有效样本</th><th>平均时效</th><th>P90</th>
+                <th>3天达成</th><th>5天达成</th><th>6天达成</th><th>7天达成</th><th>SLA 达成率</th>
+                <th>在途</th><th>超时在途</th>
               </tr></thead>
               <tbody id="channelBody"></tbody>
             </table>
           </div>
         </div>
         <div class="card" style="padding:0">
-          <div class="ct" style="padding:12px 14px 0"><h2>渠道 × 国家</h2><div class="tip">单量 ≥ 200 的组合</div></div>
+          <div class="ct" style="padding:12px 14px 0"><h2>C 端渠道 × 国家</h2><div class="tip">单量 ≥ 200 的组合</div></div>
           <div class="tblwrap" style="max-height:460px">
             <table class="tbl">
-              <thead><tr><th>渠道</th><th>国家</th><th>单量</th><th>平均妥投</th><th>6天达成</th></tr></thead>
+              <thead><tr><th>C 端渠道</th><th>国家</th><th>单量</th><th>有效样本</th><th>平均时效</th><th>6天达成</th></tr></thead>
               <tbody id="chanCountryBody"></tbody>
             </table>
           </div>
+        </div>
         </div>
       </section>
 
       <!-- ============ 数据与规则 ============ -->
       <section class="view" id="v-rules">
+        <div class="page-head"><div><h1>数据与规则</h1><p>核对数据来源、17TRACK 覆盖和当前预警计算口径。</p></div><button type="button" class="btn ghost" id="refreshRules">刷新数据</button></div>
+        <div class="tabs" id="ruleTabs" aria-label="数据与规则分类">
+          <button type="button" data-rule-pane="data" aria-pressed="true">数据健康</button>
+          <button type="button" data-rule-pane="sync" aria-pressed="false">17TRACK 同步</button>
+          <button type="button" data-rule-pane="business" aria-pressed="false">业务预警规则</button>
+          <button type="button" data-rule-pane="sla" aria-pressed="false">渠道 SLA</button>
+          <button type="button" data-rule-pane="dictionary" aria-pressed="false">17TRACK 字典</button>
+        </div>
+        <div class="workspace-stack" id="rules-sync" hidden>
+          <div class="sync-grid">
+            <div class="card">
+              <div class="ct sync-card-head"><h2>定时拉取</h2><span class="badge gray" id="pollStatus">读取中</span></div>
+              <dl class="source-list" id="pollSummary"></dl>
+            </div>
+            <div class="card">
+              <div class="ct sync-card-head"><h2>Webhook 推送</h2><span class="badge gray" id="webhookStatus">读取中</span></div>
+              <dl class="source-list" id="webhookSummary"></dl>
+              <p class="tip" id="webhookHelp"></p>
+            </div>
+          </div>
+          <p class="tip sync-observed" id="syncObserved" role="status"></p>
+          <div class="card table-card">
+            <div class="ct table-head"><h2>最近同步批次</h2></div>
+            <div class="tblwrap"><table class="tbl"><thead><tr><th>开始时间</th><th>结束时间</th><th>结果</th><th>查询运单</th><th>取回逐条轨迹</th><th>登记未匹配</th></tr></thead><tbody id="pollHistory"></tbody></table></div>
+          </div>
+          <div class="card table-card">
+            <div class="ct table-head"><h2>最近 Webhook 收件</h2></div>
+            <div class="tblwrap"><table class="tbl"><thead><tr><th>收到时间</th><th>事件</th><th>处理结果</th><th>处理完成</th></tr></thead><tbody id="webhookHistory"></tbody></table></div>
+          </div>
+        </div>
+        <div class="workspace-stack" id="rules-data">
+          <div class="kpis" id="dataKpi"></div>
+          <div class="card"><div class="ct"><h2>数据来源</h2></div><dl class="source-list" id="sourceHealth"></dl></div>
+          <div class="card table-card">
+            <div class="ct table-head"><h2>最近 ERP 导入记录</h2></div>
+            <div class="tblwrap"><table class="tbl"><thead><tr><th>文件</th><th>导入时间</th></tr></thead><tbody id="importBody"></tbody></table></div>
+          </div>
+        </div>
+        <div class="workspace-stack" id="rules-business" hidden>
         <div class="card">
           <div class="ct"><h2>业务预警规则</h2><div class="tip" id="ruleAsof">—</div></div>
           <div id="ruleList"></div>
         </div>
-        <div class="card" style="padding:0">
-          <div class="ct" style="padding:12px 14px 0"><h2>渠道 SLA 规则</h2><div class="tip">承诺时效：签出 → 签收（自然日）</div></div>
-          <div class="tblwrap" style="max-height:none">
-            <table class="tbl">
-              <thead><tr><th>渠道</th><th>单量</th><th>承诺时效</th><th>3天目标</th><th>5天目标</th><th>6天目标</th><th>实际6天达成</th><th>实际平均</th><th>判定</th></tr></thead>
-              <tbody id="slaBody"></tbody>
-            </table>
-          </div>
-        </div>
         <div class="card">
-          <div class="ct"><h2>暂未接入的规则</h2><div class="tip">缺数据源，不做假替身</div></div>
+          <div class="ct"><h2>待接入的数据源</h2></div>
           <div id="notImpl"></div>
+        </div>
+        </div>
+        <div class="card table-card" id="rules-sla" hidden>
+          <div class="ct table-head"><div><h2>渠道 SLA 规则</h2><p class="tip">按履约单的「当前渠道」配置起点和承诺天数。妥投优先用 17TRACK，缺失时由 WMS 补算。</p></div>
+            <input type="search" id="slaSearch" class="inline-search" placeholder="搜索当前渠道…" aria-label="搜索当前渠道">
+          </div>
+          <div class="tblwrap"><table class="tbl">
+            <thead><tr><th>当前渠道</th><th>单量</th><th>计时口径</th><th>承诺时效</th><th>有效样本 / 有妥投时间</th><th>3 天目标 / 实际</th><th>5 天目标 / 实际</th><th>6 天目标 / 实际</th><th>实际平均</th><th>配置</th></tr></thead>
+            <tbody id="slaBody"></tbody>
+          </table></div>
+        </div>
+        <div class="card table-card" id="rules-dictionary" hidden>
+          <div class="ct table-head"><div><h2>17TRACK 状态字典</h2><p class="tip">保留官方主状态和子状态代码</p></div></div>
+          <div class="tblwrap"><table class="tbl"><thead><tr><th>主状态</th><th>主状态代码</th><th>子状态</th><th>子状态代码</th></tr></thead><tbody id="dictionaryBody"></tbody></table></div>
         </div>
       </section>
 
@@ -120,16 +251,24 @@
 </div>
 
 <div class="mask" id="mask"></div>
-<aside class="drawer" id="drawer">
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dTitle" inert>
   <header>
     <div><h3 id="dTitle">履约单详情</h3><div style="font-size:11.5px;color:#8b98ab;margin-top:3px" id="dSub">—</div></div>
-    <button class="x" id="dClose">✕</button>
+    <button class="x" id="dClose" aria-label="关闭详情">✕</button>
   </header>
   <div class="body" id="dBody"></div>
 </aside>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status"></div>
+<dialog class="settings-dialog" id="settingsDialog" aria-labelledby="settingsTitle">
+  <form id="settingsForm">
+    <header><h2 id="settingsTitle"></h2><button type="button" class="btn ghost sm" id="settingsClose" aria-label="关闭配置">关闭</button></header>
+    <div id="settingsFields" class="settings-fields"></div>
+    <p class="settings-error" id="settingsError" role="alert"></p>
+    <footer><button type="button" class="btn ghost" id="settingsCancel">取消</button><button type="submit" class="btn" id="settingsSave">保存并重算</button></footer>
+  </form>
+</dialog>
 
 <script src="/static/echarts.min.js"></script>
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=20261120-ops-session"></script>
 </body>
 </html>

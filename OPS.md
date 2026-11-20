@@ -1,5 +1,27 @@
 # 智能中枢（OPS）接入
 
+## 履约监控系统（FastAPI）
+
+当前带轨迹监控、预警、渠道 SLA 的网页由 `app.main:app` 提供。受管部署应启动这一入口，并传入
+`.env.example` 中的 OPS 环境变量。三个密钥由中枢写入后端环境，生产环境使用 HTTPS，回调保持
+`https://biz.htwig.com:18700/ops/auth/callback`。反向代理日志请只记录回调路径，省略查询参数。
+
+正式服务可运行 `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-access-log`，由
+受管反代连接内部端口。数据文件仍由现有 DuckDB 和 ops.db 提供。自动化预览入口 `preview.py` 仅用于本机。
+
+中枢身份按 `sub` 与现有站内账号关联，沿用站内角色。管理员核对中枢身份后执行
+`python -m app.ops_auth --subject "<中枢 sub>" --local-user "<现有站内用户名>"`。
+默认只允许已关联的身份，正式中枢站点也默认关闭密码入口。按需通过 `OPS_LOCAL_LOGIN` 启用已有密码登录。
+确认中枢仅向获准人员开放本站后，可以通过 `OPS_ALLOW_VIEWER_SIGNUP` 启用新身份的只读账号。
+
+「智能助手」仅向 `OPS_ASSISTANT_ROLES` 内的站内角色开放。MCP 显示和调用的工具要同时通过中枢授权与
+`OPS_MCP_ALLOWED_TOOLS` 校验。AI 获取实时可用模型。技能说明验证 SHA-256 后才加载，并在使用该技能
+且模型成功回复后才上报。履约查询、预警和轨迹同步按原业务流程运行。
+
+在当前项目目录运行 `python -m unittest discover -s test -p ops_fastapi.py -v`，可用模拟中枢验证上述接入。
+
+下方记录的是原静态看板的独立 Node 服务。该服务仍可用于原静态看板。
+
 把 OAuth 登录、站点 MCP、AI 对话、技能接到本站点。
 
 > **前提**：看板本身是纯静态单文件，做不了服务端会话和密钥交换。

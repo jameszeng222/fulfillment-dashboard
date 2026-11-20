@@ -42,6 +42,8 @@ node_modules/
 .dev.vars
 /dist/
 sync.log
+/rolling-sync*.log
+/.rolling-*.json
 _t_*.duckdb
 _t_*.py
 *.duckdb.bak
@@ -50,6 +52,7 @@ _t_*.py
 out/
 ops.db
 ops.db-*
+/17TRACK历史轨迹.sqlite3*
 __pycache__/
 *.pyc
 .pytest_cache/

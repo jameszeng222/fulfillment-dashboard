@@ -2,13 +2,15 @@
 17track 轨迹拉取（**只拉不注册**）。
 
 前提：单号由 ERP 同步注册到 17track 账号，本脚本只负责把轨迹和状态拉回来。
-未注册的单号会被平台拒绝（-18019902），记录下来跳过，不重复注册。
+按 ERP 的 C 端物流商名称匹配 17TRACK 运输商代码，查询时同时传运单号和代码。
+对已知可能登记在其他运输商下的单号，查不到后使用对应代码复查，不重复注册。
 
 用法：
     $env:TRACK17_TOKEN = "xxx"
     python track17.py plan                  # 看要拉多少、按承运商分布
     python track17.py poll --limit 400      # 拉（每次 40 个一批）
     python track17.py poll --days 7         # 只拉最近 7 天创建的单
+    python track17.py poll --completed --days 7 --limit 40  # 回查近期 ERP 已签收单
     python track17.py status                # 本地统计
     python track17.py selftest              # 用内置样例验证解析（不需要 token）
 
@@ -21,27 +23,60 @@
                                          days_after_last_update, estimated_delivery_date{from,to,source}}
     track_info.milestone[]              {key_stage, time_utc}  9 个关键节点
     track_info.misc_info.risk_factor
-  ** 没有 events[]，详细事件用 milestone 代替 **
+    track_info.tracking.providers[].events[]  承运商逐条事件，可能为空
 """
 from __future__ import annotations
 
 import argparse
+from collections import Counter
+import hashlib
 import json
 import os
 import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import duckdb
+from app.tracking_clock import carrier_wall_time, ensure_display_columns
+from app.waybill import key_sql, normalized, shipped_waybill_sql, strip_quantity
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "履约单.duckdb"
 API = "https://api.17track.net/track/v2.2"
 BATCH = 40
 RATE_SLEEP = 0.35
+
+# 官方目录：https://res.17track.net/asset/carrier/info/apicarrier.all.json
+C_END_CARRIER_CODES = {
+    "3pe": 191376,
+    "3pe express": 191376,
+    "correios brazil": 2151,
+    "dhl": 100001,
+    "dhl express": 100001,
+    "dhl ecommerce us": 7047,
+    "fedex": 100003,
+    "fedex smartpost": 100003,
+    "gofo": 100996,
+    "ontrac": 100049,
+    "sf express": 100012,
+    "speedx": 190844,
+    "ups": 100002,
+    "ups mail innovations": 100398,
+    "ups mail lnnovations": 100398,  # ERP 历史拼写
+    "ups mi": 100398,
+    "usps": 21051,
+    "veho": 101068,
+    "xs express": 190477,
+    "yanwen": 190012,
+    "yunexpress": 190008,
+}
+
+# WYT-USPS 的已登记记录也会使用后台承运商或物流产品代码。
+WYT_CARRIER_CODES = {"dhl ecommerce": 7047}
+WYT_REGISTRATION_FALLBACKS = {"usps": 190284, "ups": 100398}
 
 STATUS_CN = {
     "NotFound": "查无此单",
@@ -93,7 +128,7 @@ OFFICIAL_STATUS = [
 STAGES = ["InfoReceived", "PickedUp", "Departure", "Arrival", "AvailableForPickup",
           "OutForDelivery", "Delivered", "Returning", "Returned"]
 
-DDL = """
+DDL = f"""
 CREATE TABLE IF NOT EXISTS trk_status (
     单号            VARCHAR PRIMARY KEY,
     carrier         INTEGER,
@@ -139,10 +174,15 @@ CREATE TABLE IF NOT EXISTS trk_missing (
     检查次数    INTEGER DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS trk_event (
+    单号 VARCHAR, 事件时间 TIMESTAMP, 主状态 VARCHAR, 子状态 VARCHAR,
+    描述 VARCHAR, 地点 VARCHAR, 是否签收 BOOLEAN, 入库时间 TIMESTAMP
+);
+
 CREATE OR REPLACE VIEW trk_order_link AS
 WITH o AS (
     SELECT 履约单号,
-           any_value(快递单号) 快递单号,
+           {shipped_waybill_sql()} 快递单号,
            any_value(物流服务商) 物流服务商,
            any_value(仓库代码) 仓库代码,
            any_value(目的国家英文名称) 目的国,
@@ -157,9 +197,9 @@ SELECT
     o.出库单状态, o.创建日期, o.签出时间_ts, o.WMS签收时间,
     s.状态 AS 轨迹状态, s.状态中文, s.子状态, s.最新事件时间, s.最新描述, s.地点,
     s.签收时间 AS 承运商签收时间, s.运输天数, s.停滞天数, s.风险因子, s.查询时间 AS 轨迹查询时间,
-    -- 17track 口径的尾程天数（从揽收算起，比 WMS 自证更可信）
+    -- ERP 签出为北京时间，17TRACK 签收为 UTC。
     CASE WHEN s.签收时间 IS NOT NULL AND o.签出时间_ts IS NOT NULL
-         THEN round(date_diff('minute', o.签出时间_ts, s.签收时间) / 1440.0, 2) END AS 承运商尾程天,
+         THEN round(date_diff('minute', o.签出时间_ts - INTERVAL '8 hours', s.签收时间) / 1440.0, 2) END AS 承运商尾程天,
     CASE
       WHEN s.签收时间 IS NOT NULL AND o.WMS签收时间 IS NOT NULL THEN '双方已签'
       WHEN s.签收时间 IS NOT NULL AND o.WMS签收时间 IS NULL   THEN '承运商已签_WMS未签'
@@ -168,13 +208,13 @@ SELECT
       ELSE '双方均未签'
     END AS 签收对账
 FROM o
-LEFT JOIN trk_status s ON s.单号 = upper(regexp_replace(o.快递单号, '[^A-Za-z0-9]', '', 'g'))
-LEFT JOIN trk_missing m ON m.单号 = upper(regexp_replace(o.快递单号, '[^A-Za-z0-9]', '', 'g'))
+LEFT JOIN trk_status s ON s.单号 = {key_sql("o.快递单号")}
+LEFT JOIN trk_missing m ON m.单号 = {key_sql("o.快递单号")}
 """
 
 
 def norm(no: str) -> str:
-    return "".join(ch for ch in str(no or "").upper() if ch.isalnum())
+    return normalized(no)
 
 
 def connect(db: str) -> duckdb.DuckDBPyConnection:
@@ -182,6 +222,11 @@ def connect(db: str) -> duckdb.DuckDBPyConnection:
     for stmt in DDL.strip().split(";"):
         if stmt.strip():
             con.execute(stmt)
+    for column, kind in (("运输商代码", "INTEGER"), ("事件承运商代码", "INTEGER"),
+                         ("事件承运商", "VARCHAR"), ("事件键", "VARCHAR"), ("原始顺序", "INTEGER")):
+        con.execute(f"ALTER TABLE trk_event ADD COLUMN IF NOT EXISTS {column} {kind}")
+    ensure_display_columns(con)
+    con.execute("CREATE INDEX IF NOT EXISTS ix_trk_event_number ON trk_event(单号)")
     # 官方 9 主 + 30 子状态字典，每次连接时刷新（幂等）
     con.executemany(
         "INSERT OR REPLACE INTO dim_trk_status VALUES (?,?,?,?,?,?)",
@@ -208,6 +253,8 @@ def post(path: str, token: str, payload) -> dict:
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         raise RuntimeError(f"HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}")
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"读取 17TRACK 响应失败：{e}") from e
 
 
 def parse_dt(s):
@@ -223,37 +270,106 @@ def parse_dt(s):
     return None
 
 
+def tracking_utc(event):
+    """Use the documented UTC field, or ISO time only when it has an offset."""
+    for field in ("time_utc", "time_iso"):
+        raw = event.get(field)
+        if not isinstance(raw, str) or len(raw.strip()) < 16:
+            continue
+        try:
+            timestamp = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if timestamp.tzinfo is not None:
+            return timestamp.astimezone(timezone.utc)
+        if field == "time_utc":
+            return timestamp.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _stored_utc(event):
+    timestamp = tracking_utc(event)
+    return timestamp.replace(tzinfo=None) if timestamp is not None else None
+
+
+def local_event_time(event):
+    return carrier_wall_time(event.get("time_raw"), event.get("time_iso"))
+
+
 # ---------------------------------------------------------------- 候选
 
-def candidates(con, limit=0, days=0, carriers=None):
-    """在途单号（未签收、未取消、有单号），按 单号 去重"""
-    where = [
-        "出库单状态 IN ('已签出','物流异常')",
-        "签收时间_ts IS NULL",
-        "coalesce(trim(快递单号),'') <> ''",
-    ]
-    if days:
-        where.append(f"创建日期 >= (SELECT max(创建日期) FROM 履约单明细) - INTERVAL {int(days)} DAY")
-    if carriers:
-        lst = ",".join("'" + c.replace("'", "''") + "'" for c in carriers)
-        where.append(f"物流服务商 IN ({lst})")
-    sql = f"""
-        SELECT 快递单号, any_value(物流服务商) 承运商, max(创建日期) 最新创建
-        FROM 履约单明细
-        WHERE {' AND '.join(where)}
-        GROUP BY 快递单号
-        ORDER BY 最新创建 DESC
+def carrier_lookup(channel, c_end, previous_code, has_event):
+    channel = (channel or "").strip().casefold()
+    if channel == "postnet":
+        return None, None
+
+    name = (c_end or "").strip().casefold()
+    mapped_code = C_END_CARRIER_CODES.get(name)
+    fallback = None
+    if channel == "wyt-usps":
+        mapped_code = mapped_code or WYT_CARRIER_CODES.get(name)
+        fallback = WYT_REGISTRATION_FALLBACKS.get(name)
+
+    # 有轨迹的历史记录已经验证过当时的登记渠道，优先从该渠道继续同步。
+    primary = previous_code if previous_code and has_event else mapped_code or previous_code
+    alternate = next(
+        (code for code in (mapped_code, fallback, previous_code) if code and code != primary),
+        None,
+    )
+    return primary, alternate
+
+
+def candidates(con, limit=0, days=0, carriers=None, completed=False):
+    """按单号去重，默认查在途。completed 查 ERP 已签收的履约。"""
+    has_facts = con.execute("""
+        SELECT count(*) FROM information_schema.tables
+        WHERE table_schema=current_schema() AND table_name='fct_order'
+    """).fetchone()[0]
+    facts = """SELECT 快递单号, 物流商 AS 承运商, C端承运商, 创建日期, 签出时间, 签收时间, 状态
+               FROM fct_order""" if has_facts else f"""
+        SELECT {shipped_waybill_sql()} AS 快递单号,
+               any_value(物流服务商) AS 承运商,
+               any_value(nullif(trim("C端显示物流服务商名称"),'')) AS C端承运商,
+               min(创建日期) AS 创建日期, min(签出时间_ts) AS 签出时间,
+               max(签收时间_ts) AS 签收时间, any_value(出库单状态) AS 状态
+        FROM 履约单明细 GROUP BY 履约单号
     """
-    rows = con.execute(sql).fetchall()
+    where = [
+        "coalesce(trim(c.快递单号),'') <> ''",
+        "lower(coalesce(trim(c.承运商),'')) <> 'postnet'",
+        "lower(coalesce(trim(c.C端承运商),'')) <> 'postnet'",
+        ("c.签收时间 IS NOT NULL AND coalesce(c.状态,'') <> '已取消'" if completed else
+         """c.签收时间 IS NULL AND coalesce(c.状态,'') NOT IN ('已取消','已完成')
+            AND (c.签出时间 IS NOT NULL OR c.状态 IN ('已签出','物流异常'))"""),
+    ]
+    args = []
+    activity = "c.签收时间::DATE" if completed else "coalesce(c.签出时间::DATE,c.创建日期)"
+    if days:
+        where.append(f"{activity} >= (SELECT max({activity}) FROM orders c) - INTERVAL {int(days)} DAY")
+    if carriers:
+        where.append(f"c.承运商 IN ({','.join('?' for _ in carriers)})")
+        args.extend(carriers)
+    sql = f"""
+        SELECT c.快递单号, c.承运商, c.C端承运商, nullif(t.carrier, 0),
+               t.最新事件时间 IS NOT NULL
+        FROM orders c
+        LEFT JOIN trk_status t
+          ON t.单号 = {key_sql("c.快递单号")}
+        WHERE {' AND '.join(where)}
+        ORDER BY {activity} DESC, c.创建日期 DESC, c.快递单号
+    """
+    rows = con.execute(f"WITH orders AS ({facts}) {sql}", args).fetchall()
     out, seen = [], set()
-    for tn, car, _ in rows:
+    for tn, car, c_end, previous_code, has_event in rows:
         n = norm(tn)
-        if not (8 <= len(n) <= 50) or "+" in str(tn) or not n.isascii():
+        if not (8 <= len(n) <= 50) or "+" in strip_quantity(tn):
             continue
         if n in seen:
             continue
         seen.add(n)
-        out.append({"单号": n, "承运商": car or "(未分配)"})
+        code, alternate = carrier_lookup(car, c_end, previous_code, has_event)
+        out.append({"单号": n, "承运商": car or "(未分配)", "C端承运商": c_end,
+                    "运输商代码": code, "备选运输商代码": alternate})
         if limit and len(out) >= limit:
             break
     return out
@@ -262,23 +378,52 @@ def candidates(con, limit=0, days=0, carriers=None):
 # ---------------------------------------------------------------- 命令
 
 def cmd_plan(con, args):
-    cands = candidates(con, days=args.days)
-    print(f"在途单号: {len(cands):,} 个\n")
+    cands = candidates(con, limit=args.limit, days=args.days,
+                       carriers=args.carrier.split(",") if args.carrier else None,
+                       completed=args.completed)
+    scope = "已签收" if args.completed else "在途"
+    print(f"{scope}单号: {len(cands):,} 个\n")
     stat = {}
     for c in cands:
         stat[c["承运商"]] = stat.get(c["承运商"], 0) + 1
     print(f"{'承运商':<20}{'单号数':>10}")
     for k, v in sorted(stat.items(), key=lambda x: -x[1]):
         print(f"{k:<20}{v:>10,}")
+    with_code = sum(c["运输商代码"] is not None for c in cands)
+    print(f"\n带运输商代码查询 {with_code:,} 个，仅按单号查询 {len(cands) - with_code:,} 个。")
     n_batch = -(-len(cands) // BATCH)
     print(f"\n分批: {n_batch:,} 批 × {BATCH} 个，限速约 {n_batch*RATE_SLEEP/60:.0f} 分钟")
     print("查询不扣配额（配额只用于注册），受 3 req/s 限流。")
 
 
+def get_trackinfo(token, codes):
+    payload = [{"number": number, "carrier": code} if code else {"number": number}
+               for number, code in codes.items()]
+    response = post("gettrackinfo", token, payload)
+    data = response.get("data") or {}
+    errors = data.get("errors") or []
+    if response.get("code", 0) != 0 or errors:
+        raise RuntimeError(f"平台错误 {errors[0] if errors else response.get('code')}")
+
+    accepted = {}
+    for item in data.get("accepted") or []:
+        number = norm(item.get("number"))
+        if number in codes and (not codes[number] or str(item.get("carrier")) == str(codes[number])):
+            accepted[number] = item
+
+    rejected = {}
+    for item in data.get("rejected") or []:
+        number = norm(item.get("number"))
+        if number in codes and number not in accepted:
+            rejected[number] = item
+    return accepted, rejected
+
+
 def cmd_poll(con, args):
     token = token_of(args)
     cands = candidates(con, limit=args.limit, days=args.days,
-                       carriers=args.carrier.split(",") if args.carrier else None)
+                       carriers=args.carrier.split(",") if args.carrier else None,
+                       completed=args.completed)
     if not cands:
         print("没有需要拉取的单号。")
         return
@@ -288,40 +433,55 @@ def cmd_poll(con, args):
     n_ok = n_miss = n_err = 0
     for i in range(0, len(cands), BATCH):
         chunk = cands[i:i + BATCH]
+        codes = {candidate["单号"]: candidate["运输商代码"] for candidate in chunk}
         try:
-            resp = post("gettrackinfo", token, [{"number": c["单号"]} for c in chunk])
+            accepted, rejected = get_trackinfo(token, codes)
         except RuntimeError as e:
             print(f"  批次 {i//BATCH+1}: 请求失败 {e}")
             n_err += len(chunk)
             time.sleep(1)
             continue
 
-        errs = (resp.get("data") or {}).get("errors") or []
-        if errs:
-            print(f"  批次 {i//BATCH+1}: 平台错误 {errs[0]}")
+        retry = {}
+        for candidate in chunk:
+            number = candidate["单号"]
+            error = (rejected.get(number) or {}).get("error") or {}
+            if error.get("code") == -18019902 and candidate["备选运输商代码"]:
+                retry[number] = candidate["备选运输商代码"]
+                del rejected[number]
+        if retry:
+            time.sleep(RATE_SLEEP)
+            try:
+                retried, retry_rejected = get_trackinfo(token, retry)
+                accepted.update(retried)
+                rejected.update(retry_rejected)
+                codes.update(retry)
+            except RuntimeError as e:
+                print(f"  批次 {i//BATCH+1}: 备选运输商查询失败 {e}")
 
-        for a in (resp.get("data") or {}).get("accepted", []) or []:
-            save_one(con, a)
-            n_ok += 1
-        for rj in (resp.get("data") or {}).get("rejected", []) or []:
-            code = (rj.get("error") or {}).get("code")
-            n = norm(rj.get("number"))
-            if code == -18019902:
-                n_miss += 1
+        for result in accepted.values():
+            save_one(con, result)
+        missed = 0
+        for number, result in rejected.items():
+            if (result.get("error") or {}).get("code") == -18019902:
+                missed += 1
                 con.execute("""
                     INSERT INTO trk_missing (单号, carrier, 首次发现, 末次检查, 检查次数)
                     VALUES (?,?,?,?,1)
                     ON CONFLICT (单号) DO UPDATE SET
+                        carrier = excluded.carrier,
                         末次检查 = excluded.末次检查,
                         检查次数 = trk_missing.检查次数 + 1
-                """, [n, (rj.get("error") or {}).get("carrier") or 0, datetime.now(), datetime.now()])
-            else:
-                n_err += 1
+                """, [number, codes[number] or result.get("carrier") or 0, datetime.now(), datetime.now()])
 
-        print(f"  批次 {i//BATCH+1}/{total_batch}: 成功 {n_ok} 未注册 {n_miss} 其它错误 {n_err}")
+        n_ok += len(accepted)
+        n_miss += missed
+        n_err += len(chunk) - len(accepted) - missed
+
+        print(f"  批次 {i//BATCH+1}/{total_batch}: 接口接受 {n_ok} 登记未匹配 {n_miss} 其它错误 {n_err}")
         time.sleep(RATE_SLEEP)
 
-    print(f"\n完成：成功 {n_ok:,}，未注册 {n_miss:,}，其它错误 {n_err:,}")
+    print(f"\n完成：接口接受 {n_ok:,}，登记未匹配 {n_miss:,}，其它错误 {n_err:,}")
     _summary(con)
 
 
@@ -334,19 +494,26 @@ def save_one(con, a: dict):
     edd = (tm.get("estimated_delivery_date") or {})
     ms = ti.get("milestone") or []
 
-    delivered_at = None
-    for m in ms:
-        if m.get("key_stage") == "Delivered" and m.get("time_utc"):
-            t = parse_dt(m["time_utc"])
-            if t and (delivered_at is None or t > delivered_at):
-                delivered_at = t
+    deliveries = [event for event in ms if event.get("key_stage") == "Delivered"]
+    providers = (ti.get("tracking") or {}).get("providers") or []
+    for event in [le, *(event for provider in providers for event in provider.get("events") or [])]:
+        if event.get("stage") == "Delivered" or (event.get("sub_status") or "").startswith("Delivered_"):
+            deliveries.append(event)
+    delivered_at = delivered_local = None
+    for event in deliveries:
+        instant = _stored_utc(event)
+        if instant is not None and (delivered_at is None or instant >= delivered_at):
+            local = local_event_time(event)
+            if instant != delivered_at or local:
+                delivered_at, delivered_local = instant, local
 
     status = st.get("status") or ""
     con.execute("""
         INSERT INTO trk_status (
             单号, carrier, 状态, 状态中文, 子状态, 最新事件时间, 最新描述, 地点,
-            是否签收, 签收时间, 运输天数, 下单后天数, 停滞天数, EDD起, EDD止, 风险因子, 查询时间)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            是否签收, 签收时间, 运输天数, 下单后天数, 停滞天数, EDD起, EDD止, 风险因子, 查询时间,
+            最新事件当地时间, 签收当地时间)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT (单号) DO UPDATE SET
             carrier=excluded.carrier, 状态=excluded.状态, 状态中文=excluded.状态中文,
             子状态=excluded.子状态, 最新事件时间=excluded.最新事件时间,
@@ -354,26 +521,81 @@ def save_one(con, a: dict):
             签收时间=excluded.签收时间, 运输天数=excluded.运输天数,
             下单后天数=excluded.下单后天数, 停滞天数=excluded.停滞天数,
             EDD起=excluded.EDD起, EDD止=excluded.EDD止,
-            风险因子=excluded.风险因子, 查询时间=excluded.查询时间
+            风险因子=excluded.风险因子, 查询时间=excluded.查询时间,
+            最新事件当地时间=coalesce(excluded.最新事件当地时间,
+                CASE WHEN trk_status.最新事件时间=excluded.最新事件时间 THEN trk_status.最新事件当地时间 END),
+            签收当地时间=coalesce(excluded.签收当地时间,
+                CASE WHEN trk_status.签收时间=excluded.签收时间 THEN trk_status.签收当地时间 END)
     """, [n, a.get("carrier"), status, STATUS_CN.get(status, status), st.get("sub_status"),
-          parse_dt(le.get("time_utc")), (le.get("description") or "")[:300], (le.get("location") or "")[:120],
+          _stored_utc(le), (le.get("description") or "")[:300], (le.get("location") or "")[:120],
           status == "Delivered", delivered_at,
           tm.get("days_of_transit"), tm.get("days_after_order"), tm.get("days_after_last_update"),
           parse_dt(str(edd.get("from"))[:10]) if edd.get("from") else None,
           parse_dt(str(edd.get("to"))[:10]) if edd.get("to") else None,
           (ti.get("misc_info") or {}).get("risk_factor"),
-          datetime.now()])
+          datetime.now(), local_event_time(le), delivered_local])
 
     for m in ms:
-        t = parse_dt(m.get("time_utc"))
+        t = _stored_utc(m)
         if not t:
             continue
         con.execute("""
-            INSERT INTO trk_milestone (单号, 节点, 时间) VALUES (?,?,?)
-            ON CONFLICT (单号, 节点) DO UPDATE SET 时间 = excluded.时间
-        """, [n, m.get("key_stage"), t])
+            INSERT INTO trk_milestone (单号, 节点, 时间, 当地时间) VALUES (?,?,?,?)
+            ON CONFLICT (单号, 节点) DO UPDATE SET 时间 = excluded.时间,
+                当地时间=coalesce(excluded.当地时间,
+                    CASE WHEN trk_milestone.时间=excluded.时间 THEN trk_milestone.当地时间 END)
+        """, [n, m.get("key_stage"), t, local_event_time(m)])
 
+    save_events(con, n, a.get("carrier"), ti)
     con.execute("DELETE FROM trk_missing WHERE 单号 = ?", [n])
+
+
+def save_events(con, number, lookup_code, track_info):
+    """保存每条承运商事件，多次拉取时保留已经取得的历史记录。"""
+    providers = (track_info.get("tracking") or {}).get("providers") or []
+    if not any(group.get("events") for group in providers):
+        return
+    lookup_code = int(lookup_code or 0)
+    existing = {row[0] for row in con.execute(
+        "SELECT 事件键 FROM trk_event WHERE 单号=? AND 运输商代码=?", [number, lookup_code],
+    ).fetchall()}
+    counts = Counter()
+    rows = []
+    display_updates = []
+    received = datetime.now()
+    for group in providers:
+        provider = group.get("provider") or {}
+        provider_code = provider.get("key")
+        name = provider.get("name") or provider.get("alias")
+        for sequence, event in enumerate(group.get("events") or []):
+            event_time = event.get("time_utc") or event.get("time_iso")
+            stage = event.get("stage")
+            sub = event.get("sub_status")
+            desc = event.get("description")
+            location = event.get("location")
+            fingerprint = json.dumps([provider_code, name, event_time or event.get("time_raw"),
+                                      stage, sub, desc, location], ensure_ascii=False, sort_keys=True)
+            counts[fingerprint] += 1
+            key = hashlib.sha256(f"{fingerprint}:{counts[fingerprint]}".encode()).hexdigest()
+            local = local_event_time(event)
+            if key in existing:
+                if local:
+                    display_updates.append((local, number, lookup_code, key))
+                continue
+            timestamp = _stored_utc(event)
+            rows.append((number, timestamp, stage, sub, desc, location, stage == "Delivered", received,
+                         lookup_code, provider_code, name, key, sequence, local))
+    if rows:
+        con.executemany("""
+            INSERT INTO trk_event (单号,事件时间,主状态,子状态,描述,地点,是否签收,入库时间,
+                                   运输商代码,事件承运商代码,事件承运商,事件键,原始顺序,当地时间)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, rows)
+    if display_updates:
+        con.executemany("""
+            UPDATE trk_event SET 当地时间=?
+            WHERE 单号=? AND 运输商代码=? AND 事件键=? AND 当地时间 IS NULL
+        """, display_updates)
 
 
 def cmd_status(con, args):
@@ -468,8 +690,9 @@ def main() -> int:
     ap.add_argument("--db", default=str(DB))
     ap.add_argument("--token", help="17track key，默认读环境变量 TRACK17_TOKEN")
     ap.add_argument("--limit", type=int, default=0, help="本次最多拉多少个单号")
-    ap.add_argument("--days", type=int, default=0, help="只处理最近 N 天创建的单")
+    ap.add_argument("--days", type=int, default=0, help="只处理最近 N 天签出或签收的单")
     ap.add_argument("--carrier", help="只处理指定承运商，逗号分隔")
+    ap.add_argument("--completed", action="store_true", help="改查 ERP 已签收的历史履约单")
     args = ap.parse_args()
 
     con = connect(args.db)

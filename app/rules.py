@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import json
+
 # ---------------------------------------------------------------- 预警规则
 
 LEVEL_ORDER = {"紧急": 0, "高": 1, "中": 2}
@@ -191,3 +193,70 @@ def targets(channel: str) -> dict:
 def public_rules():
     """给前端用的规则列表（按优先级排序）"""
     return sorted(RULES, key=lambda r: PRIORITY.get(r["key"], 99))
+
+
+RULE_THRESHOLDS = {
+    "signout_timeout": (1, "自然日", "自创建日起达到 {days} 个自然日仍未签出"),
+    "not_online": (2, "自然日", "签出超过 {days} 个自然日，17TRACK 仍为仅收到信息或查无此单"),
+    "transport_timeout": (2, "自然日", "已签出的包裹，从当前渠道 SLA 起点计时，超过承诺时效 + {days} 个自然日仍未签收"),
+    "no_update": (3, "工作日", "运输中且最后有效轨迹距今超过 {days} 个工作日"),
+    "stagnation": (3, "天", "到达目的地节点且记录的停滞时间超过 {days} 天"),
+    "customs_hold": (3, "工作日", "清关中或要求补充资料，且轨迹距今超过 {days} 个工作日"),
+}
+
+
+def load_settings(db):
+    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='fulfillment_settings'").fetchone():
+        return {}, {}
+    saved = {"rule": {}, "sla": {}}
+    for kind, key, payload in db.execute("SELECT kind, name, payload FROM fulfillment_settings"):
+        if kind in saved:
+            saved[kind][key] = json.loads(payload)
+    return saved["rule"], saved["sla"]
+
+
+def save_setting(db, kind, key, value):
+    db.execute("""CREATE TABLE IF NOT EXISTS fulfillment_settings (
+        kind TEXT NOT NULL, name TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (kind, name)
+    )""")
+    db.execute("INSERT OR REPLACE INTO fulfillment_settings VALUES (?,?,?)",
+               (kind, key, json.dumps(value, ensure_ascii=False)))
+
+
+def effective_rules(overrides):
+    result = []
+    for source in public_rules():
+        key = source["key"]
+        config = overrides.get(key, {})
+        rule = {**source, "enabled": config.get("enabled", source["enabled"]),
+                "level": config.get("level", source["level"])}
+        if key in RULE_THRESHOLDS:
+            default, unit, trigger = RULE_THRESHOLDS[key]
+            days = config.get("threshold", default)
+            rule.update(threshold=days, thresholdUnit=unit, trigger=trigger.format(days=days))
+        if key == "transport_timeout":
+            rule.update(scope="履约单当前渠道", basis="当前渠道配置的 SLA 起点和承诺时效",
+                        exclude="已签收、已取消、未签出、缺少配置口径所需的计时起点")
+        result.append(rule)
+    return result
+
+
+def current_channel_slas(con, facts, overrides):
+    result = {}
+    for channel, carrier in con.execute(f"""
+        SELECT 当前渠道, mode(物流商 ORDER BY 物流商)
+        FROM {facts} o WHERE 当前渠道 IS NOT NULL GROUP BY 当前渠道
+    """).fetchall():
+        result[channel] = {"days": sla_days(carrier), "targets": dict(targets(carrier)),
+                           "basis": "shipped", **overrides.get(channel, {})}
+        if result[channel]["basis"] == "created":
+            result[channel]["basis"] = "paid"
+    return result
+
+
+def sla_table(slas):
+    if not slas:
+        return "SELECT NULL::VARCHAR, NULL::INTEGER, NULL::VARCHAR WHERE FALSE", []
+    return ("VALUES " + ",".join("(?,?,?)" for _ in slas),
+            [value for channel, config in slas.items()
+             for value in (channel, config["days"], config["basis"])])

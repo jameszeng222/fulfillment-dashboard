@@ -103,7 +103,7 @@ def load_input(target: Path, verbose: bool = True) -> pd.DataFrame:
 
 def ingest_df(con, df: pd.DataFrame, batch: str | None = None,
               asof: str | None = None, dry_run: bool = False,
-              mode: str = "upsert") -> dict:
+              mode: str = "upsert", keep_newer: bool = False) -> dict:
     """
     把 DataFrame 合并进库。返回统计信息 dict。
 
@@ -150,14 +150,13 @@ def ingest_df(con, df: pd.DataFrame, batch: str | None = None,
         raise SystemExit("创建时间整列都解析不出来，检查导出格式")
     data_day = max(now_day, created_max)
 
-    bad_sign = df["签收时间_ts"] < df["签出时间_ts"]
+    # 签收为目的地当地时间。先保留，换算至北京时间后才检查先后关系。
     out_of_range = df["签收时间_ts"] > (data_day + pd.Timedelta(days=30))
 
     df["时间异常"] = None
     df.loc[out_of_range, "时间异常"] = "签收时间越界(晚于数据日)"
-    df.loc[bad_sign, "时间异常"] = "签收早于签出"
-    n_out, n_bad = int(out_of_range.sum()), int(bad_sign.sum())
-    df.loc[out_of_range | bad_sign, "签收时间_ts"] = pd.NaT
+    n_out = int(out_of_range.sum())
+    df.loc[out_of_range, "签收时间_ts"] = pd.NaT
 
     df["创建日期"] = df["创建时间_ts"].dt.date
     if df["创建日期"].isna().any():
@@ -174,25 +173,57 @@ def ingest_df(con, df: pd.DataFrame, batch: str | None = None,
     print(f"\n批次 {batch}")
     print(f"  创建日期范围: {dmin} ~ {dmax}（{n_days} 天）")
     print(f"  履约单 {int(df['履约单号'].nunique()):,} 个")
-    print(f"  清洗: 签收越界 {n_out} 行、签收早于签出 {n_bad} 行（已置空并打标）")
+    print(f"  清洗: 签收越界 {n_out} 行（已置空并打标）")
 
     # 主键：履约单号 + sku + 批次码（该组合在库里唯一）
     KEY = "(\"履约单号\" || '|' || coalesce(\"sku\",'') || '|' || coalesce(\"批次码\",''))"
     all_cols = [c for c in existing_ordered if c in df.columns]
-    con.register("incoming", df[all_cols])
+    protected = keep_newer and mode == "upsert"
+    if protected:
+        con.register("export_rows", df[all_cols])
+        try:
+            con.execute(f"""
+                CREATE TEMP TABLE incoming AS
+                WITH batch_clock AS (
+                    SELECT try_strptime(regexp_extract(?, '[0-9]{{4}}(_[0-9]{{2}}){{4}}'),
+                                        '%Y_%m_%d_%H_%M') AS exported_at
+                ),
+                newer_keys AS (
+                    SELECT {KEY} AS row_key
+                    FROM 履约单明细 CROSS JOIN batch_clock
+                    WHERE try_strptime(regexp_extract(快照批次, '[0-9]{{4}}(_[0-9]{{2}}){{4}}'),
+                                       '%Y_%m_%d_%H_%M') > exported_at
+                )
+                SELECT * FROM export_rows WHERE NOT EXISTS (
+                    SELECT 1 FROM newer_keys WHERE row_key = {KEY}
+                )
+            """, [batch])
+        finally:
+            con.unregister("export_rows")
+    else:
+        con.register("incoming", df[all_cols])
+
+    def release_incoming():
+        if protected:
+            con.execute("DROP TABLE incoming")
+        else:
+            con.unregister("incoming")
 
     stats = {
         "batch": batch, "rows": len(df), "orders": int(df["履约单号"].nunique()),
         "dmin": str(dmin), "dmax": str(dmax), "days": n_days,
-        "bad_sign": n_bad, "out_of_range": n_out, "mode": mode,
+        "bad_sign": 0, "out_of_range": n_out, "mode": mode,
     }
 
     if mode == "upsert":
+        incoming_count = con.execute("SELECT count(*) FROM incoming").fetchone()[0] if protected else len(df)
         will_del = con.execute(
             f"SELECT count(*) FROM 履约单明细 WHERE {KEY} IN (SELECT {KEY} FROM incoming)"
         ).fetchone()[0]
         print(f"\n合并策略: 按主键 upsert —— 覆盖已有 {will_del:,} 行，"
-              f"新增 {len(df) - will_del:,} 行")
+              f"新增 {incoming_count - will_del:,} 行")
+        if incoming_count != len(df):
+            print(f"  保留较新快照 {len(df) - incoming_count:,} 行")
         print(f"  同区间内未出现在本文件里的单**不受影响**")
     else:
         will_del = con.execute(
@@ -202,7 +233,7 @@ def ingest_df(con, df: pd.DataFrame, batch: str | None = None,
     stats["deleted"] = int(will_del)
 
     if dry_run:
-        con.unregister("incoming")
+        release_incoming()
         print("\n--dry-run：未写入。")
         return stats
 
@@ -215,12 +246,12 @@ def ingest_df(con, df: pd.DataFrame, batch: str | None = None,
             con.execute("DELETE FROM 履约单明细 WHERE 创建日期 BETWEEN ? AND ?", [dmin, dmax])
         cols = ", ".join(f'"{c}"' for c in all_cols)
         con.execute(f'INSERT INTO 履约单明细 ({cols}) SELECT {cols} FROM incoming')
-        con.unregister("incoming")
         con.execute("COMMIT")
     except Exception:
-        con.unregister("incoming")
         con.execute("ROLLBACK")
         raise
+    finally:
+        release_incoming()
 
     total = con.execute("SELECT count(*) FROM 履约单明细").fetchone()[0]
     span = con.execute(

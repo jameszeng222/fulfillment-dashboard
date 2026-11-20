@@ -27,6 +27,8 @@ import duckdb
 import json
 import sys
 from pathlib import Path
+from app.order_time import build_delivery_clock
+from app.waybill import key_sql
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "履约单.duckdb"
@@ -72,6 +74,7 @@ PMAP = load_platform_map()
 print(f"平台对照表: {len(PMAP)} 条")
 
 con = duckdb.connect(str(DB), read_only=True)
+build_delivery_clock(con, temporary=True)
 
 # 用一张临时表做映射, 避免把长 SQL 拼进主查询
 con.execute("CREATE OR REPLACE TEMP TABLE pfmap(code VARCHAR, name VARCHAR)")
@@ -95,15 +98,16 @@ WITH o AS (
          coalesce(nullif(trim(目的国家英文名称),''), '(未知)')   AS cn,
          any_value(目的国家中文名称)   AS cn_zh,
          any_value(coalesce({CCAR_NORM}, '(未填)'))              AS ccr,
-         upper(regexp_replace(coalesce(any_value(快递单号),''), '[^A-Za-z0-9]', '', 'g')) AS tn,
+         {key_sql("any_value(快递单号)")} AS tn,
          出库单状态                   AS st,
          strftime(创建日期,'%Y-%m-%d') AS d,
          sum(数量)                    AS items,
          date_diff('minute', min(创建时间_ts), min(签出时间_ts)) AS hm,
-         date_diff('minute', min(签出时间_ts), min(签收时间_ts)) AS tm,
-         max(CASE WHEN 签收时间_ts IS NOT NULL THEN 1 ELSE 0 END) AS sg
+         date_diff('minute', min(签出时间_ts), max(clock.signed_beijing)) AS tm,
+         max(CASE WHEN coalesce(clock.signed_local,签收时间_ts) IS NOT NULL THEN 1 ELSE 0 END) AS sg
   FROM 履约单明细
   LEFT JOIN pfmap m ON m.code = 履约单明细.平台
+  LEFT JOIN fct_delivery_clock clock USING (履约单号)
   GROUP BY 履约单号, 创建月份, 仓库代码, 平台, m.name, 物流服务商,
            目的国家英文名称, 出库单状态, 创建日期
 )

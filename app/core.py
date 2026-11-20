@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import secrets
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 
 import duckdb
 from fastapi import HTTPException, Request
+from .ops_gateway import setting, site_origin
 
 ROOT = Path(__file__).resolve().parent.parent
 DUCK_DB = ROOT / "履约单.duckdb"
@@ -32,6 +35,81 @@ ROLES = {
 def duck() -> duckdb.DuckDBPyConnection:
     """事实层只读连接。每次请求新建，用完即关（DuckDB 连接不是线程安全的）。"""
     return duckdb.connect(str(DUCK_DB), read_only=True)
+
+
+def snapshot_key():
+    """Invalidate read caches when the updater publishes a different facts file."""
+    filename = DUCK_DB.resolve()
+    info = filename.stat()
+    try:
+        wal = filename.with_name(filename.name + ".wal").stat()
+        journal = (wal.st_size, wal.st_mtime_ns)
+    except FileNotFoundError:
+        journal = ()
+    return filename, info.st_ino, info.st_size, info.st_mtime_ns, journal
+
+
+def columns(con, table):
+    return {row[0] for row in con.execute(
+        """SELECT column_name FROM information_schema.columns
+           WHERE table_schema = current_schema() AND table_name = ?""", [table],
+    ).fetchall()}
+
+
+def order_facts(con):
+    if "当前渠道" in columns(con, "fct_order"):
+        return "fct_order"
+    if "当前渠道" not in columns(con, "履约单明细"):
+        return "(SELECT *, NULL::VARCHAR AS 当前渠道 FROM fct_order)"
+    return """(SELECT f.*, c.当前渠道 FROM fct_order f LEFT JOIN (
+        SELECT 履约单号, max(nullif(trim(当前渠道),'')) AS 当前渠道
+        FROM 履约单明细 GROUP BY 履约单号
+    ) c USING (履约单号))"""
+
+
+def active_order(alias="o"):
+    return f"{alias}.状态 IS DISTINCT FROM '已取消'"
+
+
+def active_facts(facts="fct_order"):
+    return f"(SELECT * FROM {facts} o WHERE {active_order()})"
+
+
+def filter_values(value):
+    if not value:
+        return []
+    if value.startswith("["):
+        try:
+            items = json.loads(value)
+        except ValueError:
+            items = None
+        if isinstance(items, list) and all(isinstance(item, str) for item in items):
+            return [item for item in items if item]
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+@lru_cache(maxsize=1)
+def _read_platform_names(path, modified_at):
+    from openpyxl import load_workbook
+    book = load_workbook(path, read_only=True, data_only=True)
+    try:
+        return {str(row[0]).strip(): str(row[1]).strip()
+                for row in book.active.iter_rows(min_row=2, max_col=2, values_only=True)
+                if row[0] and row[1]}
+    finally:
+        book.close()
+
+
+def platform_names():
+    path = ROOT / "reference" / "平台对照表.xlsx"
+    return _read_platform_names(path, path.stat().st_mtime_ns) if path.exists() else {}
+
+
+def require_admin(request):
+    user = require_user(request)
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="只有管理员可以配置规则")
+    return user
 
 
 @contextmanager
@@ -60,14 +138,35 @@ def new_sid() -> str:
     return secrets.token_urlsafe(32)
 
 
-def create_session(username: str, ip: str = "", ua: str = "") -> tuple[str, str]:
+def session_seconds():
+    try:
+        seconds = int(setting("SESSION_TTL_SEC") or SESSION_TTL_HOURS * 3600)
+        return seconds if 60 <= seconds <= 86400 else SESSION_TTL_HOURS * 3600
+    except ValueError:
+        return SESSION_TTL_HOURS * 3600
+
+
+def secure_cookie(request):
+    return bool(site_origin()) or request.url.scheme == "https"
+
+
+def set_session_cookie(request, response, sid, max_age=None):
+    response.set_cookie(SESSION_COOKIE, sid, httponly=True, secure=secure_cookie(request),
+                        samesite="lax", max_age=max_age or session_seconds(), path="/")
+
+
+def csrf_token(sid):
+    return hashlib.sha256(("fd-csrf:" + sid).encode()).hexdigest()
+
+
+def create_session(username: str, ip: str = "", ua: str = "", max_age=None) -> tuple[str, str]:
     sid = new_sid()
-    exp = (datetime.now(timezone.utc) + timedelta(hours=SESSION_TTL_HOURS)).isoformat(timespec="seconds")
+    exp = (datetime.now(timezone.utc) + timedelta(seconds=max_age or session_seconds())).isoformat(timespec="seconds")
     with ops() as con:
         con.execute("INSERT INTO sessions (sid,username,created_at,expires_at,ip,ua) VALUES (?,?,?,?,?,?)",
                     (sid, username, now_iso(), exp, ip, (ua or "")[:200]))
         # 顺手清理过期会话
-        con.execute("DELETE FROM sessions WHERE expires_at < ?", (now_iso(),))
+        con.execute("DELETE FROM sessions WHERE julianday(expires_at)<=julianday('now')")
     return sid, exp
 
 
@@ -90,7 +189,7 @@ def current_user(request: Request) -> dict | None:
         """, (sid,)).fetchone()
     if not row:
         return None
-    if row["expires_at"] < now_iso() or not row["active"]:
+    if datetime.fromisoformat(row["expires_at"]) <= datetime.now(timezone.utc) or not row["active"]:
         return None
     return {
         "username": row["username"],
@@ -116,11 +215,15 @@ def require_editor(request: Request) -> dict:
     return u
 
 
-def audit(actor: str, action: str, target: str = "", detail=None):
+def audit(actor: str, action: str, target: str = "", detail=None, *, connection=None):
+    sql = "INSERT INTO audit_log (ts,actor,action,target,detail) VALUES (?,?,?,?,?)"
+    record = (now_iso(), actor, action, target,
+              json.dumps(detail, ensure_ascii=False) if detail is not None else None)
+    if connection is not None:
+        connection.execute(sql, record)
+        return
     with ops() as con:
-        con.execute("INSERT INTO audit_log (ts,actor,action,target,detail) VALUES (?,?,?,?,?)",
-                    (now_iso(), actor, action, target,
-                     json.dumps(detail, ensure_ascii=False) if detail is not None else None))
+        con.execute(sql, record)
 
 
 # ---------------------------------------------------------------- 工具

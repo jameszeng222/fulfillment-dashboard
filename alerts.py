@@ -9,7 +9,7 @@
 已实现（数据支持）：
   R02 超时未签出   履约单生成 >24h 仍未签出
   R03 物流未上网   签出 >2 自然日且无揽收轨迹
-  R04 运输超时     已签出未签收，超过该线路 SLA + 2 工作日
+  R04 运输超时     已签出未签收，超过当前渠道 SLA 加配置的自然日缓冲
   R05 物流断更     有轨迹但最后一条有效轨迹 >3 工作日
   R07 海关卡关     清关中/需补资料，且停滞 >3 工作日
   R08 派送异常     投递失败 / 待自提
@@ -29,6 +29,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
+import sqlite3
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -36,8 +38,12 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from app.rules import PRIORITY as RULE_PRIORITY
-from app.rules import RULES_BY_KEY
+from app import core, rules
+from app.carrier_delivery import DELIVERED_UTC, reporting_facts
+from app.channel_timing import online_scan_join, timing_start
+from app.order_time import delivery_facts
+from app.tracking_archive import sources as tracking_sources
+from app.rules import PRIORITY as RULE_PRIORITY, RULES_BY_KEY
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "履约单.duckdb"
@@ -45,11 +51,10 @@ OUT_CSV = ROOT / "out" / "履约预警清单.csv"
 
 # 名称/级别/分类全部来自 app/rules.py，保证页面文案与判定口径一致
 RULE_CN = {k: v["name"] for k, v in RULES_BY_KEY.items()}
-RULE_SEVERITY = {k: v["level"] for k, v in RULES_BY_KEY.items()}
 RULE_GROUP = {k: v["category"] for k, v in RULES_BY_KEY.items()}
 
 DDL = """
-CREATE OR REPLACE TABLE fct_alert (
+CREATE OR REPLACE TEMP TABLE computed_alerts (
     履约单号      VARCHAR,
     规则          VARCHAR,
     规则中文      VARCHAR,
@@ -86,56 +91,51 @@ def load_calendar(con):
     """)
 
 
-def build(con, asof: str | None):
+def calculate(con, asof: str | None, rule_overrides, sla_overrides):
     load_calendar(con)
 
-    dmax = con.execute("SELECT max(创建日期) FROM 履约单明细").fetchone()[0]
-    asof = asof or str(dmax)
-    print(f"评估基准日: {asof}（数据最新下单日）")
+    raw_facts = core.active_facts(core.order_facts(con))
+    dmax = con.execute(f"SELECT max(创建日期) FROM {raw_facts}").fetchone()[0]
+    asof = date.fromisoformat(str(asof or dmax or date.today())).isoformat()
+    effective = rules.effective_rules(rule_overrides)
+    thresholds = {row["key"]: row["threshold"] for row in effective if "threshold" in row}
+    severities = {row["key"]: row["level"] for row in effective}
+    enabled = [row["key"] for row in effective if row["enabled"]]
+    facts = reporting_facts(con, delivery_facts(con, raw_facts))
+    tracking, _, _ = tracking_sources(con)
+    slas = rules.current_channel_slas(con, raw_facts, sla_overrides)
+    sla_sql, sla_values = rules.sla_table(slas)
+    have_online = any(config["basis"] == "online" for config in slas.values())
+    scan_join = online_scan_join(con) if have_online else ""
+    sla_start = timing_start("target.basis", have_online)
+    print(f"评估基准日: {asof}（最新履约单创建日，北京时间）")
 
     # ---- 订单底表（一单一行）+ 轨迹 + 线路 SLA ----
     con.execute(f"""
     CREATE OR REPLACE TEMP TABLE base AS
-    WITH o AS (
-        SELECT 履约单号,
-               any_value(出库单状态) 出库单状态,
-               any_value(物流服务商) 物流服务商,
-               any_value(仓库代码)   仓库代码,
-               any_value(目的国家英文名称) 目的国,
-               upper(regexp_replace(coalesce(any_value(快递单号),''),'[^A-Za-z0-9]','','g')) 快递单号,
-               min(创建时间_ts) 创建时间,
-               min(签出时间_ts) 签出时间,
-               any_value(签收时间_ts) 签收时间,
-               min(创建日期) 创建日期
-        FROM 履约单明细 GROUP BY 履约单号
-    ),
-    -- 线路 SLA：历史已签收单的 P90 尾程天数
-    sla AS (
-        SELECT 仓库代码, 物流服务商, 目的国,
-               quantile_cont(date_diff('minute', 签出时间, 签收时间)/1440.0, 0.9) p90,
-               count(*) n
-        FROM o WHERE 签收时间 IS NOT NULL AND 签出时间 IS NOT NULL AND 签收时间 > 签出时间
-        GROUP BY 1,2,3
-    ),
-    g AS (SELECT quantile_cont(date_diff('minute', 签出时间, 签收时间)/1440.0, 0.9) p90
-          FROM o WHERE 签收时间 IS NOT NULL AND 签出时间 IS NOT NULL AND 签收时间 > 签出时间)
-    SELECT o.*,
+    WITH target(ch, days, basis) AS ({sla_sql})
+    SELECT o.履约单号, o.状态 AS 出库单状态, o.物流商 AS 物流服务商, o.当前渠道,
+           o.仓库 AS 仓库代码, o.目的国, o.单号归一 AS 快递单号,
+           o.支付时间, o.创建时间, o.签出时间, o.签收时间, o.创建日期,
            t.状态 AS 轨迹状态, t.子状态 AS 轨迹子状态, t.最新事件时间, t.停滞天数,
-           t.签收时间 AS 承运商签收时间,
-           coalesce(sla.p90, g.p90, 7) AS 线路P90天,
-           date_diff('day', o.创建日期, DATE '{asof}') AS 下单已过天,
+           o.{DELIVERED_UTC} AS 承运商签收时间,
+           coalesce(target.days, {rules.DEFAULT_SLA_DAYS}) AS 承诺天数,
+           CASE target.basis WHEN 'paid' THEN '客户下单（支付）' WHEN 'online' THEN '物流上网'
+                ELSE '出库签出' END AS SLA起点,
+           date_diff('second', ({sla_start}), TIMESTAMP '{asof}') / 86400.0 AS SLA已过天,
+           date_diff('day', o.创建日期, DATE '{asof}') AS 创建已过天,
            CASE WHEN o.签出时间 IS NOT NULL
                 THEN date_diff('day', o.签出时间::DATE, DATE '{asof}') END AS 签出已过天,
            CASE WHEN t.最新事件时间 IS NOT NULL
-                THEN (SELECT wd FROM cal_idx WHERE d = t.最新事件时间::DATE) END AS 事件wd,
+                THEN (SELECT wd FROM cal_idx WHERE d = (t.最新事件时间 + INTERVAL '8 hours')::DATE) END AS 事件wd,
            CASE WHEN o.签出时间 IS NOT NULL
                 THEN (SELECT wd FROM cal_idx WHERE d = o.签出时间::DATE) END AS 签出wd,
            (SELECT wd FROM cal_idx WHERE d = DATE '{asof}') AS 基准wd
-    FROM o
-    LEFT JOIN trk_status t ON t.单号 = o.快递单号
-    LEFT JOIN sla ON sla.仓库代码=o.仓库代码 AND sla.物流服务商=o.物流服务商 AND sla.目的国=o.目的国
-    CROSS JOIN g
-    """)
+    FROM {facts} o
+    LEFT JOIN {tracking} t ON t.单号 = o.单号归一
+    LEFT JOIN target ON target.ch=o.当前渠道
+    {scan_join}
+    """, sla_values)
 
     n_open = con.execute(
         "SELECT count(*) FROM base WHERE 出库单状态 NOT IN ('已完成','已取消')").fetchone()[0]
@@ -148,9 +148,9 @@ def build(con, asof: str | None):
     -- R02 超时未签出：生成 >24h 仍未签出
     SELECT 履约单号, 'signout_timeout' AS 规则,
            'FS' AS 证据,
-           round(下单已过天, 1) AS 天数
+           round(创建已过天, 1) AS 天数
     FROM b
-    WHERE 签出时间 IS NULL AND 签出已过天 IS NULL AND 下单已过天 >= 1
+    WHERE 签出时间 IS NULL AND 签出已过天 IS NULL AND 创建已过天 >= {thresholds['signout_timeout']}
 
     UNION ALL
     -- R09 包裹退运
@@ -177,20 +177,20 @@ def build(con, asof: str | None):
     SELECT 履约单号, 'customs_hold', coalesce(轨迹子状态,''), 停滞天数
     FROM b
     WHERE 轨迹子状态 IN ('InTransit_CustomsProcessing','InTransit_CustomsRequiringInformation')
-      AND (基准wd - 事件wd) > 3
+      AND (基准wd - 事件wd) > {thresholds['customs_hold']}
 
     UNION ALL
     -- R05 物流断更：运输中，最后一条有效轨迹 >3 工作日
     SELECT 履约单号, 'no_update', coalesce(轨迹状态,''), (基准wd - 事件wd)
     FROM b
-    WHERE 轨迹状态 = 'InTransit' AND 事件wd IS NOT NULL AND (基准wd - 事件wd) > 3
+    WHERE 轨迹状态 = 'InTransit' AND 事件wd IS NOT NULL AND (基准wd - 事件wd) > {thresholds['no_update']}
       AND 签收时间 IS NULL
 
     UNION ALL
     -- R06 物流停滞：已到目的地但不动 >3 工作日（子状态 Arrival/Other 且停滞）
     SELECT 履约单号, 'stagnation', coalesce(轨迹子状态,''), 停滞天数
     FROM b
-    WHERE 轨迹子状态 = 'InTransit_Arrival' AND 停滞天数 > 3 AND 签收时间 IS NULL
+    WHERE 轨迹子状态 = 'InTransit_Arrival' AND 停滞天数 > {thresholds['stagnation']} AND 签收时间 IS NULL
 
     UNION ALL
     -- R03 物流未上网：签出 >2 自然日，且**有轨迹但停在"仅收到信息/查无此单"**
@@ -199,17 +199,19 @@ def build(con, asof: str | None):
     -- 这类单单独计入数据健康（无轨迹数据），不进入业务预警。
     SELECT 履约单号, 'not_online', coalesce(轨迹状态,''), 签出已过天
     FROM b
-    WHERE 签收时间 IS NULL AND 签出时间 IS NOT NULL AND 签出已过天 > 2
+    WHERE 签收时间 IS NULL AND 签出时间 IS NOT NULL AND 签出已过天 > {thresholds['not_online']}
       AND 轨迹状态 IN ('InfoReceived','NotFound')
 
     UNION ALL
-    -- R04 运输超时：已签出未签收、17track 也没显示已签收，且超过线路 P90 + 2 工作日
-    SELECT 履约单号, 'transport_timeout', '线路P90 ' || round(线路P90天,1) || '天', 签出已过天
+    -- R04 运输超时：从当前渠道承诺的计时起点算起。
+    SELECT 履约单号, 'transport_timeout',
+           coalesce(当前渠道, '未填写当前渠道') || ' · ' || SLA起点 || ' · SLA ' || 承诺天数 || '天 + ' || {thresholds['transport_timeout']} || '天',
+           round(SLA已过天, 1)
     FROM b
     WHERE 签收时间 IS NULL AND 签出时间 IS NOT NULL
       AND coalesce(轨迹状态,'') <> 'Delivered'
-      AND coalesce(承运商签收时间, 签收时间) IS NULL
-      AND 签出已过天 > 线路P90天 + 2
+      AND 承运商签收时间 IS NULL
+      AND SLA已过天 > 承诺天数 + {thresholds['transport_timeout']}
     """
     con.execute(rules_sql)
 
@@ -227,16 +229,16 @@ def build(con, asof: str | None):
            CASE h.规则 {prio_case} ELSE 99 END AS prio,
            row_number() OVER (PARTITION BY h.履约单号
                               ORDER BY CASE h.规则 {prio_case} ELSE 99 END) AS rn
-    FROM hits h
-    """)
+    FROM hits h WHERE h.规则 IN (SELECT unnest(?::VARCHAR[]))
+    """, [enabled])
 
     con.execute(DDL)
     con.execute(f"""
-    INSERT INTO fct_alert
+    INSERT INTO computed_alerts
     SELECT b.履约单号, r.规则,
            CASE r.规则 {' '.join(f"WHEN '{k}' THEN '{v}'" for k, v in RULE_CN.items())} ELSE r.规则 END,
            CASE r.规则 {' '.join(f"WHEN '{k}' THEN '{v}'" for k, v in RULE_GROUP.items())} ELSE '其他异常' END,
-           CASE r.规则 {' '.join(f"WHEN '{k}' THEN '{v}'" for k, v in RULE_SEVERITY.items())} ELSE '中' END,
+           CASE r.规则 {' '.join(f"WHEN '{k}' THEN '{v}'" for k, v in severities.items())} ELSE '中' END,
            r.rn = 1,
            r.证据, r.天数,
            b.出库单状态, b.物流服务商, b.仓库代码, b.目的国, b.快递单号,
@@ -245,8 +247,17 @@ def build(con, asof: str | None):
     ORDER BY r.rn, r.prio
     """)
 
-    total = con.execute("SELECT count(*) FROM fct_alert").fetchone()[0]
-    main_cnt = con.execute("SELECT count(*) FROM fct_alert WHERE 是否主预警").fetchone()[0]
+    return con.execute("SELECT count(*), count(*) FILTER (WHERE 是否主预警) FROM computed_alerts").fetchone()
+
+
+def build(con, asof: str | None):
+    ops_path = ROOT / "ops.db"
+    overrides = ({}, {})
+    if ops_path.exists():
+        with closing(sqlite3.connect(ops_path)) as settings:
+            overrides = rules.load_settings(settings)
+    total, main_cnt = calculate(con, asof, *overrides)
+    con.execute("CREATE OR REPLACE TABLE fct_alert AS SELECT * FROM computed_alerts")
     print(f"写入 fct_alert: {total:,} 行（主预警 {main_cnt:,} 单）")
     write_order_alert(con)
     push_to_ops(con)
@@ -256,31 +267,34 @@ def build(con, asof: str | None):
 def push_to_ops(dcon):
     """把 fct_alert 镜像到 SQLite 的 alerts 表，供 API 直接查询。
     alert_state（处理状态）不受影响 —— 重算预警不会清掉人已经处理过的记录。"""
-    import sqlite3
     ops = ROOT / "ops.db"
     if not ops.exists():
         print("  ops.db 不存在，跳过镜像（先跑 python init_ops.py）")
         return
-    rows = dcon.execute("""
+    with closing(sqlite3.connect(ops, timeout=15)) as db:
+        db.execute("PRAGMA journal_mode=WAL")
+        with db:
+            n = update_alert_mirror(dcon, db, computed=False)
+    print(f"  已镜像到 ops.db: {n:,} 条预警")
+
+
+def update_alert_mirror(dcon, db, *, computed=True):
+    table = "computed_alerts" if computed else "fct_alert"
+    rows = dcon.execute(f"""
         SELECT 履约单号, 规则, 规则中文, 业务分类, 级别, 是否主预警, 证据, 天数,
                出库单状态, 物流服务商, 仓库代码, 目的国, 快递单号,
                轨迹状态, 轨迹子状态, 创建日期::VARCHAR, 签出日期::VARCHAR, 评估基准日::VARCHAR
-        FROM fct_alert
+        FROM {table}
     """).fetchall()
     now = datetime.now().isoformat(timespec="seconds")
-    scon = sqlite3.connect(ops, timeout=15)
-    scon.execute("PRAGMA journal_mode=WAL")
-    scon.execute("DELETE FROM alerts")
-    scon.executemany(
+    db.execute("DELETE FROM alerts")
+    db.executemany(
         "INSERT OR REPLACE INTO alerts (order_no,rule,rule_cn,category,level,is_main,evidence,days,"
         "order_status,carrier,warehouse,country,tracking_no,track_status,track_sub,"
         "created_date,shipped_date,base_date,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [(r[0], r[1], r[2], r[3], r[4], 1 if r[5] else 0, r[6], r[7], r[8], r[9], r[10], r[11], r[12],
           r[13], r[14], r[15], r[16], r[17], now) for r in rows])
-    scon.commit()
-    n = scon.execute("SELECT count(*) FROM alerts").fetchone()[0]
-    scon.close()
-    print(f"  已镜像到 ops.db: {n:,} 条预警")
+    return len(rows)
 
 
 def write_order_alert(dcon):

@@ -76,6 +76,7 @@ $env:TRACK17_TOKEN = "你的key"        # 只放环境变量
 python track17.py plan                 # 看要拉多少、按承运商分布
 python track17.py poll --limit 400     # 拉（每批 40 个）
 python track17.py poll --days 7        # 只拉最近 7 天创建的单
+python track17.py poll --completed --days 7 --limit 40  # 小批回查近期 ERP 已签收单
 python track17.py poll --carrier postnet
 python track17.py status               # 统计
 python track17.py selftest             # 不需要 token，验证解析逻辑
@@ -95,7 +96,7 @@ python track17.py selftest             # 不需要 token，验证解析逻辑
 
 也就是说：**南非线能拉到，美国线拉不到**。要补美国线需要另配注册。
 
-**响应结构**（v2.2，本账号实测）：没有 `events[]`，详细信息在 `milestone[]`：
+**响应结构**（v2.2）：`milestone[]` 为标准关键节点，`tracking.providers[].events[]` 是承运商逐条回传。
 
 | 字段 | 内容 |
 |---|---|
@@ -103,14 +104,16 @@ python track17.py selftest             # 不需要 token，验证解析逻辑
 | `track_info.latest_event` | 最新事件的时间、描述、地点 |
 | `track_info.time_metrics` | `days_of_transit` / `days_after_order` / **`estimated_delivery_date`（AI EDD）** |
 | `track_info.milestone[]` | 9 个关键节点：InfoReceived / PickedUp / Departure / Arrival / AvailableForPickup / OutForDelivery / Delivered / Returning / Returned |
+| `track_info.tracking.providers[].events[]` | 按承运商返回事件时间、地点与描述。明细写入 `trk_event`，旧履约单可用 `--completed` 回查 |
 | `track_info.misc_info.risk_factor` | 风险因子 |
 
-落三张表：
+写入的数据表：
 
 | 表 | 内容 |
 |---|---|
 | `trk_status` | 单号级最新状态、签收时间、运输天数、EDD、风险因子 |
 | `trk_milestone` | 9 个关键节点的时间 |
+| `trk_event` | 承运商逐条事件，按运单号和查询运输商标识读取 |
 | `trk_missing` | 未注册的单号（避免反复查） |
 
 外加视图 `trk_order_link`：把轨迹与履约单左连，算 `承运商尾程天` 和签收对账
@@ -237,9 +240,72 @@ C 端承运商名称做了归一：`FedEx/Fedex/fedex`、`FedEx SmartPost/Fedex 
 `assemble.py` 会检查两个占位符各出现且仅出现一次——提示文案里如果写了占位符字面量，
 数据会被注入多次，文件直接翻倍，脚本会拦住并报错。
 
-## 履约追踪系统（服务版）
+## 履约监控系统（服务版）
 
 上面那个单文件看板是**只读快照**。要做"谁在处理哪张单"这类事，用系统版：
+
+### 本机预览
+
+```powershell
+python preview.py --data-dir "D:\履约数据"
+```
+
+打开 `http://127.0.0.1:8766/preview`。数据目录应包含 `履约单.duckdb` 和 `ops.db`。
+预览读取源履约数据，首次启动时将操作库复制到当前项目。认领、归档、备注等操作写入预览操作库，重启后仍可查询。
+预览入口仅在上述本机启动模式提供。常规服务使用下方登录流程。
+可用 `--facts-file` 读取一份包含轨迹回查结果的独立履约数据库，同时继续使用当前项目的预览操作库。
+
+### 本机数据库与更新
+
+以下命令在履约监控系统的项目目录（含 `preview.py`）运行：
+
+| 文件 | 用途 |
+|---|---|
+| 桌面 `履约单2026` | 新 ERP Excel 导出的投放文件夹 |
+| 当前项目的 `履约单.duckdb` | 履约明细、汇总、滚动查询的 17TRACK 事件（`trk_event`）、历史逐条轨迹（`trk_archive_event`）及索引 |
+| 当前项目的 `ops.db` | 本地 SLA、预警规则、认领、归档、备注及任务日志 |
+| 当前项目的 `17TRACK历史轨迹.sqlite3` | 历史回补程序的断点进度与导入源。成功导入后，网页从 DuckDB 读取轨迹 |
+| 桌面 `履约单和轨迹分析2026\履约单.duckdb` | 原静态看板的独立数据文件 |
+
+原看板的 Windows 任务每 30 分钟扫描「下载」和桌面的「履约单2026」文件夹，按文件指纹导入新 ERP 导出。任务调用 `sync.py --push`，有新数据时会重建并发布原静态看板。
+
+本机履约监控系统由 `sync_control_tower.ps1` 更新，运行日志在项目目录的 `rolling-sync.log`。Windows 计划任务每 5 分钟扫描桌面「履约单2026」中的 `履约单数据_*.xlsx` 等支持的 Excel 格式。按文件内容去重，按履约单号、SKU、批次合并。同一明细的导出时间可从文件名识别时保留时间较新的版本。重建统计和预警后切换新数据，上一个数据库保存在 `履约单.previous.duckdb`。正在打开的网页刷新后可查看结果，页面右上角显示建单截止日期和最近导入时间，「数据与规则」保留导入记录。
+
+```powershell
+.\sync_control_tower.ps1                 # 立即检查 ERP 导出
+.\sync_control_tower.ps1 -TrackLimit 4000 # 立即检查近期轨迹
+.\sync_control_tower.ps1 -ImportArchive  # 将历史回补文件的逐条轨迹和索引导入 DuckDB
+```
+
+17TRACK 计划任务每 2 小时分批检查近期运单，每次最多 4,000 个，单号至少间隔 6 小时再查。使用已登记的运单号和实际承运商代码读取逐条事件，跳过 Postnet。任务凭据存放在当前 Windows 用户的加密本地文件中。两个任务均在该 Windows 用户登录期间运行。准备数据期间保持页面可用，替换数据库时会短暂重启正在运行的预览。
+
+「数据与规则 → 17TRACK 同步」显示定时拉取的最近成功时间、下次计划、最近批次结果，以及 Webhook 的收件和入库时间。打开该页时每 30 秒读取状态。拉取、收件、入库由本机程序负责，浏览器关闭时也可运行。
+
+Webhook 接收路径是 `POST /api/17track/webhook`。部署时只将该路径通过可信反向代理发布为公网 HTTPS 地址，把完整地址设置为服务进程的 `TRACK17_WEBHOOK_URL`，再到 [17TRACK 后台设置](https://api.17track.net/admin/settings) 保存并测试。当前 Windows 用户的本地加密凭据可直接验签，其他部署可在服务端用 `TRACK17_WEBHOOK_KEY` 或 `TRACK17_TOKEN` 提供对应的 API 密钥。
+
+推送验签后进入 `ops.db` 的持久队列。现有的五分钟任务在检查履约明细时同时处理推送。按运单号匹配，已确认承运商代码的单继续使用该代码，避免旧推送覆盖新状态。Webhook 到得比 ERP 导出早时会暂存，最长等待 24 小时。轨迹发布成功后，收件记录保留用于查验，收件内容从队列中清除。
+
+支付时间（客户下单）、履约单创建时间、签出时间（出库）均为北京时间。妥投时效、P90 和 SLA 优先使用 17TRACK 确认的妥投时间。缺少该时间时，按仓库的 WMS 导出时间口径补算。JY01、XC01 等北京时间仓直接使用原始时间，海外 WINIT 按收货地时区及当地夏令时换算。下单和出库使用 ERP 起点，上网使用首条有效揽收或运输扫描。缺少可信妥投时间或有效起点的履约单不进入相应口径的时效样本。详情保留 WMS 原始时间并显示妥投统计来源。17TRACK 轨迹和妥投在网页上用承运商当地时间显示，缺当地时间时标注 UTC。
+
+`reference/us-postal-timezones.csv` 提取了 [Ready APIs curated-us-zips](https://github.com/ReadyAPIs-com/curated-us-zips) 数据的邮编、州和 IANA 时区三列并按邮编排序，按 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 使用。加拿大部分地区采用 [Canada Post 邮编区域](https://www.canadapost-postescanada.ca/cpc/en/support/articles/addressing-guidelines/postal-codes.page) 与 [加拿大国家研究委员会时区资料](https://nrc.canada.ca/en/certifications-evaluations-standards/canadas-official-time/time-zones-daylight-saving-time)。
+
+查询新的 17TRACK 运单可在预览退出期间，从当前项目执行 `python track17.py poll --days 7 --carrier WYT-USPS`。密钥从 `TRACK17_TOKEN` 读取。该命令按所选渠道查询已有登记，并将结果写入当前项目的 DuckDB。
+
+页面布局在 `templates/app.html`，样式和交互在 `static/app.css`、`static/app.js`。这些文件修改后刷新浏览器。修改 `app/` 中的 Python 服务端代码后，重启本地预览服务以加载改动。
+
+### 历史轨迹离线回补
+
+```powershell
+python backfill_tracking.py --facts "D:\履约数据\履约单.duckdb" --output "17TRACK历史轨迹.sqlite3" --since 2026-07-21 --through 2026-11-18
+```
+
+使用 `TRACK17_TOKEN` 环境变量。程序按 17TRACK 登记列表取得运输商代码，再查询已有运单的逐条事件。
+SQLite 中的 `packages` 保存每单查询进度，`tracking_details` 保存每个运单号与运输商代码的查询结果，
+`tracking_events` 保存逐条事件。中断后以相同数据源、日期和输出文件启动即可继续。
+
+回补后，从当前项目目录运行 `.\sync_control_tower.ps1 -ImportArchive`。程序将一致的 SQLite 快照分批导入 DuckDB，核对逐条事件行数，并按履约单和运单号重建索引。发布快照时会短暂重启正在运行的预览。详情使用 DuckDB 中的近期和历史事件合并显示。备份业务数据可保存 `履约单.duckdb` 与 `ops.db`，要接续批量回补时也保留历史 SQLite 文件。
+
+加上 `--all-waybills` 可按运单号补查缺少逐条事件的履约单，范围日期优先取签收日，其次取签出日或履约单创建日，不按 ERP 状态筛选。已有结果沿用同一个 SQLite 文件。ERP 运单号末尾的 `+数字` 只用于保留原始显示，查询使用主运单号。回补通过 17TRACK 登记列表取得实际运输商代码，只读取当前账号里的记录。
 
 ```powershell
 python init_ops.py          # 建操作库 ops.db（首次）
@@ -289,7 +355,6 @@ python -m uvicorn app.main:app --port 8000
 ### 还没做的
 
 - 定时任务（ERP 同步、17track 拉取、预警重算）——目前需手动跑
-- 批量操作、导出
 - 角色数据范围（物流部只看自己团队）
 - 部署方案（Docker / 服务器）
 

@@ -1,97 +1,153 @@
 """四个业务页面的数据接口：总览 / 轨迹监控 / 渠道时效 / 规则。"""
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+import re
+from functools import lru_cache
+from typing import Literal
+from unicodedata import normalize
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, Field
+import pandas as pd
 
 from . import core, rules
+from .carrier_delivery import DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts
+from .channel_timing import ONLINE_START, TimingBasis, online_scan_join, timing_start
+from .order_time import delivery_facts
+from .tracking_archive import fill_local_times, sources as tracking_sources
+from .waybill import key_sql, normalized as normalize_waybill
 
 router = APIRouter(prefix="/api")
+
+TRACK_STATUS_LABEL = """coalesce(t.状态中文, CASE
+    WHEN m.单号 IS NOT NULL THEN 'API 账号登记未匹配'
+    WHEN h.回补状态='empty' THEN '已查询 · 未返回轨迹'
+    WHEN o.已签收=1 THEN '已签收 · 轨迹未入库'
+    WHEN o.签出时间 IS NOT NULL THEN '已出库 · 待同步轨迹'
+    ELSE '其他履约单 · 无本地结果' END)"""
 
 
 # ---------------------------------------------------------------- 公共
 
-def _multi(v):
-    return [x.strip() for x in (v or "").split(",") if x.strip()]
-
-
 def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="",
-          alias="o"):
+          alias="o", lastmile="", channel=""):
     """返回 (sql, args)，sql 形如 " AND ..."，可直接拼在 WHERE 1=1 之后。"""
     w, a = [], []
 
-    def inl(col, vals):
+    def inl(column, value):
+        vals = core.filter_values(value)
         if vals:
-            w.append(f'{alias}."{col}" IN ({",".join("?" * len(vals))})')
+            w.append(f'{column} IN ({",".join("?" * len(vals))})')
             a.extend(vals)
 
-    if month:
-        w.append(f"{alias}.创建月份 = ?"); a.append(month)
-    inl("仓库", _multi(wh))
-    inl("平台", _multi(pf))
-    inl("物流商", _multi(cr))
-    inl("目的国", _multi(cn))
-    inl("状态", _multi(status))
+    for column, value in (("创建月份", month), ("仓库", wh), ("平台", pf), ("物流商", cr),
+                          ("目的国", cn), ("状态", status), ("当前渠道", channel)):
+        inl(f'{alias}."{column}"', value)
+    inl(f"coalesce(nullif({alias}.C端承运商,''),'__empty__')", lastmile)
     if start:
         w.append(f"{alias}.创建日期 >= ?"); a.append(start)
     if end:
         w.append(f"{alias}.创建日期 <= ?"); a.append(end)
-    if q:
-        w.append(f"({alias}.履约单号 LIKE ? OR {alias}.快递单号 LIKE ? OR {alias}.订单号 LIKE ?)")
-        a.extend([f"%{q}%"] * 3)
+    query = normalize("NFKC", q).strip().upper()
+    if query:
+        columns = ("履约单号", "快递单号", "订单号", "平台订单号")
+        searches = [f"contains(upper({alias}.{column}), ?)" for column in columns]
+        a.extend([query] * len(columns))
+        number = re.sub(r"[^A-Z0-9]", "", query)
+        if number:
+            tracking_number = normalize_waybill(query)
+            if tracking_number:
+                searches.append(f"contains({alias}.单号归一, ?)")
+                a.append(tracking_number)
+                if len(tracking_number) >= 8:
+                    searches.append(f"""{alias}.履约单号 IN (
+                        SELECT x.履约单号 FROM 履约单明细 x WHERE {key_sql("x.快递单号")}=?
+                    )""")
+                    a.append(tracking_number)
+            if number != query:
+                searches.extend(f"upper({alias}.{column}) = ?" for column in ("履约单号", "订单号"))
+                a.extend([number] * 2)
+        w.append("(" + " OR ".join(searches) + ")")
     return (" AND " + " AND ".join(w)) if w else "", a
-
-
-def _sla_values() -> str:
-    """把渠道 SLA 目标转成 DuckDB 的 VALUES 表，供单次 join 用。"""
-    rows = []
-    for ch, days in rules.CHANNEL_SLA.items():
-        t = rules.targets(ch)
-        rows.append(f"('{ch}',{days},{t['d3']},{t['d5']},{t['d6']})")
-    d = rules.DEFAULT_TARGETS
-    rows.append(f"('__default__',{rules.DEFAULT_SLA_DAYS},{d['d3']},{d['d5']},{d['d6']})")
-    return "VALUES " + ",".join(rows)
 
 
 # ---------------------------------------------------------------- 总览
 
 @router.get("/overview")
 def overview(request: Request, month: str = "", wh: str = "", pf: str = "", cr: str = "",
-             cn: str = "", start: str = "", end: str = ""):
+             cn: str = "", start: str = "", end: str = "", lastmile: str = "", channel: str = ""):
     core.require_user(request)
-    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end)
+    return _overview(core.snapshot_key(), month, wh, pf, cr, cn, start, end, lastmile, channel)
+
+
+@lru_cache(maxsize=32)
+def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel):
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel)
 
     con = core.duck()
     try:
+        all_orders = core.order_facts(con)
+        active_orders = core.active_facts(all_orders)
+        order_facts = delivery_facts(con, active_orders)
+        facts = reporting_facts(con, order_facts)
+        tracking, missing, archive = tracking_sources(con)
+        con.execute(f"""
+            CREATE TEMP TABLE overview_timing AS
+            SELECT o.创建月份,o.仓内分钟,o.物流分钟,o.件数,o.仓库,o.物流商,o.目的国中文,
+                   o.C端承运商,o.当前渠道,o.{DELIVERED_BJ},o.{DELIVERY_SOURCE}
+            FROM {facts} o WHERE 1=1{cond}
+        """, args)
         k = con.execute(f"""
-            SELECT count(*) n, coalesce(sum(件数),0) items, sum(已签收) sign,
+            SELECT count(*) n, coalesce(sum(件数),0) items, count({DELIVERED_BJ}) sign,
                    avg(仓内分钟) FILTER (WHERE 仓内分钟 > 0) hm,
                    avg(物流分钟) FILTER (WHERE 物流分钟 > 0) tm,
-                   count(*) FILTER (WHERE 已签收=1 AND 物流分钟 > 0) sgn,
-                   count(*) FILTER (WHERE 已签收=1 AND 物流分钟 > 0 AND 物流分钟 <= 4320) d3,
-                   count(*) FILTER (WHERE 已签收=1 AND 物流分钟 > 0 AND 物流分钟 <= 7200) d5,
-                   count(*) FILTER (WHERE 已签收=1 AND 物流分钟 > 0 AND 物流分钟 <= 8640) d6,
-                   count(*) FILTER (WHERE 已签收=1 AND 物流分钟 > 0 AND 物流分钟 <= 10080) d7
-            FROM fct_order o WHERE 1=1{cond}
-        """, args).fetchone()
+                   count(*) FILTER (WHERE 物流分钟 > 0) sgn,
+                   count(*) FILTER (WHERE 物流分钟 > 0 AND 物流分钟 <= 4320) d3,
+                   count(*) FILTER (WHERE 物流分钟 > 0 AND 物流分钟 <= 7200) d5,
+                   count(*) FILTER (WHERE 物流分钟 > 0 AND 物流分钟 <= 8640) d6,
+                   count(*) FILTER (WHERE 物流分钟 > 0 AND 物流分钟 <= 10080) d7,
+                   count(*) FILTER (WHERE {DELIVERY_SOURCE}='WMS') fallback_signed,
+                   count(*) FILTER (WHERE {DELIVERY_SOURCE}='WMS' AND 物流分钟>0) fallback_samples
+            FROM overview_timing
+        """).fetchone()
 
         def by(col, limit=20):
             return con.execute(f"""
-                SELECT o."{col}" k, count(*) n, sum(o.已签收) s,
+                SELECT o."{col}" k, count(*) n, count(o.{DELIVERED_BJ}) s,
                        avg(o.物流分钟) FILTER (WHERE o.物流分钟 > 0)/1440.0 d
-                FROM fct_order o WHERE 1=1{cond} GROUP BY 1 ORDER BY n DESC LIMIT {limit}
-            """, args).df().to_dict("records")
+                FROM overview_timing o GROUP BY 1 ORDER BY n DESC, k NULLS LAST LIMIT {limit}
+            """).df().to_dict("records")
 
         monthly = con.execute(f"""
-            SELECT o.创建月份 m, count(*) n, sum(o.已签收) s,
+            SELECT o.创建月份 m, count(*) n, count(o.{DELIVERED_BJ}) s,
                    avg(o.物流分钟) FILTER (WHERE o.物流分钟 > 0)/1440.0 d
-            FROM fct_order o WHERE 1=1{cond} GROUP BY 1 ORDER BY 1
-        """, args).df().to_dict("records")
+            FROM overview_timing o GROUP BY 1 ORDER BY 1
+        """).df().to_dict("records")
+        daily = con.execute(f"""
+            SELECT o.创建日期::VARCHAR AS day, count(*) AS n
+            FROM {order_facts} o WHERE o.创建日期 IS NOT NULL{cond}
+            GROUP BY 1 ORDER BY 1
+        """, args).fetchall()
 
         by_carrier = by("物流商", 20)
         by_wh = by("仓库", 20)
         by_country = by("目的国中文", 15)
-        by_status = by("状态", 20)
-        asof = con.execute("SELECT max(创建日期) FROM fct_order").fetchone()[0]
+        by_status = con.execute(f"""
+            SELECT coalesce(o.状态, '未填写状态') k, count(*) n
+            FROM {all_orders} o WHERE 1=1{cond} GROUP BY 1 ORDER BY n DESC,k
+        """, args).df().to_dict("records")
+        by_last_mile = by("C端承运商", 16)
+        by_current_channel = by("当前渠道", 10)
+        track_states = con.execute(f"""
+            SELECT {TRACK_STATUS_LABEL} k, count(*) n
+            FROM {order_facts} o
+            LEFT JOIN {tracking} t ON t.单号=o.单号归一
+            LEFT JOIN {missing} m ON m.单号=o.单号归一
+            LEFT JOIN {archive} h ON h.履约单号=o.履约单号 AND h.单号=o.单号归一
+            WHERE 1=1{cond}
+            GROUP BY 1 ORDER BY 2 DESC
+        """, args).df().to_dict("records")
+        asof = con.execute(f"SELECT max(创建日期) FROM {active_orders}").fetchone()[0]
     finally:
         con.close()
 
@@ -108,11 +164,15 @@ def overview(request: Request, month: str = "", wh: str = "", pf: str = "", cr: 
             "signRate": round(100.0 * (k[2] or 0) / n, 1) if n else None,
             "inboundHours": round(k[3] / 60.0, 2) if k[3] else None,
             "transitDays": round(k[4] / 1440.0, 2) if k[4] else None,
+            "transitSamples": sgn,
             "rate3": rate(k[6]), "rate5": rate(k[7]), "rate6": rate(k[8]), "rate7": rate(k[9]),
-            "signed": sgn,
+            "signed": int(k[2] or 0),
+            "fallbackSigned": k[10], "fallbackTransitSamples": k[11],
         },
         "monthly": monthly, "byCarrier": by_carrier, "byWarehouse": by_wh,
+        "daily": [{"day": day, "n": count} for day, count in daily],
         "byCountry": by_country, "byStatus": by_status,
+        "byLastMile": by_last_mile, "byCurrentChannel": by_current_channel, "byTrackingStatus": track_states,
     })
 
 
@@ -123,61 +183,131 @@ def track(request: Request,
           page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
           q: str = "", month: str = "", wh: str = "", pf: str = "", cr: str = "",
           cn: str = "", tstat: str = "", rule: str = "", signed: str = "",
-          sort: str = "停滞天数", order: str = "desc"):
+          sort: str = "停滞天数", order: str = "desc",
+          start: str = "", end: str = "", lastmile: str = "",
+          sub: str = "", coverage: str = "", channel: str = ""):
     core.require_user(request)
-    cond, args = _cond(month, wh, pf, cr, cn)
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q=q, lastmile=lastmile, channel=channel)
 
-    if tstat:
-        vals = _multi(tstat)
-        cond += f' AND t.状态 IN ({",".join("?" * len(vals))})'
-        args.extend(vals)
-    if rule:
-        vals = _multi(rule)
-        cond += f' AND a.主预警规则 IN ({",".join("?" * len(vals))})'
-        args.extend(vals)
+    for column, value in (("t.状态", tstat), ("t.子状态", sub), ("a.主预警规则", rule)):
+        vals = core.filter_values(value)
+        if vals:
+            cond += f' AND {column} IN ({",".join("?" * len(vals))})'
+            args.extend(vals)
+    if coverage == "canceled_unstored":
+        cond += " AND FALSE"
+    if coverage in ("tracked", "unmatched", "queried_empty", "unknown", "signed_unstored",
+                    "shipped_unstored", "other_unstored"):
+        cond += {
+            "tracked": " AND (t.单号 IS NOT NULL OR h.回补状态='empty')",
+            "unmatched": " AND t.单号 IS NULL AND m.单号 IS NOT NULL",
+            "queried_empty": " AND t.单号 IS NULL AND m.单号 IS NULL AND h.回补状态='empty'",
+            "unknown": " AND t.单号 IS NULL AND m.单号 IS NULL AND h.回补状态 IS NULL",
+            "signed_unstored": " AND t.单号 IS NULL AND m.单号 IS NULL AND h.回补状态 IS NULL AND o.已签收=1",
+            "shipped_unstored": " AND t.单号 IS NULL AND m.单号 IS NULL AND h.回补状态 IS NULL AND o.已签收=0 AND o.签出时间 IS NOT NULL",
+            "other_unstored": " AND t.单号 IS NULL AND m.单号 IS NULL AND h.回补状态 IS NULL AND o.已签收=0 AND o.签出时间 IS NULL",
+        }[coverage]
     if signed in ("0", "1"):
         cond += " AND o.已签收 = ?"; args.append(int(signed))
 
     sort_cols = {"停滞天数": "t.停滞天数", "签出时间": "o.签出时间", "创建时间": "o.创建时间",
-                 "物流分钟": "o.物流分钟", "履约单号": "o.履约单号"}
+                 "物流分钟": "o.物流分钟", "履约单号": "o.履约单号", "逐条事件数": "逐条事件数"}
     sc = sort_cols.get(sort, "t.停滞天数")
     direction = "ASC" if order.lower() == "asc" else "DESC"
     off = (page - 1) * size
 
-    base = ("FROM fct_order o "
-            "LEFT JOIN trk_status t ON t.单号 = o.单号归一 "
-            "LEFT JOIN fct_order_alert a ON a.履约单号 = o.履约单号"
-            " WHERE 1=1" + cond)
-
     con = core.duck()
     try:
-        total = con.execute(f"SELECT count(*) {base}", args).fetchone()[0]
-        rows = con.execute(f"""
-            SELECT o.履约单号, o.快递单号, o.平台, o.仓库, o.物流商, o.C端承运商,
-                   o.目的国中文, o.状态, o.创建时间, o.签出时间, o.签收时间,
+        facts = delivery_facts(con, core.active_facts(core.order_facts(con)))
+        tracking, missing, archive = tracking_sources(con)
+        with core.ops() as ops:
+            summaries = ops.execute("""
+                SELECT order_no, max(rule_cn) FILTER (WHERE is_main), max(rule) FILTER (WHERE is_main),
+                       max(level) FILTER (WHERE is_main), count(*)
+                FROM alerts GROUP BY order_no
+            """).fetchall()
+        con.register("live_alerts", pd.DataFrame.from_records(
+            summaries, columns=["履约单号", "主预警名称", "主预警规则", "主预警级别", "预警数"]
+        ).astype({"履约单号": "string", "主预警名称": "string", "主预警规则": "string",
+                  "主预警级别": "string", "预警数": "int64"}))
+        event_columns = core.columns(con, "trk_event")
+        event_key = "e.单号=o.单号归一"
+        if "运输商代码" in event_columns:
+            event_key += " AND (e.运输商代码 = coalesce(t.carrier, 0) OR e.运输商代码 IS NULL)"
+        if coverage == "detailed":
+            native = f" OR EXISTS (SELECT 1 FROM trk_event e WHERE {event_key})" if event_columns else ""
+            cond += f" AND (h.事件数>0{native})"
+        native_count = f"(SELECT count(*) FROM trk_event e WHERE {event_key})" if event_columns else "0"
+        event_count = f"coalesce(nullif(h.事件数,0),{native_count})"
+        joined = (f"LEFT JOIN {tracking} t ON t.单号 = o.单号归一 "
+                f"LEFT JOIN {missing} m ON m.单号 = o.单号归一 "
+                f"LEFT JOIN {archive} h ON h.履约单号=o.履约单号 AND h.单号=o.单号归一 "
+                "LEFT JOIN live_alerts a ON a.履约单号 = o.履约单号"
+                " WHERE 1=1" + cond)
+        timed_sort = sc == "o.物流分钟"
+        page_facts = reporting_facts(con, facts) if timed_sort else facts
+        timing_columns = f"o.{DELIVERED_UTC}, o.{DELIVERED_BJ}, o.{DELIVERY_SOURCE}, o.{WMS_CLOCK}," if timed_sort else ""
+        # Counting native events for all matching orders is only required when
+        # that count determines the sort order. Otherwise count the chosen page.
+        order_by_count = sc == "逐条事件数"
+        projected_events = f"{event_count} AS 逐条事件数" if order_by_count else "h.事件数 AS archive_events"
+        page_query = f"""
+            SELECT o.履约单号, o.订单号, o.快递单号, o.单号归一, o.平台, o.仓库, o.物流商, o.C端承运商, o.当前渠道,
+                   o.目的国中文, o.状态, o.支付时间, o.创建时间, o.签出时间, o.签收时间,
+                   {timing_columns}
+                   t.签收时间 AS tracked_delivery,t.签收当地时间 AS tracked_delivery_local,
+                   o.签收北京时间, o.签收时区,
                    o.物流分钟, o.已签收,
                    t.状态 AS 轨迹状态, t.状态中文 AS 轨迹状态中文, t.子状态 AS 轨迹子状态,
-                   t.最新事件时间, t.最新描述, t.地点, t.停滞天数,
-                   a.主预警名称, a.主预警级别, a.预警数,
-                   (o.单号归一 IN (SELECT 单号 FROM trk_missing)) AS 未注册
-            {base}
+                   t.最新事件时间, t.最新事件当地时间, t.最新描述, t.地点, t.停滞天数,
+                   h.carrier AS 回补运输商代码,
+                   t.carrier AS 运输商代码, coalesce(t.查询时间,h.查询时间) AS 查询时间, h.回补状态,
+                   {projected_events},
+                   a.主预警名称, a.主预警规则, a.主预警级别, a.预警数,
+                   (t.单号 IS NULL AND m.单号 IS NOT NULL) AS 未注册
+            FROM {page_facts} o {joined}
             ORDER BY {sc} {direction} NULLS LAST, o.履约单号
             LIMIT ? OFFSET ?
-        """, args + [size, off]).df()
+        """
+        if not order_by_count:
+            native_on_page = "0"
+            if event_columns:
+                match = "e.单号=p.单号归一"
+                if "运输商代码" in event_columns:
+                    match += " AND (e.运输商代码=coalesce(p.运输商代码,0) OR e.运输商代码 IS NULL)"
+                native_on_page = f"(SELECT count(*) FROM trk_event e WHERE {match})"
+        measured = "page_rows" if timed_sort else reporting_facts(con, "page_rows")
+        excluded = [DELIVERED_UTC, DELIVERED_BJ, "tracked_delivery", "tracked_delivery_local"]
+        event_projection = ""
+        if not order_by_count:
+            excluded.append("archive_events")
+            event_projection = f", coalesce(nullif(p.archive_events,0),{native_on_page}) AS 逐条事件数"
+        sort_field = sc.split(".")[-1]
+        page_query = f"""
+            WITH page_rows AS MATERIALIZED ({page_query})
+            SELECT p.* EXCLUDE ({', '.join(excluded)}),
+                   p.{DELIVERED_UTC} AS 承运商签收时间,
+                   CASE WHEN p.tracked_delivery=p.{DELIVERED_UTC} THEN p.tracked_delivery_local END AS 签收当地时间
+                   {event_projection}
+            FROM {measured} p ORDER BY p."{sort_field}" {direction} NULLS LAST, p.履约单号
+        """
+        rows = con.execute(page_query, args + [size, off]).df().to_dict("records")
+        fill_local_times(con, rows)
 
-        status_summary = con.execute(f"""
-            SELECT coalesce(t.状态中文,'无轨迹') 状态, count(*) n {base}
-            GROUP BY 1 ORDER BY n DESC
-        """, args).df().to_dict("records")
-        rule_summary = con.execute(f"""
-            SELECT coalesce(a.主预警名称,'无异常') 异常, count(*) n {base}
-            GROUP BY 1 ORDER BY n DESC
-        """, args).df().to_dict("records")
+        summary = con.execute(f"""
+            SELECT grouping(状态) AS by_rule, coalesce(状态,异常) AS label, count(*) AS n
+            FROM (SELECT {TRACK_STATUS_LABEL} 状态, coalesce(a.主预警名称,'无异常') 异常 FROM {facts} o {joined})
+            GROUP BY GROUPING SETS ((状态),(异常))
+            ORDER BY n DESC,label
+        """, args).fetchall()
+        status_summary = [{"状态": label, "n": count} for by_rule, label, count in summary if not by_rule]
+        rule_summary = [{"异常": label, "n": count} for by_rule, label, count in summary if by_rule]
+        total = sum(row["n"] for row in status_summary)
     finally:
         con.close()
 
     return core.clean({"total": int(total), "page": page, "size": size,
-                       "rows": rows.to_dict("records"),
+                       "rows": rows,
                        "statusSummary": status_summary, "ruleSummary": rule_summary})
 
 
@@ -185,82 +315,86 @@ def track(request: Request,
 
 @router.get("/channels")
 def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
-             cn: str = "", min_n: int = 100):
+             cn: str = "", min_n: int = Query(100, ge=1), cr: str = "", lastmile: str = "",
+             start: str = "", end: str = "", channel: str = "",
+             basis: TimingBasis = "shipped"):
     core.require_user(request)
-    cond, args = _cond(month, wh, pf, "", cn)
+    if basis == "created":
+        basis = "paid"  # Value used by earlier clients for 下单到签收.
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel)
+    with core.ops() as ops:
+        _, saved = rules.load_settings(ops)
+
     con = core.duck()
     try:
-        asof = con.execute("SELECT max(创建日期) FROM fct_order").fetchone()[0]
-        df = con.execute(f"""
-            WITH tgt(ch, target, d3t, d5t, d6t) AS ({_sla_values()})
-            SELECT coalesce(o.物流商,'(未分配)') ch,
-                   count(*) n,
-                   count(*) FILTER (WHERE o.已签收=1) signed,
-                   count(*) FILTER (WHERE o.已签收=1 AND o.物流分钟 > 0) sgn,
-                   count(*) FILTER (WHERE o.已签收=1 AND o.物流分钟 > 0 AND o.物流分钟 <= 4320) d3,
-                   count(*) FILTER (WHERE o.已签收=1 AND o.物流分钟 > 0 AND o.物流分钟 <= 7200) d5,
-                   count(*) FILTER (WHERE o.已签收=1 AND o.物流分钟 > 0 AND o.物流分钟 <= 8640) d6,
-                   count(*) FILTER (WHERE o.已签收=1 AND o.物流分钟 > 0 AND o.物流分钟 <= 10080) d7,
-                   avg(o.物流分钟) FILTER (WHERE o.物流分钟 > 0) tm,
-                   quantile_cont(o.物流分钟, 0.9) FILTER (WHERE o.物流分钟 > 0) p90,
-                   count(*) FILTER (WHERE o.已签收=0 AND o.签出时间 IS NOT NULL) in_transit,
-                   count(*) FILTER (WHERE o.已签收=0 AND o.签出时间 IS NOT NULL
-                         AND date_diff('day', o.签出时间::DATE, DATE '{asof}')
-                             > coalesce(tgt.target, {rules.DEFAULT_SLA_DAYS})) overdue
-            FROM fct_order o
-            LEFT JOIN tgt ON tgt.ch = o.物流商
-            WHERE 1=1{cond}
-            GROUP BY 1 HAVING count(*) >= {int(min_n)}
-            ORDER BY n DESC
-        """, args).df()
-
-        rows = []
-        for _, r in df.iterrows():
-            ch = r["ch"]
-            target = rules.sla_days(ch)
-            tgt = rules.targets(ch)
-            sgn = int(r["sgn"] or 0)
-
-            def pct(x):
-                return round(100.0 * int(x) / sgn, 1) if sgn else None
-
-            r6 = pct(r["d6"])
-            avg_days = round(float(r["tm"]) / 1440.0, 2) if r["tm"] else None
-            in_tr = int(r["in_transit"] or 0)
-            over = int(r["overdue"] or 0)
-            rows.append({
-                "channel": ch, "orders": int(r["n"]), "signed": int(r["signed"] or 0),
-                "avgDays": avg_days,
-                "p90Days": round(float(r["p90"]) / 1440.0, 2) if r["p90"] else None,
-                "rate3": pct(r["d3"]), "rate5": pct(r["d5"]),
-                "rate6": r6, "rate7": pct(r["d7"]),
-                "target": target, "targets": tgt,
-                "inTransit": in_tr, "overdue": over,
-                "overRate": round(100.0 * over / in_tr, 1) if in_tr else None,
-                # 达标判定：6 天达成率达到该渠道目标，且平均时效不超过承诺
-                "rate6Ok": (r6 is not None and r6 >= tgt["d6"]),
-                "avgOk": (avg_days <= target) if avg_days is not None else None,
-                "verdict": ("达标" if (r6 is not None and r6 >= tgt["d6"] and avg_days and avg_days <= target)
-                            else "未达标"),
-            })
-
+        raw_facts = core.active_facts(core.order_facts(con))
+        facts = reporting_facts(con, delivery_facts(con, raw_facts))
+        asof = con.execute(f"SELECT max(创建日期) FROM {raw_facts}").fetchone()[0]
+        slas = rules.current_channel_slas(con, raw_facts, saved)
+        sla_sql, sla_values = rules.sla_table(slas)
+        sla_scans = any(config["basis"] == "online" for config in slas.values())
+        scan_join = online_scan_join(con) if basis == "online" or sla_scans else ""
+        minutes = {
+            "paid": elapsed_minutes("o.支付时间", f"o.{DELIVERED_BJ}"),
+            "shipped": "o.物流分钟",
+            "online": elapsed_minutes(ONLINE_START, f"o.{DELIVERED_BJ}"),
+        }[basis]
+        sla_start = timing_start("tgt.basis", sla_scans)
+        scoped = f"""SELECT o.*, {minutes} AS duration_min, {sla_start} AS sla_start,
+                            coalesce(tgt.days,{rules.DEFAULT_SLA_DAYS}) AS sla_days
+                     FROM {facts} o LEFT JOIN tgt ON tgt.ch=o.当前渠道
+                     {scan_join} WHERE 1=1{cond}"""
+        usable = "o.duration_min>0"
+        sla_minutes = elapsed_minutes("o.sla_start", f"o.{DELIVERED_BJ}")
+        sla_usable = f"{sla_minutes}>0"
+        active = f"o.已签收=0 AND o.{DELIVERED_UTC} IS NULL AND o.状态 IS DISTINCT FROM '已完成' AND o.签出时间 IS NOT NULL"
+        c_end = "coalesce(nullif(o.C端承运商,''),'__empty__')"
+        records = con.execute(f"""
+            WITH tgt(ch, days, basis) AS ({sla_sql}), scoped AS ({scoped})
+            SELECT {c_end} AS key, count(*) AS orders,
+                   count(o.{DELIVERED_BJ}) AS signed,
+                   count(*) FILTER (WHERE {usable}) AS samples,
+                   count(*) FILTER (WHERE {usable} AND o.{DELIVERY_SOURCE}='WMS') AS fallbackSamples,
+                   round(avg(o.duration_min) FILTER (WHERE {usable}) / 1440.0, 2) AS avgDays,
+                   round(quantile_cont(o.duration_min, 0.9) FILTER (WHERE {usable}) / 1440.0, 2) AS p90Days,
+                   count(*) FILTER (WHERE {usable} AND o.duration_min<=4320) AS d3,
+                   count(*) FILTER (WHERE {usable} AND o.duration_min<=7200) AS d5,
+                   count(*) FILTER (WHERE {usable} AND o.duration_min<=8640) AS d6,
+                   count(*) FILTER (WHERE {usable} AND o.duration_min<=10080) AS d7,
+                   count(*) FILTER (WHERE {sla_usable}) AS sla_samples,
+                   count(*) FILTER (WHERE {sla_usable} AND {sla_minutes}<=o.sla_days*1440) AS within_sla,
+                   count(*) FILTER (WHERE {active}) AS inTransit,
+                   count(*) FILTER (WHERE {active} AND o.sla_start IS NOT NULL) AS slaInTransit,
+                   count(*) FILTER (WHERE {active} AND
+                      date_diff('second',o.sla_start,?::TIMESTAMP)>o.sla_days*86400) AS overdue
+            FROM scoped o
+            GROUP BY 1 HAVING count(*)>=? ORDER BY orders DESC,key
+        """, [*sla_values, *args, asof, min_n]).df().to_dict("records")
         by_country = con.execute(f"""
-            SELECT o.物流商 ch, coalesce(o.目的国中文, o.目的国) ctry, count(*) n,
-                   count(*) FILTER (WHERE o.已签收=1 AND o.物流分钟 > 0 AND o.物流分钟 <= 8640) d6,
-                   count(*) FILTER (WHERE o.已签收=1 AND o.物流分钟 > 0) sgn,
-                   avg(o.物流分钟) FILTER (WHERE o.物流分钟 > 0)/1440.0 avgd
-            FROM fct_order o WHERE 1=1{cond}
-            GROUP BY 1,2 HAVING count(*) >= 200
-            ORDER BY n DESC LIMIT 40
-        """, args).df().to_dict("records")
+            WITH tgt(ch, days, basis) AS ({sla_sql}), scoped AS ({scoped})
+            SELECT {c_end} AS key, coalesce(o.目的国中文,o.目的国) AS ctry, count(*) AS n,
+                   round(avg(o.duration_min) FILTER (WHERE {usable}) / 1440.0, 2) AS avgDays,
+                   count(*) FILTER (WHERE {usable} AND o.duration_min<=8640) AS d6,
+                   count(*) FILTER (WHERE {usable}) AS samples
+            FROM scoped o
+            GROUP BY 1,2 HAVING count(*)>=200 ORDER BY n DESC,key,ctry LIMIT 40
+        """, [*sla_values, *args]).df().to_dict("records")
     finally:
         con.close()
 
-    for r in by_country:
-        r["rate6"] = round(100.0 * r["d6"] / r["sgn"], 1) if r["sgn"] else None
-        r["avgDays"] = round(float(r["avgd"]), 2) if r["avgd"] else None
+    def pct(count, total):
+        return round(100 * count / total, 1) if total else None
 
-    return core.clean({"asof": str(asof), "rows": rows, "byCountry": by_country})
+    for row in records:
+        row["channel"] = "未填写 C 端渠道" if row["key"] == "__empty__" else row["key"]
+        for day in (3, 5, 6, 7):
+            row[f"rate{day}"] = pct(row.pop(f"d{day}"), row["samples"])
+        row["slaRate"] = pct(row.pop("within_sla"), row["sla_samples"])
+        row["overRate"] = pct(row["overdue"], row["slaInTransit"])
+    for row in by_country:
+        row["ch"] = "未填写 C 端渠道" if row["key"] == "__empty__" else row["key"]
+        row["rate6"] = pct(row.pop("d6"), row["samples"])
+    return core.clean({"asof": str(asof), "basis": basis, "rows": records, "byCountry": by_country})
 
 
 # ---------------------------------------------------------------- 规则与 SLA
@@ -268,40 +402,111 @@ def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
 @router.get("/rules")
 def rules_api(request: Request):
     core.require_user(request)
+    with core.ops() as ops:
+        rule_overrides, sla_overrides = rules.load_settings(ops)
+        hits = dict(ops.execute("SELECT rule,count(*) FROM alerts WHERE is_main GROUP BY rule").fetchall())
     con = core.duck()
     try:
-        asof = con.execute("SELECT max(创建日期) FROM fct_order").fetchone()[0]
-        perf = con.execute("""
-            SELECT coalesce(物流商,'(未分配)') ch, count(*) n,
-                   count(*) FILTER (WHERE 已签收=1 AND 物流分钟 > 0) sgn,
-                   count(*) FILTER (WHERE 已签收=1 AND 物流分钟 > 0 AND 物流分钟 <= 8640) d6,
-                   avg(物流分钟) FILTER (WHERE 物流分钟 > 0)/1440.0 avgd
-            FROM fct_order GROUP BY 1 ORDER BY n DESC
-        """).df().to_dict("records")
-        rule_hits = con.execute("""
-            SELECT 规则 k, count(*) n, round(avg(天数),1) avg_days
-            FROM fct_alert WHERE 是否主预警 GROUP BY 1 ORDER BY n DESC
-        """).df().to_dict("records")
+        raw_facts = core.active_facts(core.order_facts(con))
+        facts = reporting_facts(con, delivery_facts(con, raw_facts))
+        asof = con.execute(f"SELECT max(创建日期) FROM {raw_facts}").fetchone()[0]
+        slas = rules.current_channel_slas(con, raw_facts, sla_overrides)
+        sla_sql, sla_values = rules.sla_table(slas)
+        have_online = any(config["basis"] == "online" for config in slas.values())
+        scan_join = online_scan_join(con) if have_online else ""
+        start_at = timing_start("tgt.basis", have_online)
+        usable = "duration_min>0"
+        perf = con.execute(f"""
+            WITH tgt(ch, days, basis) AS ({sla_sql}), scoped AS (
+                SELECT o.当前渠道, o.{DELIVERED_BJ}, {elapsed_minutes(start_at, f"o.{DELIVERED_BJ}")} AS duration_min
+                FROM {facts} o LEFT JOIN tgt ON tgt.ch=o.当前渠道
+                {scan_join} WHERE o.当前渠道 IS NOT NULL
+            )
+            SELECT 当前渠道 AS ch, count(*) AS n,
+                   count({DELIVERED_BJ}) AS signed,
+                   count(*) FILTER (WHERE {usable}) AS samples,
+                   count(*) FILTER (WHERE {usable} AND duration_min<=4320) AS d3,
+                   count(*) FILTER (WHERE {usable} AND duration_min<=7200) AS d5,
+                   count(*) FILTER (WHERE {usable} AND duration_min<=8640) AS d6,
+                   round(avg(duration_min) FILTER (WHERE {usable}) / 1440.0, 2) AS avgDays
+            FROM scoped GROUP BY 1 ORDER BY n DESC,ch
+        """, sla_values).df().to_dict("records")
     finally:
         con.close()
 
-    for r in perf:
-        r["target"] = rules.sla_days(r["ch"])
-        r["targets"] = rules.targets(r["ch"])
-        r["rate6"] = round(100.0 * r["d6"] / r["sgn"], 1) if r["sgn"] else None
-        r["avgDays"] = round(float(r["avgd"]), 2) if r["avgd"] else None
-
-    hits = {h["k"]: h for h in rule_hits}
-    for r in rules.public_rules():
-        h = hits.get(r["key"], {})
-        r["hits"] = h.get("n")
-        r["avgDays"] = h.get("avg_days")
-
+    for row in perf:
+        config = slas[row["ch"]]
+        row.update(target=config["days"], targets=config["targets"], basis=config["basis"],
+                   customized=row["ch"] in sla_overrides)
+        for day in (3, 5, 6):
+            count = row.pop(f"d{day}")
+            row[f"rate{day}"] = round(100 * count / row["samples"], 1) if row["samples"] else None
+    active_rules = rules.effective_rules(rule_overrides)
+    for row in active_rules:
+        row["hits"] = hits.get(row["key"], 0)
     return core.clean({
-        "asof": str(asof),
-        "rules": rules.public_rules(),
-        "notImplemented": rules.NOT_IMPLEMENTED,
-        "workdayRule": rules.WORKDAY_RULE,
-        "slaDefault": rules.DEFAULT_SLA_DAYS,
-        "channels": perf,
+        "asof": str(asof), "rules": active_rules, "notImplemented": rules.NOT_IMPLEMENTED,
+        "workdayRule": rules.WORKDAY_RULE, "slaDefault": rules.DEFAULT_SLA_DAYS, "channels": perf,
     })
+
+
+class RuleConfig(BaseModel):
+    enabled: bool
+    level: Literal["紧急", "高", "中"]
+    threshold: int | None = Field(default=None, ge=0, le=3650)
+
+
+class SLATargets(BaseModel):
+    d3: float = Field(ge=0, le=100)
+    d5: float = Field(ge=0, le=100)
+    d6: float = Field(ge=0, le=100)
+
+
+class ChannelSLA(BaseModel):
+    channel: str
+    days: int = Field(gt=0, le=3650)
+    targets: SLATargets
+    basis: TimingBasis | None = None
+
+
+def save_configuration(user, kind, name, config):
+    import alerts
+
+    con = core.duck()
+    try:
+        if kind == "sla" and not con.execute(
+            f"SELECT 1 FROM {core.active_facts(core.order_facts(con))} o WHERE 当前渠道=? LIMIT 1", [name]
+        ).fetchone():
+            raise HTTPException(status_code=404, detail="没有找到这个履约单当前渠道")
+        with core.ops() as ops:
+            ops.execute("BEGIN IMMEDIATE")
+            if kind == "sla" and "basis" not in config:
+                _, saved = rules.load_settings(ops)
+                config["basis"] = saved.get(name, {}).get("basis", "shipped")
+            rules.save_setting(ops, kind, name, config)
+            overrides = rules.load_settings(ops)
+            hits, orders = alerts.calculate(con, None, *overrides)
+            alerts.update_alert_mirror(con, ops)
+            core.audit(user["username"], f"configure_{kind}", name, config, connection=ops)
+        return {"ok": True, "hits": hits, "orders": orders}
+    finally:
+        con.close()
+
+
+@router.put("/rules/business/{key}")
+def configure_rule(key: str, body: RuleConfig, request: Request):
+    user = core.require_admin(request)
+    if key not in rules.RULES_BY_KEY:
+        raise HTTPException(status_code=404, detail="没有找到这条规则")
+    if key in rules.RULE_THRESHOLDS and body.threshold is None:
+        raise HTTPException(status_code=422, detail="请输入预警时效阈值")
+    return save_configuration(user, "rule", key, body.model_dump(exclude_none=True))
+
+
+@router.put("/rules/channel-sla")
+def configure_sla(body: ChannelSLA, request: Request):
+    user = core.require_admin(request)
+    config = body.model_dump(exclude={"channel"}, exclude_none=True)
+    if config.get("basis") == "created":
+        config["basis"] = "paid"
+    return save_configuration(user, "sla", body.channel, config)

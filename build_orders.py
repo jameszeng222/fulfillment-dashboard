@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 
 import duckdb
+from app.order_time import build_delivery_clock
+from app.waybill import key_sql, shipped_waybill_sql
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "履约单.duckdb"
@@ -22,12 +24,13 @@ CREATE OR REPLACE TABLE fct_order AS
 SELECT
     履约单号,
     any_value(出库单号)                     AS 出库单号,
-    any_value(快递单号)                     AS 快递单号,
-    upper(regexp_replace(coalesce(any_value(快递单号),''),'[^A-Za-z0-9]','','g')) AS 单号归一,
+    {waybill}                              AS 快递单号,
+    {waybill_key} AS 单号归一,
     any_value(平台)                         AS 平台,
     any_value(仓库代码)                     AS 仓库,
     any_value(物流服务商)                   AS 物流商,
     any_value("C端显示物流服务商名称")      AS C端承运商,
+    {current_channel}                     AS 当前渠道,
     any_value(目的国家英文名称)             AS 目的国,
     any_value(目的国家中文名称)             AS 目的国中文,
     any_value(出库单状态)                   AS 状态,
@@ -36,23 +39,35 @@ SELECT
     min(创建时间_ts)                        AS 创建时间,
     min(支付时间_ts)                        AS 支付时间,
     min(签出时间_ts)                        AS 签出时间,
-    any_value(签收时间_ts)                  AS 签收时间,
+    coalesce(max(clock.signed_local), max(签收时间_ts)) AS 签收时间,
+    max(clock.signed_beijing)               AS 签收北京时间,
+    any_value(clock.zone)                   AS 签收时区,
     min(创建日期)                           AS 创建日期,
     any_value(创建月份)                     AS 创建月份,
     sum(数量)::BIGINT                       AS 件数,
     count(DISTINCT sku)::BIGINT             AS sku数,
     count(*)::BIGINT                        AS 明细行数,
     date_diff('minute', min(创建时间_ts), min(签出时间_ts))  AS 仓内分钟,
-    date_diff('minute', min(签出时间_ts), max(签收时间_ts))  AS 物流分钟,
-    max(CASE WHEN 签收时间_ts IS NOT NULL THEN 1 ELSE 0 END) AS 已签收
+    date_diff('minute', min(签出时间_ts), max(clock.signed_beijing)) AS 物流分钟,
+    max(CASE WHEN coalesce(clock.signed_local,签收时间_ts) IS NOT NULL THEN 1 ELSE 0 END) AS 已签收
 FROM 履约单明细
+LEFT JOIN fct_delivery_clock clock USING (履约单号)
 GROUP BY 履约单号
 """
 
 
 def build(con):
-    con.execute("DROP TABLE IF EXISTS fct_order")
-    con.execute(DDL)
+    columns = {row[0] for row in con.execute("DESCRIBE 履约单明细").fetchall()}
+    channel = "max(nullif(trim(当前渠道), ''))" if "当前渠道" in columns else "NULL::VARCHAR"
+    con.execute("BEGIN TRANSACTION")
+    try:
+        build_delivery_clock(con)
+        waybill = shipped_waybill_sql()
+        con.execute(DDL.format(current_channel=channel, waybill=waybill, waybill_key=key_sql(waybill)))
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
     n = con.execute("SELECT count(*) FROM fct_order").fetchone()[0]
     print(f"fct_order: {n:,} 行")
 
