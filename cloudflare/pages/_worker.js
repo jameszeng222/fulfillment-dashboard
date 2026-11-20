@@ -95,7 +95,8 @@ export default {
     const snapshotStore = visitor && request.method === "GET" ? env.FULFILLMENT_SNAPSHOT : null;
     const fromSnapshot = fallback => readSnapshot(snapshotStore, url, fallback).catch(() => null);
     const snapshot = snapshotStore && await fromSnapshot(false);
-    if (snapshot) return snapshot;
+    const snapshotMiss = snapshot?.headers.get("X-Fulfillment-Snapshot-Miss") === "1";
+    if (snapshot && (!snapshotMiss || !configured)) return snapshot;
     if (!configured && snapshotStore) {
       const fallback = await fromSnapshot(true);
       if (fallback) return fallback;
@@ -117,17 +118,20 @@ export default {
       const options = {
         method: request.method, headers, body: request.body, redirect: "manual", duplex: "half",
       };
-      if (snapshotStore && ["/api/overview", "/api/channels"].includes(url.pathname)) {
+      if (snapshotMiss) {
+        options.signal = AbortSignal.timeout(2200);
+      } else if (snapshotStore && ["/api/overview", "/api/channels"].includes(url.pathname) &&
+          (await snapshotStatus(snapshotStore).catch(() => ({}))).snapshotAt) {
         options.signal = AbortSignal.timeout(3500);
       }
       response = vpc ? await vpc.fetch(upstream.href, options) : await fetch(upstream, options);
     } catch {
-      const fallback = snapshotStore && await fromSnapshot(true);
+      const fallback = snapshot || (snapshotStore && await fromSnapshot(true));
       if (fallback) return fallback;
       return unavailable("origin_unreachable", "履约数据服务暂时无法连接。", 502);
     }
-    if (snapshotStore && response.status >= 500) {
-      const fallback = await fromSnapshot(true);
+    if (snapshotStore && (response.status >= 500 || (snapshotMiss && response.status === 404))) {
+      const fallback = snapshot || await fromSnapshot(true);
       if (fallback) return fallback;
     }
     const responseHeaders = privateHeaders(response.headers);

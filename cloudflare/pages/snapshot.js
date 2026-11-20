@@ -61,12 +61,16 @@ async function chunk(bucket, hash, part, pending = new Map()) {
   return new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).json();
 }
 
-async function lookup(bucket, manifest, value) {
+function lookupKeys(value) {
   const raw = value.normalize("NFKC").trim().toUpperCase();
   if (!/^[A-Z0-9#_.+ /-]{4,128}$/.test(raw)) return [];
   const n = raw.replace(/\s*\+\s*\d{1,3}\s*$/, "").replace(/[^A-Z0-9]/g, "");
   if (n.length < 4) return [];
-  const keys = ["r:" + raw, "n:" + n];
+  return ["r:" + raw, "n:" + n];
+}
+
+async function lookup(bucket, manifest, keys) {
+  if (!keys.length) return [];
   const positions = await Promise.all(keys.map(slot));
   const pending = new Map();
   const blocks = await Promise.all(positions.map(index =>
@@ -103,16 +107,20 @@ async function snapshotTrack(bucket, m, params) {
   // Bound storage reads for references reused by several stores.
   const size = Math.min(40, rawSize);
   const offset = (page - 1) * size;
-  const ids = await lookup(bucket, m, params.get("q") || "");
+  const keys = lookupKeys(params.get("q") || "");
+  const ids = await lookup(bucket, m, keys);
   const records = await readOrders(bucket, m, ids.slice(offset, offset + size));
   const rows = records.map(([order]) => Object.fromEntries(
     Object.entries(order).filter(([field]) => tableFields.has(field))));
-  return json({rows, total: ids.length, page, size, statusSummary: [], ruleSummary: [], snapshotAt: m.at});
+  return json({rows, total: ids.length, page, size, statusSummary: [], ruleSummary: [], snapshotAt: m.at},
+    200, !ids.length && keys.length ? {"X-Fulfillment-Snapshot-Miss": "1"} : {});
 }
 
 async function snapshotOrder(bucket, m, id, params) {
-  const ids = await lookup(bucket, m, params.get("q") || "");
-  if (!ids.includes(id)) return json({detail: "快照中没有匹配的履约单", snapshotAt: m.at}, 404);
+  const keys = lookupKeys(params.get("q") || "");
+  const ids = await lookup(bucket, m, keys);
+  if (!ids.includes(id)) return json({detail: "快照中没有匹配的履约单", snapshotAt: m.at}, 404,
+    keys.length ? {"X-Fulfillment-Snapshot-Miss": "1"} : {});
   const [[order, nativeCarrier, archiveCarrier] = []] = await readOrders(bucket, m, [id]);
   if (!order) return json({detail: "快照中没有匹配的履约单", snapshotAt: m.at}, 404);
   const number = order.单号归一;
