@@ -131,6 +131,8 @@ export default {
       };
       if (snapshotMiss) {
         options.signal = AbortSignal.timeout(2200);
+      } else if (openTest && snapshotStore && url.pathname === "/api/channels") {
+        options.signal = AbortSignal.timeout(8000);
       } else if (!openTest && snapshotStore && ["/api/overview", "/api/channels"].includes(url.pathname) &&
           (await snapshotStatus(snapshotStore).catch(() => ({}))).snapshotAt) {
         options.signal = AbortSignal.timeout(3500);

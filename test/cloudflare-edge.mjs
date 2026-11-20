@@ -140,6 +140,15 @@ test("a visitor can open Pages and look up a complete reference without the tunn
   }};
   assert.equal((await (await get("/api/me")).json()).openTest, true);
   assert.equal((await (await get("/api/track")).json()).rows[0].履约单号, "LIVE");
+  let channelSignal;
+  pages.FULFILLMENT_PRIVATE_WORKER.fetch = async (_url, options) => {
+    channelSignal = options.signal;
+    throw new DOMException("Origin did not respond", "TimeoutError");
+  };
+  const channelFallback = await (await get("/api/channels?wh=TEST")).json();
+  assert.ok(channelSignal instanceof AbortSignal);
+  assert.equal(channelFallback.snapshotAt, now);
+  assert.equal(channelFallback.snapshotFiltersSkipped, true);
   pages.FULFILLMENT_PRIVATE_WORKER.fetch = async () => new Response(null, {status: 502});
   const offline = await (await get("/api/me", {headers: {Cookie: "fd_session=old"}})).json();
   assert.equal(offline.preview, true);

@@ -1,6 +1,7 @@
 """四个业务页面的数据接口：总览 / 轨迹监控 / 渠道时效 / 规则。"""
 from __future__ import annotations
 
+import json
 import re
 from functools import lru_cache
 from typing import Literal
@@ -12,7 +13,7 @@ import pandas as pd
 
 from . import core, public_preview, rules
 from .carrier_delivery import DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts
-from .channel_timing import ONLINE_START, TimingBasis, online_scan_join, timing_start
+from .channel_timing import ONLINE_START, TimingBasis, online_scan_join, timing_start, transport_archive_version
 from .order_time import delivery_facts
 from .tracking_archive import fill_local_times, sources as tracking_sources
 from .waybill import key_sql, normalized as normalize_waybill
@@ -377,16 +378,24 @@ def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
     core.require_reader(request)
     if basis == "created":
         basis = "paid"  # Value used by earlier clients for 下单到签收.
-    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel)
     with core.ops() as ops:
         _, saved = rules.load_settings(ops)
+    archive = transport_archive_version() if basis == "online" or any(
+        item.get("basis") == "online" for item in saved.values()
+    ) else None
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel)
+    report = _channel_report(core.snapshot_key(), archive, json.dumps(saved, sort_keys=True), basis, cond, tuple(args))
+    return {**report, "rows": [row for row in report["rows"] if row["orders"] >= min_n]}
 
+
+@lru_cache(maxsize=32)
+def _channel_report(_snapshot, _archive, saved, basis, cond, args):
     con = core.duck()
     try:
         raw_facts = core.active_facts(core.order_facts(con))
         facts = reporting_facts(con, delivery_facts(con, raw_facts))
         asof = con.execute(f"SELECT max(创建日期) FROM {raw_facts}").fetchone()[0]
-        slas = rules.current_channel_slas(con, raw_facts, saved)
+        slas = rules.current_channel_slas(con, raw_facts, json.loads(saved))
         sla_sql, sla_values = rules.sla_table(slas)
         sla_scans = any(config["basis"] == "online" for config in slas.values())
         scan_join = online_scan_join(con) if basis == "online" or sla_scans else ""
@@ -396,21 +405,24 @@ def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
             "online": elapsed_minutes(ONLINE_START, f"o.{DELIVERED_BJ}"),
         }[basis]
         sla_start = timing_start("tgt.basis", sla_scans)
-        scoped = f"""SELECT o.*, {minutes} AS duration_min, {sla_start} AS sla_start,
-                            coalesce(tgt.days,{rules.DEFAULT_SLA_DAYS}) AS sla_days
+        active = f"o.已签收=0 AND o.{DELIVERED_UTC} IS NULL AND o.状态 IS DISTINCT FROM '已完成' AND o.签出时间 IS NOT NULL"
+        scoped = f"""SELECT coalesce(nullif(o.C端承运商,''),'__empty__') AS key,
+                            coalesce(o.目的国中文,o.目的国) AS ctry,
+                            o.{DELIVERED_BJ} AS delivered, o.{DELIVERY_SOURCE} AS delivery_source,
+                            {minutes} AS duration_min, {sla_start} AS sla_start,
+                            coalesce(tgt.days,{rules.DEFAULT_SLA_DAYS}) AS sla_days,
+                            {active} AS in_transit
                      FROM {facts} o LEFT JOIN tgt ON tgt.ch=o.当前渠道
                      {scan_join} WHERE 1=1{cond}"""
         usable = "o.duration_min>0"
-        sla_minutes = elapsed_minutes("o.sla_start", f"o.{DELIVERED_BJ}")
+        sla_minutes = elapsed_minutes("o.sla_start", "o.delivered")
         sla_usable = f"{sla_minutes}>0"
-        active = f"o.已签收=0 AND o.{DELIVERED_UTC} IS NULL AND o.状态 IS DISTINCT FROM '已完成' AND o.签出时间 IS NOT NULL"
-        c_end = "coalesce(nullif(o.C端承运商,''),'__empty__')"
-        records = con.execute(f"""
+        grouped = con.execute(f"""
             WITH tgt(ch, days, basis) AS ({sla_sql}), scoped AS ({scoped})
-            SELECT {c_end} AS key, count(*) AS orders,
-                   count(o.{DELIVERED_BJ}) AS signed,
+            SELECT grouping(o.ctry) AS channel_total, o.key, o.ctry, count(*) AS orders,
+                   count(o.delivered) AS signed,
                    count(*) FILTER (WHERE {usable}) AS samples,
-                   count(*) FILTER (WHERE {usable} AND o.{DELIVERY_SOURCE}='WMS') AS fallbackSamples,
+                   count(*) FILTER (WHERE {usable} AND o.delivery_source='WMS') AS fallbackSamples,
                    round(avg(o.duration_min) FILTER (WHERE {usable}) / 1440.0, 2) AS avgDays,
                    round(quantile_cont(o.duration_min, 0.9) FILTER (WHERE {usable}) / 1440.0, 2) AS p90Days,
                    count(*) FILTER (WHERE {usable} AND o.duration_min<=4320) AS d3,
@@ -419,37 +431,37 @@ def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
                    count(*) FILTER (WHERE {usable} AND o.duration_min<=10080) AS d7,
                    count(*) FILTER (WHERE {sla_usable}) AS sla_samples,
                    count(*) FILTER (WHERE {sla_usable} AND {sla_minutes}<=o.sla_days*1440) AS within_sla,
-                   count(*) FILTER (WHERE {active}) AS inTransit,
-                   count(*) FILTER (WHERE {active} AND o.sla_start IS NOT NULL) AS slaInTransit,
-                   count(*) FILTER (WHERE {active} AND
+                   count(*) FILTER (WHERE o.in_transit) AS inTransit,
+                   count(*) FILTER (WHERE o.in_transit AND o.sla_start IS NOT NULL) AS slaInTransit,
+                   count(*) FILTER (WHERE o.in_transit AND
                       date_diff('second',o.sla_start,?::TIMESTAMP)>o.sla_days*86400) AS overdue
             FROM scoped o
-            GROUP BY 1 HAVING count(*)>=? ORDER BY orders DESC,key
-        """, [*sla_values, *args, asof, min_n]).df().to_dict("records")
-        by_country = con.execute(f"""
-            WITH tgt(ch, days, basis) AS ({sla_sql}), scoped AS ({scoped})
-            SELECT {c_end} AS key, coalesce(o.目的国中文,o.目的国) AS ctry, count(*) AS n,
-                   round(avg(o.duration_min) FILTER (WHERE {usable}) / 1440.0, 2) AS avgDays,
-                   count(*) FILTER (WHERE {usable} AND o.duration_min<=8640) AS d6,
-                   count(*) FILTER (WHERE {usable}) AS samples
-            FROM scoped o
-            GROUP BY 1,2 HAVING count(*)>=200 ORDER BY n DESC,key,ctry LIMIT 40
-        """, [*sla_values, *args]).df().to_dict("records")
+            GROUP BY GROUPING SETS ((o.key), (o.key, o.ctry))
+            HAVING grouping(o.ctry)=1 OR count(*)>=200
+            ORDER BY orders DESC,o.key,o.ctry
+        """, [*sla_values, *args, asof]).df().to_dict("records")
     finally:
         con.close()
 
     def pct(count, total):
         return round(100 * count / total, 1) if total else None
 
-    for row in records:
-        row["channel"] = "未填写 C 端渠道" if row["key"] == "__empty__" else row["key"]
+    records, by_country = [], []
+    for row in grouped:
+        name = "未填写 C 端渠道" if row["key"] == "__empty__" else row["key"]
+        if not row.pop("channel_total"):
+            if len(by_country) < 40:
+                by_country.append({"key": row["key"], "ch": name, "ctry": row["ctry"], "n": row["orders"],
+                                   "avgDays": row["avgDays"], "samples": row["samples"],
+                                   "rate6": pct(row["d6"], row["samples"])})
+            continue
+        row.pop("ctry")
+        row["channel"] = name
         for day in (3, 5, 6, 7):
             row[f"rate{day}"] = pct(row.pop(f"d{day}"), row["samples"])
         row["slaRate"] = pct(row.pop("within_sla"), row["sla_samples"])
         row["overRate"] = pct(row["overdue"], row["slaInTransit"])
-    for row in by_country:
-        row["ch"] = "未填写 C 端渠道" if row["key"] == "__empty__" else row["key"]
-        row["rate6"] = pct(row.pop("d6"), row["samples"])
+        records.append(row)
     return core.clean({"asof": str(asof), "basis": basis, "rows": records, "byCountry": by_country})
 
 

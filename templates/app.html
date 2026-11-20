@@ -154,7 +154,8 @@
         <div id="channelLoading" class="card" role="status">正在读取渠道时效…</div>
         <div id="channelResults" class="channel-results" hidden>
         <div class="kpis" id="channelKpi"></div>
-        <div class="grid channel-charts" id="channelCharts">
+        <p class="card" id="channelChartLoading" role="status" hidden></p>
+        <div class="grid channel-charts" id="channelCharts" hidden>
           <div class="card">
             <div class="ct"><div><h2>平均时效与 P90</h2><p class="tip" id="channelChartScope"></p></div></div>
             <div class="chart" id="channelDurationChart" role="img" aria-label="按渠道比较平均时效及 P90 天数"></div>
@@ -334,6 +335,6 @@
   </form>
 </dialog>
 
-<script src="/static/app.js?v=20261120-track-response" defer></script>
+<script src="/static/app.js?v=20261120-channel-response" defer></script>
 </body>
 </html>

@@ -69,6 +69,14 @@ def _archive_version(path):
     return hashlib.sha256(repr((1, stat.st_ino, stat.st_size, stat.st_mtime_ns, journal)).encode()).hexdigest()
 
 
+def transport_archive_version():
+    archive = core.DUCK_DB.with_name("17TRACK历史轨迹.sqlite3")
+    try:
+        return _archive_version(archive)
+    except FileNotFoundError:
+        return None
+
+
 def _archive_transport_source(con, archive):
     """Reuse the exact SQLite aggregate across preview restarts."""
     cache = archive.with_name(".17track-transport-scans.parquet")

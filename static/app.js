@@ -75,7 +75,7 @@ async function api(path, opts = {}) {
 }
 
 function loadMeta() {
-  if (!metaFetch) metaFetch = api('/api/meta').then(data => {
+  if (!metaFetch) metaFetch = api('/api/meta', {signal: AbortSignal.timeout(12_000)}).then(data => {
     META = data;
     setTopMeta(META.range.end);
     return META;
@@ -87,15 +87,22 @@ function loadMeta() {
 }
 
 function loadChartLibrary() {
+  if (window.echarts) return Promise.resolve();
   if (!chartsFetch) chartsFetch = new Promise((resolve, reject) => {
     const script = document.createElement('script');
     script.src = '/static/echarts.min.js';
-    script.onload = resolve;
-    script.onerror = () => {
+    const fail = () => {
+      clearTimeout(deadline);
       chartsFetch = null;
       script.remove();
       reject(new Error('图表组件加载失败，请稍后重试'));
     };
+    const deadline = setTimeout(fail, 10_000);
+    script.onload = () => {
+      clearTimeout(deadline);
+      resolve();
+    };
+    script.onerror = fail;
     document.head.append(script);
   });
   return chartsFetch;
@@ -876,38 +883,70 @@ let CF = null;
 let channelRows = [];
 let channelBasis = 'shipped';
 let renderedChannels = null;
+let renderedChannelCharts = null;
 
-async function loadChannels() {
-  await Promise.all([loadMeta(), loadChartLibrary()]);
-  if (VIEW !== 'channels') return;
-  if (!CF) CF = makeFilters($('#channelFilters'), [
+async function loadChannelFilters() {
+  const host = $('#channelFilters');
+  host.textContent = '正在读取筛选项…';
+  try {
+    await loadMeta();
+  } catch {
+    const retry = el('button', 'btn ghost sm', '重试加载筛选项');
+    retry.onclick = () => run(loadChannelFilters);
+    host.replaceChildren(retry);
+    return;
+  }
+  if (CF) return;
+  CF = makeFilters(host, [
     ...dashFilterDefs(),
     { type: 'select', label: '最少单量（默认 100）', key: 'min_n', options: [1, 10, 30, 100, 500] },
   ], () => run(loadChannels));
+  if (renderedChannels) showChannelDataDate(renderedChannels);
+}
 
+function showChannelDataDate(data) {
+  if (!CF) return;
+  CF._info.textContent = data.snapshotFiltersSkipped ? '实时筛选暂不可用，表格显示全量快照' :
+    `${data.snapshotAt ? '离线快照 · ' : ''}数据截止 ${data.asof}`;
+}
+
+async function loadChannels() {
+  if (!CF) run(loadChannelFilters);
+  const library = loadChartLibrary().catch(() => false);
   const basis = channelBasis;
+  const filters = readF(CF || {});
   const loading = $('#channelLoading');
   const results = $('#channelResults');
-  const currentResult = renderedChannels !== null;
+  const currentResult = Boolean(renderedChannels);
   loading.hidden = false;
   loading.classList.toggle('channel-refresh', currentResult);
   loading.textContent = currentResult ?
-    `正在更新「${TIMING_BASIS[basis].label}」 · 下方为上次结果` : '正在读取渠道时效…';
+    `正在更新「${TIMING_BASIS[basis].label}」 · 下方为上次的「${TIMING_BASIS[renderedChannels.basis].label}」结果` :
+    '正在读取渠道时效…';
   results.inert = currentResult;
   results.setAttribute('aria-busy', 'true');
-  const filters = readF(CF);
-  const d = await latest('channels', '/api/channels?' + qs({ ...filters, basis })).catch(error => {
-    if (basis === channelBasis) loading.textContent = '渠道时效读取失败。' + error.message;
-    return null;
-  });
+  let d;
+  try {
+    d = await latest('channels', '/api/channels?' + qs({ ...filters, basis }), {signal: AbortSignal.timeout(12_000)});
+  } catch (error) {
+    if (VIEW === 'channels') {
+      loading.textContent = error.name === 'TimeoutError' ? '渠道时效读取超时。' : '渠道时效读取失败。' + error.message;
+      if (currentResult) loading.append(` 下方为上次的「${TIMING_BASIS[renderedChannels.basis].label}」结果。`);
+      const retry = el('button', 'btn ghost sm', '重试');
+      retry.onclick = () => run(loadChannels);
+      loading.append(' ', retry);
+      results.setAttribute('aria-busy', 'false');
+    }
+    return;
+  }
   if (!d || VIEW !== 'channels') return;
   loading.hidden = true;
   results.hidden = false;
   results.inert = false;
   results.setAttribute('aria-busy', 'false');
-  if (renderedChannels === d) return;
+  if (renderedChannels === d && renderedChannelCharts === d) return;
   renderedChannels = d;
-  CF._info.textContent = d.snapshotFiltersSkipped ? '实时筛选暂不可用，表格显示全量快照' : `数据截止 ${d.asof}`;
+  showChannelDataDate(d);
 
   const rows = d.rows || [];
   channelRows = rows;
@@ -918,7 +957,7 @@ async function loadChannels() {
   const overAll = rows.reduce((a, r) => a + (r.overdue || 0), 0);
   const inAll = rows.reduce((a, r) => a + r.slaInTransit, 0);
   $('#channelKpi').innerHTML = [
-    ['C 端渠道数', fmt(rows.length), `单量 ≥${CF.min_n.value || 100}`],
+    ['C 端渠道数', fmt(rows.length), `单量 ≥${filters.min_n || 100}`],
     ['有效签收样本', fmt(samples), signed ? `含 WMS 补算 ${fmt(fallback)} 单` : '当前范围无可用的妥投时间'],
     ['覆盖单量', fmt(totalOrders), '参与统计'],
     ['SLA 在途超时', fmt(overAll), inAll ? `占可计时在途 ${fmt1(100 * overAll / inAll)}%` : '当前范围无可计时的在途单'],
@@ -943,11 +982,37 @@ async function loadChannels() {
     <td>${measure(r.avgDays, ' 天')}</td><td>${measure(r.rate6, '%')}</td></tr>`).join('')
     || blankRow(6, '当前筛选无达到样本量的渠道组合');
 
-  const chartRows = rows.filter(row => row.samples > 0).slice(0, 8).reverse();
-  $('#channelCharts').hidden = !chartRows.length;
+  await renderChannelCharts(d, filters, library);
+}
+
+async function renderChannelCharts(data, filters, library) {
+  const chartRows = data.rows.filter(row => row.samples > 0).slice(0, 8).reverse();
+  const chartsHost = $('#channelCharts');
+  const status = $('#channelChartLoading');
+  chartsHost.hidden = true;
+  status.hidden = true;
   $('#channelChartEmpty').hidden = Boolean(chartRows.length);
-  if (!chartRows.length) return;
-  const label = TIMING_BASIS[basis].label;
+  if (!chartRows.length) {
+    renderedChannelCharts = data;
+    return;
+  }
+  const current = () => VIEW === 'channels' && renderedChannels === data && !$('#channelResults').inert;
+  if (!window.echarts) {
+    status.hidden = false;
+    status.textContent = '正在加载时效图表…';
+    if (await library === false) {
+      if (!current()) return;
+      status.textContent = '时效图表加载失败。';
+      const retry = el('button', 'btn ghost sm', '重试加载图表');
+      retry.onclick = () => run(() => renderChannelCharts(data, filters, loadChartLibrary().catch(() => false)));
+      status.append(' ', retry);
+      return;
+    }
+    if (!current()) return;
+  }
+  status.hidden = true;
+  chartsHost.hidden = false;
+  const label = TIMING_BASIS[data.basis].label;
   $('#channelChartScope').textContent = `${label} · 单量靠前且有有效样本的 ${chartRows.length} 个渠道 · P90 为 90% 样本在该天数内签收`;
   drawChannelBars('channelDurationChart', chartRows, [
     ['平均时效', 'avgDays', chartTheme.series[1]], ['P90', 'p90Days', chartTheme.ink],
@@ -956,6 +1021,7 @@ async function loadChannels() {
     ['3 天', 'rate3', chartTheme.series[0]], ['5 天', 'rate5', chartTheme.series[1]],
     ['6 天', 'rate6', chartTheme.series[2]], ['7 天', 'rate7', chartTheme.series[3]],
   ], '%', label, filters);
+  renderedChannelCharts = data;
 }
 
 function drawChannelBars(id, rows, metrics, unit, basisLabel, filters) {
