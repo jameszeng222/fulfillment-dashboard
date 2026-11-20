@@ -29,7 +29,7 @@ ENV = {
     "OPS_MCP_ALLOWED_TOOLS": "warehouse_summary",
     "OPS_SITE_AI_URL": HUB + "/ai", "OPS_SITE_AI_KEY": "mock-ai-key", "OPS_AI_PROTOCOL": "",
     "OPS_ASSISTANT_ROLES": "admin", "OPS_SITE_SKILLS_URL": HUB + "/skills",
-    "FULFILLMENT_PUBLIC_PREVIEW": "false",
+    "FULFILLMENT_PUBLIC_PREVIEW": "false", "FULFILLMENT_OPEN_TEST": "false",
 }
 
 
@@ -296,6 +296,36 @@ class OpsTests(unittest.TestCase):
             self.assertTrue(admin["can_edit"])
             self.assertFalse(admin["preview"])
             self.assertFalse(admin["cloudSharing"])
+
+    def test_open_test_has_full_access_without_login_or_cookies(self):
+        with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true", "FULFILLMENT_CLOUD_TICKETS": "true"}):
+            visitor = Browser()
+            self.assertEqual(visitor.request("/")[0], 200)
+            for path in ("/login", "/ops/auth/login"):
+                status, headers, _ = visitor.request(path)
+                self.assertEqual((status, headers[b"location"]), (303, b"/"))
+                self.assertNotIn(b"set-cookie", headers)
+            status, headers, result = visitor.request("/api/me")
+            self.assertEqual(status, 200)
+            self.assertNotIn(b"set-cookie", headers)
+            identity = json.loads(result)
+            self.assertTrue(identity["openTest"])
+            self.assertTrue(identity["can_edit"])
+            self.assertFalse(identity["preview"])
+            self.assertNotIn("csrf", identity)
+            self.assertEqual(visitor.request("/api/cloud/session", "POST", {"ticket": "A" * 43})[0], 404)
+            self.assertEqual(visitor.request("/sharing")[0], 404)
+            with core.ops() as db:
+                db.execute("INSERT INTO alerts(order_no,rule) VALUES ('TEST123','sample')")
+            change = {"order_no": "TEST123", "rule": "sample", "action": "resolve"}
+            path = "/api/alerts/action"
+            self.assertEqual(visitor.request(path, "POST", change, {"origin": HUB})[0], 403)
+            status, _, result = visitor.request(path, "POST", change, {"origin": SITE, "cookie": "fd_session=old"})
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(result)["status"], "resolved")
+            with core.ops() as db:
+                action = db.execute("SELECT status, updated_by FROM alert_state").fetchone()
+                self.assertEqual(tuple(action), ("resolved", "open-test"))
 
     def test_mcp(self):
         csrf = self.login()

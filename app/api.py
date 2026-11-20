@@ -69,7 +69,8 @@ def me(request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
     if u["preview"]:
         return {**u, "cloudSharing": False, "opsAssistant": False}
-    return {**u, "csrf": core.csrf_token(request.cookies[core.SESSION_COOKIE]),
+    session = {} if u.get("openTest") else {"csrf": core.csrf_token(request.cookies[core.SESSION_COOKIE])}
+    return {**u, **session,
             "cloudSharing": u["role"] == "admin" and cloud_login.enabled() and not core.public_preview_enabled(),
             "opsAssistant": ops_assistant.can_use(u) and any(ops_assistant.configured().values())}
 

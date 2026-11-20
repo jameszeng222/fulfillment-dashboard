@@ -1286,15 +1286,16 @@ run(async function boot() {
   else setTopMeta(null);
   $('#opsAssistant').hidden = !ME.opsAssistant;
   $('#cloudSharing').hidden = !ME.cloudSharing;
+  $('#logout').hidden = ME.preview || ME.openTest;
   if (!ME.preview) $('#currentChannelTip').textContent += ' · 点击渠道查看履约单';
   if (ME.preview) {
-    for (const selector of ['[data-v="rules"]', '#logout', '#openPending',
+    for (const selector of ['[data-v="rules"]', '#openPending',
       '#trackTabs', '#showDetailed', '#exportTrack', '#trackAlertHeading']) {
       $(selector).hidden = true;
     }
     $('#trackIntro').textContent = '输入完整的履约单号、运单号、订单号或平台订单号，查看物流状态和时间线。';
   }
-  $('#who').textContent = ME.preview ? ME.display_name : `${ME.display_name} · ${ME.role_label}`;
+  $('#who').textContent = ME.preview || ME.openTest ? ME.display_name : `${ME.display_name} · ${ME.role_label}`;
   $('#batchAction').append(...allowedActions().map(([key, label]) => new Option(label, key)));
   $('#batchAction').hidden = !ME.can_edit;
   $('#applyBatch').hidden = !ME.can_edit;

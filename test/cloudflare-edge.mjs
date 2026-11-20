@@ -130,4 +130,21 @@ test("a visitor can open Pages and look up a complete reference without the tunn
   assert.equal((await get("/__edge/snapshot/manifest")).status, 403);
   assert.equal((await get("/__edge/snapshot/blocks/" + "f".repeat(64), {method: "PUT", body: "{}"})).status, 403);
   assert.equal((await get("/api/orders")).status, 503);
+  pages.FULFILLMENT_EDGE_OPEN_TEST = "true";
+  pages.FULFILLMENT_EDGE_KEY = shared;
+  pages.FULFILLMENT_PRIVATE_WORKER = {fetch: async url => {
+    const path = new URL(url).pathname;
+    if (path === "/api/me") return Response.json({openTest: true, can_edit: true, preview: false});
+    if (path === "/api/track") return Response.json({rows: [{履约单号: "LIVE"}]});
+    return new Response(null, {status: 503});
+  }};
+  assert.equal((await (await get("/api/me")).json()).openTest, true);
+  assert.equal((await (await get("/api/track")).json()).rows[0].履约单号, "LIVE");
+  pages.FULFILLMENT_PRIVATE_WORKER.fetch = async () => new Response(null, {status: 502});
+  const offline = await (await get("/api/me", {headers: {Cookie: "fd_session=old"}})).json();
+  assert.equal(offline.preview, true);
+  assert.equal(offline.can_edit, false);
+  assert.equal(offline.snapshotAt, now);
+  assert.equal((await (await get("/api/track" + query)).json()).rows[0].履约单号, id);
+  assert.equal((await get("/api/alerts/action", {method: "POST", body: "{}"})).status, 502);
 });

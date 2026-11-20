@@ -70,6 +70,8 @@ def init_tables(db):
 @router.get("/ops/auth/login")
 def begin(request: Request):
     target = next_path(request.query_params.get("next"))
+    if core.open_test_enabled():
+        return redirect(target)
     if not enabled():
         return failed("unavailable", target)
     state = secrets.token_urlsafe(32)
@@ -145,6 +147,8 @@ def resolve_user(profile):
 
 @router.get(CALLBACK_PATH)
 def callback(request: Request):
+    if core.open_test_enabled():
+        return redirect("/")
     if not enabled():
         return failed("unavailable")
     state = request.query_params.get("state", "")
@@ -190,6 +194,8 @@ def require_same_origin(request):
 
 def require_csrf(request):
     require_same_origin(request)
+    if core.open_test_enabled():
+        return
     sid = request.cookies.get(core.SESSION_COOKIE)
     browser_request = request.headers.get("origin") or request.headers.get("sec-fetch-site")
     if sid and (setting("OPS_CLIENT_ID") or browser_request):

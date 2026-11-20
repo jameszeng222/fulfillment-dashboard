@@ -3,18 +3,16 @@ from __future__ import annotations
 
 import argparse
 from contextlib import closing
+import os
 from pathlib import Path
-import secrets
 import sqlite3
 
-from fastapi import Request
 from fastapi.responses import RedirectResponse
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 import uvicorn
 
 from app import core
 from app.main import app
-from init_ops import hash_pw
 
 
 def main():
@@ -40,25 +38,15 @@ def main():
                 copy.execute("DELETE FROM sessions")
                 copy.commit()
     core.SESSION_COOKIE = "fd_local_preview"
-    username = "local-preview"
-    with core.ops() as ops:
-        ops.execute("""
-            INSERT OR IGNORE INTO users(username,password_hash,display_name,role,created_at)
-            VALUES (?,?,?,?,?)
-        """, (username, hash_pw(secrets.token_urlsafe(32)), "本地预览操作员", "admin", core.now_iso()))
+    os.environ.setdefault("FULFILLMENT_OPEN_TEST", "true")
 
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 
     @app.get("/preview", include_in_schema=False)
-    def open_preview(request: Request):
-        response = RedirectResponse("/", status_code=303)
-        if core.current_user(request):
-            return response
-        sid, _ = core.create_session(username, ip="127.0.0.1", ua=request.headers.get("user-agent", ""))
-        core.set_session_cookie(request, response, sid)
-        return response
+    def open_preview():
+        return RedirectResponse("/", status_code=303)
 
-    print(f"本地预览 http://127.0.0.1:{args.port}/preview", flush=True)
+    print(f"本地预览 http://127.0.0.1:{args.port}/", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=args.port, proxy_headers=False)
 
 

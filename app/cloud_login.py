@@ -16,7 +16,7 @@ TTL = 90
 
 
 def enabled():
-    return setting("FULFILLMENT_CLOUD_TICKETS").lower() == "true"
+    return not core.open_test_enabled() and setting("FULFILLMENT_CLOUD_TICKETS").lower() == "true"
 
 
 def ensure_table(db):

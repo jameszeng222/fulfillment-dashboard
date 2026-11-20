@@ -195,6 +195,10 @@ def drop_session(sid: str):
 
 
 def current_user(request: Request) -> dict | None:
+    if open_test_enabled():
+        return {"username": "open-test", "display_name": "开放测试",
+                "role": "admin", "team": None, "can_edit": True,
+                "role_label": "管理员", "openTest": True}
     sid = request.cookies.get(SESSION_COOKIE)
     if not sid:
         return None
@@ -219,8 +223,12 @@ def current_user(request: Request) -> dict | None:
     }
 
 
+def open_test_enabled():
+    return setting("FULFILLMENT_OPEN_TEST").lower() == "true"
+
+
 def public_preview_enabled():
-    return setting("FULFILLMENT_PUBLIC_PREVIEW").lower() == "true"
+    return open_test_enabled() or setting("FULFILLMENT_PUBLIC_PREVIEW").lower() == "true"
 
 
 def require_reader(request: Request) -> dict:

@@ -67,6 +67,7 @@ export default {
     const configured = Boolean(origin && origin !== url.origin &&
       typeof key === "string" && /^[A-Za-z0-9_-]{43,128}$/.test(key));
     const publicPreview = env.FULFILLMENT_EDGE_PREVIEW === "true";
+    const openTest = env.FULFILLMENT_EDGE_OPEN_TEST === "true";
     if (url.pathname.startsWith(SNAPSHOT)) {
       return manageSnapshot(request, env, url.pathname.slice(SNAPSHOT.length))
         .catch(() => unavailable("snapshot_sync", "快照存储暂时无法写入。", 502));
@@ -79,7 +80,7 @@ export default {
     }
     if (!METHODS.has(request.method)) return unavailable("method", "请求方法不受支持。", 405);
     if (!knownPath(url.pathname)) return unavailable("not_found", "没有找到这个页面。", 404);
-    const visitor = publicPreview && !/(?:^|;\s*)fd_session=/.test(request.headers.get("cookie") || "");
+    const visitor = publicPreview && (openTest || !/(?:^|;\s*)fd_session=/.test(request.headers.get("cookie") || ""));
     if (env.ASSETS && ["GET", "HEAD"].includes(request.method) &&
         (APP_ASSETS.has(url.pathname) || (visitor && url.pathname === "/"))) {
       const asset = await env.ASSETS.fetch(request);
@@ -89,16 +90,26 @@ export default {
         return new Response(asset.body, {status: asset.status, headers});
       }
     }
-    if (visitor && request.method === "GET" && url.pathname === "/api/me") {
+    const identity = request.method === "GET" && url.pathname === "/api/me";
+    if (visitor && !openTest && identity) {
       return Response.json(VISITOR, {headers: privateHeaders()});
     }
     const snapshotStore = visitor && request.method === "GET" ? env.FULFILLMENT_SNAPSHOT : null;
     const fromSnapshot = fallback => readSnapshot(snapshotStore, url, fallback).catch(() => null);
-    const snapshot = snapshotStore && await fromSnapshot(false);
+    const snapshot = snapshotStore && !openTest ? await fromSnapshot(false) : null;
     const snapshotMiss = snapshot?.headers.get("X-Fulfillment-Snapshot-Miss") === "1";
     if (snapshot && (!snapshotMiss || !configured)) return snapshot;
+    const offline = async () => {
+      if (!snapshotStore) return null;
+      if (openTest && identity) {
+        const {snapshotAt} = await snapshotStatus(snapshotStore).catch(() => ({}));
+        if (snapshotAt) return Response.json({...VISITOR, display_name: "离线快照", snapshotAt},
+          {headers: privateHeaders()});
+      }
+      return snapshot || await fromSnapshot(true);
+    };
     if (!configured && snapshotStore) {
-      const fallback = await fromSnapshot(true);
+      const fallback = await offline();
       if (fallback) return fallback;
     }
     if (!configured) return unavailable("origin_unconfigured", "Cloudflare 入口已发布，履约数据服务尚未连接。");
@@ -120,18 +131,18 @@ export default {
       };
       if (snapshotMiss) {
         options.signal = AbortSignal.timeout(2200);
-      } else if (snapshotStore && ["/api/overview", "/api/channels"].includes(url.pathname) &&
+      } else if (!openTest && snapshotStore && ["/api/overview", "/api/channels"].includes(url.pathname) &&
           (await snapshotStatus(snapshotStore).catch(() => ({}))).snapshotAt) {
         options.signal = AbortSignal.timeout(3500);
       }
       response = vpc ? await vpc.fetch(upstream.href, options) : await fetch(upstream, options);
     } catch {
-      const fallback = snapshot || (snapshotStore && await fromSnapshot(true));
+      const fallback = await offline();
       if (fallback) return fallback;
       return unavailable("origin_unreachable", "履约数据服务暂时无法连接。", 502);
     }
     if (snapshotStore && (response.status >= 500 || (snapshotMiss && response.status === 404))) {
-      const fallback = snapshot || await fromSnapshot(true);
+      const fallback = await offline();
       if (fallback) return fallback;
     }
     const responseHeaders = privateHeaders(response.headers);

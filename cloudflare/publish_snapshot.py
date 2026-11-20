@@ -337,6 +337,7 @@ def main():
     parser.add_argument("--check", action="store_true", help="仅在本机生成快照并检查大小")
     parser.add_argument("--force", action="store_true", help="立即同步一次")
     args = parser.parse_args()
+    os.environ["FULFILLMENT_OPEN_TEST"] = "false"
     os.environ["FULFILLMENT_PUBLIC_PREVIEW"] = "true"
     key = os.getenv("FULFILLMENT_EDGE_KEY", "")
     origin = os.getenv("OPS_SITE_ORIGIN", "")

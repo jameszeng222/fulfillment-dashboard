@@ -66,7 +66,7 @@ jobs:
             test -n "$FULFILLMENT_VPC_SERVICE_ID"
             [[ "$FULFILLMENT_EDGE_KEY" =~ ^[A-Za-z0-9_-]{43,128}$ ]]
             printf '%s' "$FULFILLMENT_EDGE_KEY" | wrangler --cwd cloudflare pages secret put FULFILLMENT_EDGE_KEY --project-name "$CF_PAGES_PROJECT"
-            printf '\n[vars]\nFULFILLMENT_EDGE_PREVIEW = "true"\nOPS_AUTHORIZE_URL = "https://ops.htwig.com:10000/oauth/authorize"\n\n[[services]]\nbinding = "FULFILLMENT_PRIVATE_WORKER"\nservice = "fulfillment-monitor-origin"\n' \
+            printf '\n[vars]\nFULFILLMENT_EDGE_PREVIEW = "true"\nFULFILLMENT_EDGE_OPEN_TEST = "true"\nOPS_AUTHORIZE_URL = "https://ops.htwig.com:10000/oauth/authorize"\n\n[[services]]\nbinding = "FULFILLMENT_PRIVATE_WORKER"\nservice = "fulfillment-monitor-origin"\n' \
               >> cloudflare/wrangler.toml
           fi
           case "$code" in
@@ -110,7 +110,7 @@ jobs:
           jq -e '.status == "edge_ready" and (.originConfigured | type == "boolean")' <<< "$result"
           echo "Cloudflare entry: $url" >> "$GITHUB_STEP_SUMMARY"
           if jq -e '.originConfigured' <<< "$result" >/dev/null; then
-            echo "Origin settings are present. Confirm authenticated access before sharing the site." >> "$GITHUB_STEP_SUMMARY"
+            echo "Origin settings are present. Verify the current access mode from the public site." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "Pages is live. The fulfillment backend still needs its private origin configured." >> "$GITHUB_STEP_SUMMARY"
           fi

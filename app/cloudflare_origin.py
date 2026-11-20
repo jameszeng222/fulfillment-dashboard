@@ -24,6 +24,8 @@ def check_operating_mode():
     configured_key()
     if not core.DUCK_DB.is_file() or not core.OPS_DB.is_file():
         raise RuntimeError("履约主库或操作库不存在")
+    if core.open_test_enabled():
+        return
     if not local_login_enabled():
         if enabled():
             return

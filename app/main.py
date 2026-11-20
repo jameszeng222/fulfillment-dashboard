@@ -51,6 +51,8 @@ def _page(name: str) -> FileResponse:
 @app.get("/login")
 def login_page(request: Request):
     target = ops_auth.next_path(request.query_params.get("next"))
+    if core.open_test_enabled():
+        return ops_auth.redirect(target)
     error = ops_auth.ERRORS.get(request.query_params.get("error"), "")
     if not error and core.current_user(request):
         return ops_auth.redirect(target)
