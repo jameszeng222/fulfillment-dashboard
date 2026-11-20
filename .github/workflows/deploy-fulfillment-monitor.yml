@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       retire_legacy:
-        description: Redirect the retired static Pages dashboard to the fulfillment monitor
+        description: Take the retired static Pages dashboard offline
         type: boolean
         default: false
   push:
@@ -94,12 +94,15 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          target="https://$CF_PAGES_PROJECT.pages.dev/"
-          redirect_dir=$(mktemp -d)
-          printf '/* %s 302\n' "$target" > "$redirect_dir/_redirects"
-          printf '<!doctype html><meta charset="utf-8"><title>履约监控系统</title><a href="%s">打开新版履约监控系统</a>\n' "$target" > "$redirect_dir/index.html"
-          npx --yes --package=wrangler@4.135.0 wrangler pages deploy "$redirect_dir" \
+          retired_dir=$(mktemp -d)
+          printf '%s\n' 'export default { fetch() { return new Response("This dashboard has been retired.", {status: 410, headers: {"Cache-Control": "no-store", "X-Robots-Tag": "noindex"}}); } };' > "$retired_dir/_worker.js"
+          printf '<!doctype html><meta charset="utf-8"><title>站点已下线</title><p>该站点已下线。</p>\n' > "$retired_dir/index.html"
+          npx --yes --package=wrangler@4.135.0 wrangler pages deploy "$retired_dir" \
             --project-name logistics-dashboard --branch main --commit-hash "$GITHUB_SHA" --commit-dirty=false
-          actual=$(curl --fail --silent --show-error --retry 5 --retry-all-errors --max-time 15 \
-            --output /dev/null --write-out '%{http_code} %{redirect_url}' https://logistics-dashboard.pages.dev/)
-          test "$actual" = "302 $target"
+          for attempt in $(seq 1 8); do
+            actual=$(curl --silent --show-error --max-time 15 \
+              --output /dev/null --write-out '%{http_code}' https://logistics-dashboard.pages.dev/)
+            [ "$actual" != "410" ] || exit 0
+            sleep 3
+          done
+          echo "The retired address returned HTTP $actual"; exit 1
