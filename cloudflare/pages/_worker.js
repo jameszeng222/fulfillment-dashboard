@@ -1,6 +1,6 @@
 const HEALTH = "/__edge/health";
 const PROXY_HEADER = "x-fulfillment-edge-key";
-const PUBLIC_PATHS = new Set(["/", "/login", "/assistant.html", "/favicon.ico", "/ops/auth/login", "/ops/auth/callback"]);
+const PUBLIC_PATHS = new Set(["/", "/login", "/sharing", "/assistant.html", "/favicon.ico", "/ops/auth/login", "/ops/auth/callback"]);
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 const FORWARDED_HEADERS = ["accept", "content-type", "cookie", "origin", "sec-fetch-site",
   "x-csrf-token", "sign", "if-modified-since", "if-none-match", "user-agent"];

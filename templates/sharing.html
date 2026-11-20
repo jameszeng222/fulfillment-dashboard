@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>邀请同事 · 履约监控系统</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .share{max-width:850px;margin:32px auto;padding:0 18px;display:grid;gap:16px}
+  .share-head,.share-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .share-form{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
+  .share-form .field{flex:1;min-width:184px;margin:0}
+  .share .card{padding:18px}
+  .share h1{font-size:23px}
+  .share h2{margin-bottom:12px}
+  .share p{color:var(--ink2);line-height:1.6;margin:8px 0}
+  .share .err{color:var(--bad);min-height:0;margin:0}
+  .share-row{border-bottom:1px solid var(--line);padding:11px 0}
+  .share-row:last-child{border-bottom:0;padding-bottom:0}
+  .share-row span{color:var(--ink2);margin-left:10px}
+  .share-row button{margin-left:6px}
+  #inviteLink{min-width:180px;flex:1;padding:7px 9px;border:1px solid var(--line);border-radius:6px}
+</style>
+</head>
+<body>
+<main class="share">
+  <header class="share-head">
+    <h1>邀请同事</h1>
+    <a class="btn ghost" href="/">返回履约监控</a>
+  </header>
+  <section class="card">
+    <h2>生成邀请链接</h2>
+    <form class="share-form" id="inviteForm">
+      <div class="field"><label for="person">同事称呼</label><input id="person" required maxlength="60" autocomplete="off"></div>
+      <button class="btn" id="submitInvite" type="submit" disabled>生成邀请</button>
+    </form>
+    <p>同事可查看履约单及逐条轨迹。邀请链接 24 小时内可用一次，登录后可在同一浏览器直接访问 7 天。</p>
+    <div id="freshInvite" hidden>
+      <p>请把此链接发给对应同事。</p>
+      <div class="share-row">
+        <input id="inviteLink" readonly aria-label="一次性邀请链接">
+        <button class="btn ghost" type="button" id="copyInvite">复制链接</button>
+      </div>
+    </div>
+    <p id="notice" role="status"></p>
+    <p class="err" id="error" role="alert"></p>
+  </section>
+  <section class="card">
+    <h2>现有访问</h2>
+    <div id="accounts"></div>
+  </section>
+</main>
+<script src="/static/sharing.js" defer></script>
+</body>
+</html>

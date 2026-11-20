@@ -21,6 +21,7 @@ OPS_DB = ROOT / "ops.db"
 
 SESSION_COOKIE = "fd_session"
 SESSION_TTL_HOURS = 12
+CLOUD_VIEWER_MARKER = "!cloud-viewer-invite"
 
 ROLES = {
     "admin":     {"label": "系统管理员", "can_edit": True, "scope": "all"},
@@ -164,6 +165,15 @@ def allowed_online_account(username):
     return not allowed or username in allowed
 
 
+def allowed_session_account(user):
+    return allowed_online_account(user["username"]) or (
+        setting("FULFILLMENT_CLOUD_TICKETS").lower() == "true"
+        and user["username"].startswith("cloud-viewer:")
+        and user["role"] == "viewer"
+        and user["password_hash"] == CLOUD_VIEWER_MARKER
+    )
+
+
 def create_session(username: str, ip: str = "", ua: str = "", max_age=None) -> tuple[str, str]:
     sid = new_sid()
     exp = (datetime.now(timezone.utc) + timedelta(seconds=max_age or session_seconds())).isoformat(timespec="seconds")
@@ -188,14 +198,14 @@ def current_user(request: Request) -> dict | None:
         return None
     with ops() as con:
         row = con.execute("""
-            SELECT s.username, s.expires_at, u.display_name, u.role, u.team, u.active
+            SELECT s.username, s.expires_at, u.display_name, u.role, u.team, u.active, u.password_hash
             FROM sessions s JOIN users u ON u.username = s.username
             WHERE s.sid = ?
         """, (sid,)).fetchone()
     if not row:
         return None
     if (datetime.fromisoformat(row["expires_at"]) <= datetime.now(timezone.utc)
-            or not row["active"] or not allowed_online_account(row["username"])):
+            or not row["active"] or not allowed_session_account(row)):
         return None
     return {
         "username": row["username"],

@@ -31,14 +31,17 @@
 </div>
 <script>
 const form = document.getElementById('form');
-const ticket = new URLSearchParams(location.hash.slice(1)).get('cloud_ticket');
+const loginLink = new URLSearchParams(location.hash.slice(1));
+const invitation = loginLink.get('invite');
+const ticket = invitation || loginLink.get('cloud_ticket');
 if (ticket) {
-  history.replaceState(null, '', location.pathname + location.search);
-  fetch('/api/cloud/session', {
+  history.replaceState(null, '', location.pathname);
+  fetch(invitation ? '/api/cloud/invite/session' : '/api/cloud/session', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({ticket})
   }).then(async response => {
-    if (!response.ok) throw new Error('登录链接已失效。请从本机桌面重新打开。');
+    if (!response.ok) throw new Error(invitation ? '邀请已使用、过期或撤销。请联系管理员发送新链接。' :
+      '登录链接已失效。请从本机桌面重新打开。');
     location.replace('/');
   }).catch(error => { document.querySelector('[role=status]').textContent = error.message; });
 }

@@ -8,7 +8,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from . import core, ops_auth, ops_assistant
+from . import cloud_login, core, ops_auth, ops_assistant
 from .carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts
 from .order_time import delivery_facts
 from . import tracking_archive
@@ -70,6 +70,7 @@ def me(request: Request, response: Response):
         raise HTTPException(status_code=401, detail="未登录")
     response.headers["Cache-Control"] = "no-store"
     return {**u, "csrf": core.csrf_token(request.cookies[core.SESSION_COOKIE]),
+            "cloudSharing": u["role"] == "admin" and cloud_login.enabled(),
             "opsAssistant": ops_assistant.can_use(u) and any(ops_assistant.configured().values())}
 
 

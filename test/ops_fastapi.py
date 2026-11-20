@@ -225,6 +225,46 @@ class OpsTests(unittest.TestCase):
                 db.execute("UPDATE cloud_login_ticket SET expires=0")
             self.assertEqual(self.browser.request(path, "POST", expired, {"origin": SITE})[0], 401)
 
+    def test_cloud_invites_create_viewers_and_revoke_all_viewer_sessions(self):
+        from cloudflare.open_online import prepare_account
+
+        manage = "/api/cloud/invites"
+        accept = "/api/cloud/invite/session"
+        with patch.dict("os.environ", {"FULFILLMENT_CLOUD_TICKETS": "true",
+                                      "FULFILLMENT_ONLINE_USERS": cloud_login.USERNAME}):
+            prepare_account()
+            origin = {"origin": SITE}
+            self.assertEqual(Browser().request(manage, "POST", {"name": "Demo"}, origin)[0], 401)
+            self.assertEqual(self.browser.request("/api/cloud/session", "POST",
+                                                   {"ticket": cloud_login.issue_ticket()}, origin)[0], 200)
+            _, _, identity = self.browser.request("/api/me")
+            admin = {**origin, "x-csrf-token": json.loads(identity)["csrf"]}
+            self.assertEqual(self.browser.request(manage, "POST", {"name": "Demo"}, origin)[0], 403)
+            status, _, new_invite = self.browser.request(manage, "POST", {"name": "Demo"}, admin)
+            self.assertEqual(status, 201)
+            link = urlsplit(json.loads(new_invite)["link"])
+            self.assertEqual(link.path, "/login")
+            ticket = {"ticket": parse_qs(link.fragment)["invite"][0]}
+            viewer = Browser()
+            self.assertEqual(viewer.request(accept, "POST", ticket, {"origin": HUB})[0], 403)
+            status, headers, _ = viewer.request(accept, "POST", ticket, origin)
+            self.assertEqual(status, 200)
+            self.assertIn(b"Max-Age=604800", headers[b"set-cookie"])
+            self.assertIn(b"Secure", headers[b"set-cookie"])
+            self.assertEqual(Browser().request(accept, "POST", ticket, origin)[0], 401)
+            profile = json.loads(viewer.request("/api/me")[2])
+            self.assertEqual(profile["role"], "viewer")
+            self.assertFalse(profile["can_edit"])
+            self.assertFalse(profile["cloudSharing"])
+            self.assertEqual(viewer.request(manage)[0], 403)
+            path = manage + "/" + profile["username"]
+            replacement = self.browser.request(path + "/renew", "POST", headers=admin)
+            self.assertEqual(replacement[0], 200)
+            self.assertEqual(self.browser.request(path, "DELETE", headers=admin)[0], 200)
+            self.assertEqual(viewer.request("/api/me")[0], 401)
+            renewed = {"ticket": parse_qs(urlsplit(json.loads(replacement[2])["link"]).fragment)["invite"][0]}
+            self.assertEqual(Browser().request(accept, "POST", renewed, origin)[0], 401)
+
     def test_mcp(self):
         csrf = self.login()
         status, _, body = self.browser.request("/api/mcp/tools")

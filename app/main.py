@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import cloud_login, core, ops_auth, ops_assistant
+from . import cloud_login, cloud_sharing, core, ops_auth, ops_assistant
 from .ops_gateway import GatewayError
 from .api import router
 from .pages_api import router as pages_router
@@ -34,6 +34,7 @@ app.include_router(tracking_sync_router)
 app.include_router(ops_auth.router)
 app.include_router(ops_assistant.router)
 app.include_router(cloud_login.router)
+app.include_router(cloud_sharing.router)
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 
@@ -62,7 +63,7 @@ def login_page(request: Request):
     html = (TPL / "login.html").read_text(encoding="utf-8")
     return HTMLResponse(html.replace("<!--OPS_LOGIN-->", button)
                         .replace("<!--LOGIN_MESSAGE-->", escape(error))
-                        .replace("<!--CLOUD_LOGIN-->", '<p>请双击本机桌面的「履约监控 - 免密码登录」。</p>' if cloud_login.enabled() else "")
+                        .replace("<!--CLOUD_LOGIN-->", '<p>请打开管理员发给你的邀请链接。本机管理员可使用桌面免密码入口。</p>' if cloud_login.enabled() else "")
                         .replace("<!--LOCAL_LOGIN_STATE-->", "" if ops_auth.local_login_enabled() else "hidden"),
                         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
@@ -73,6 +74,14 @@ def index(request: Request):
     if not u:
         return RedirectResponse("/login", status_code=302)
     return _page("app.html")
+
+
+@app.get("/sharing")
+def sharing_page(request: Request):
+    if not core.current_user(request):
+        return ops_auth.redirect("/login")
+    cloud_sharing.require_sharing(request)
+    return _page("sharing.html")
 
 
 @app.get("/assistant.html")
