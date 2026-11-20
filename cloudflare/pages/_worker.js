@@ -2,6 +2,9 @@ const HEALTH = "/__edge/health";
 const PROXY_HEADER = "x-fulfillment-edge-key";
 const PUBLIC_PATHS = new Set(["/", "/login", "/sharing", "/assistant.html", "/favicon.ico", "/ops/auth/login", "/ops/auth/callback"]);
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
+const APP_ASSETS = new Set(["/static/app.css", "/static/app.js", "/static/echarts.min.js", "/static/sharing.js"]);
+const VISITOR = { username: "preview", display_name: "只读预览", role: "viewer",
+  role_label: "访客", team: null, can_edit: false, preview: true, cloudSharing: false, opsAssistant: false };
 const FORWARDED_HEADERS = ["accept", "content-type", "cookie", "origin", "sec-fetch-site",
   "x-csrf-token", "sign", "if-modified-since", "if-none-match", "user-agent"];
 
@@ -66,6 +69,19 @@ export default {
     }
     if (!METHODS.has(request.method)) return unavailable("method", "请求方法不受支持。", 405);
     if (!knownPath(url.pathname)) return unavailable("not_found", "没有找到这个页面。", 404);
+    const visitor = env.FULFILLMENT_EDGE_PREVIEW === "true" && !/(?:^|;\s*)fd_session=/.test(request.headers.get("cookie") || "");
+    if (env.ASSETS && ["GET", "HEAD"].includes(request.method) &&
+        (APP_ASSETS.has(url.pathname) || (visitor && url.pathname === "/"))) {
+      const asset = await env.ASSETS.fetch(request);
+      if (asset.ok || asset.status === 304) {
+        const headers = privateHeaders(asset.headers);
+        if (APP_ASSETS.has(url.pathname)) headers.set("Cache-Control", "public, max-age=300");
+        return new Response(asset.body, {status: asset.status, headers});
+      }
+    }
+    if (visitor && request.method === "GET" && url.pathname === "/api/me") {
+      return Response.json(VISITOR, {headers: privateHeaders()});
+    }
     if (!configured) return unavailable("origin_unconfigured", "Cloudflare 入口已发布，履约数据服务尚未连接。");
 
     const upstream = new URL(origin);

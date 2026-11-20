@@ -4,6 +4,7 @@ from unicodedata import normalize
 
 from track17 import OFFICIAL_STATUS, STATUS_CN
 
+from . import core, tracking_archive
 from .waybill import normalized as waybill_number
 
 
@@ -46,3 +47,47 @@ def event(row):
     substatus = row.get("子状态")
     label = SUBSTATUS_CN.get(substatus) or STATUS_CN.get(status) or "承运商更新"
     return {**select(row, EVENT_FIELDS), "描述": label}
+
+
+def matching_orders(con, match):
+    condition, params = match
+    active = core.active_facts(core.order_facts(con))
+    return f"(SELECT * FROM {active} o WHERE TRUE{condition})", params
+
+
+def tracking_projection(con, facts):
+    tracking, missing, archive = tracking_archive.sources(con)
+    events = core.columns(con, "trk_event")
+    same_carrier = " AND (e.运输商代码=t.carrier OR e.运输商代码 IS NULL)" if "运输商代码" in events else ""
+    event_count = f"(SELECT count(*) FROM trk_event e WHERE e.单号=o.单号归一{same_carrier})" if events else "0"
+    return f"""
+        SELECT o.*, t.状态 AS 轨迹状态, t.状态中文 AS 轨迹状态中文, t.子状态 AS 轨迹子状态,
+               t.状态中文 AS 最新描述, t.最新事件时间, t.最新事件当地时间,
+               coalesce(t.查询时间,h.查询时间) AS 查询时间, h.回补状态,
+               t.carrier AS 运输商代码, h.carrier AS 回补运输商代码,
+               (t.单号 IS NULL AND m.单号 IS NOT NULL) AS 未注册,
+               coalesce(nullif(h.事件数,0),{event_count}) AS 逐条事件数,
+               t.签收时间 AS tracked_delivery, t.签收当地时间 AS tracked_delivery_local
+        FROM {facts} o LEFT JOIN {tracking} t ON t.单号=o.单号归一
+        LEFT JOIN {missing} m ON m.单号=o.单号归一
+        LEFT JOIN {archive} h ON h.履约单号=o.履约单号 AND h.单号=o.单号归一
+    """
+
+
+def search(query, page, size):
+    result = {"total": 0, "page": page, "size": size, "rows": [], "statusSummary": [], "ruleSummary": []}
+    match = lookup(query)
+    if not match:
+        return result
+    with core.duck() as con:
+        facts, params = matching_orders(con, match)
+        result["total"] = con.execute(f"SELECT count(*) FROM {facts}", params).fetchone()[0]
+        if result["total"]:
+            sql = tracking_projection(con, facts)
+            rows = con.execute(f"""
+                SELECT * FROM ({sql}) ORDER BY 签出时间 DESC NULLS LAST, 履约单号
+                LIMIT ? OFFSET ?
+            """, [*params, size, (page - 1) * size]).df().to_dict("records")
+            tracking_archive.fill_local_times(con, rows)
+            result["rows"] = [select(row, TRACK_FIELDS + ("最新描述",)) for row in rows]
+    return core.clean(result)

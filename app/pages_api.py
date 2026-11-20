@@ -186,17 +186,9 @@ def track(request: Request,
           sort: str = "停滞天数", order: str = "desc",
           start: str = "", end: str = "", lastmile: str = "",
           sub: str = "", coverage: str = "", channel: str = ""):
-    preview = core.require_reader(request)["preview"]
-    match = public_preview.lookup(q) if preview else None
-    if preview and not match:
-        return {"total": 0, "page": page, "size": size, "rows": [], "statusSummary": [], "ruleSummary": []}
-    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q="" if preview else q,
-                       lastmile=lastmile, channel=channel)
-    if match:
-        match_sql, match_args = match
-        cond += match_sql
-        args.extend(match_args)
-        rule = ""
+    if core.require_reader(request)["preview"]:
+        return public_preview.search(q, page, size)
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q=q, lastmile=lastmile, channel=channel)
 
     for column, value in (("t.状态", tstat), ("t.子状态", sub), ("a.主预警规则", rule)):
         vals = core.filter_values(value)
@@ -229,14 +221,12 @@ def track(request: Request,
     try:
         facts = delivery_facts(con, core.active_facts(core.order_facts(con)))
         tracking, missing, archive = tracking_sources(con)
-        summaries = []
-        if not preview:
-            with core.ops() as ops:
-                summaries = ops.execute("""
-                    SELECT order_no, max(rule_cn) FILTER (WHERE is_main), max(rule) FILTER (WHERE is_main),
-                           max(level) FILTER (WHERE is_main), count(*)
-                    FROM alerts GROUP BY order_no
-                """).fetchall()
+        with core.ops() as ops:
+            summaries = ops.execute("""
+                SELECT order_no, max(rule_cn) FILTER (WHERE is_main), max(rule) FILTER (WHERE is_main),
+                       max(level) FILTER (WHERE is_main), count(*)
+                FROM alerts GROUP BY order_no
+            """).fetchall()
         con.register("live_alerts", pd.DataFrame.from_records(
             summaries, columns=["履约单号", "主预警名称", "主预警规则", "主预警级别", "预警数"]
         ).astype({"履约单号": "string", "主预警名称": "string", "主预警规则": "string",
@@ -317,11 +307,6 @@ def track(request: Request,
     finally:
         con.close()
 
-    if preview:
-        rows = [public_preview.select(row, public_preview.TRACK_FIELDS) for row in rows]
-        for row in rows:
-            row["最新描述"] = row.get("轨迹状态中文")
-        rule_summary = []
     return core.clean({"total": int(total), "page": page, "size": size,
                        "rows": rows,
                        "statusSummary": status_summary, "ruleSummary": rule_summary})

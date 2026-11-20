@@ -8,7 +8,7 @@ const dt = s => s ? String(s).replace('T', ' ').slice(0, 16) : '—';
 const trackTime = (local, utc) => local ||
   (utc && utc !== 'NaT' ? `${String(utc).replace('T', ' ').slice(0, 19)} UTC` : '时间未提供');
 const measure = (value, unit = '') => value == null ? '—' : fmt1(value) + unit;
-const platformName = code => META.platformNames[code] || code || '—';
+const platformName = code => META?.platformNames?.[code] || code || '—';
 const levelTone = level => level === '紧急' ? 'e' : level === '高' ? 'h' : 'm';
 const states = { open: ['gray', '待处理'], claimed: ['blue', '已认领'], handling: ['purple', '处理中'],
   resolved: ['ok', '已解决'], archived: ['m', '已归档'] };
@@ -25,6 +25,9 @@ const jsonPost = (path, body) => api(path, {
 
 let ME = null, META = null, RULES = null;
 let lastImportAt = null;
+let snapshotAt = null;
+let metaFetch = null;
+let chartsFetch = null;
 const charts = {};
 const pendingRequests = new Map();
 const pageResponses = new Map();
@@ -43,8 +46,9 @@ const chartTip = { backgroundColor: chartTheme.ink, borderWidth: 0, confine: tru
 const compactCount = value => value >= 10000 ? `${Number((value / 10000).toFixed(1))} 万` : fmt(value);
 
 function setTopMeta(createdThrough) {
-  const parts = [`建单截止 ${createdThrough}`];
+  const parts = [createdThrough ? `建单截止 ${createdThrough}` : '履约数据'];
   if (lastImportAt) parts.push(`最近导入 ${dt(lastImportAt)}`);
+  if (snapshotAt) parts.push(`云端快照 ${new Date(snapshotAt).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai', hour12: false})}`);
   $('#topMeta').textContent = parts.join(' · ');
 }
 
@@ -62,8 +66,39 @@ async function api(path, opts = {}) {
   if (r.status === 401) { location.href = '/login'; throw new Error('未登录'); }
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(Array.isArray(d.detail) ? d.detail.map(item => item.msg).join('；') :
-    d.detail || ('HTTP ' + r.status));
+    d.detail || d.message || ('HTTP ' + r.status));
+  if (d.snapshotAt && d.snapshotAt !== snapshotAt) {
+    snapshotAt = d.snapshotAt;
+    setTopMeta(META?.range.end || d.asof);
+  }
   return d;
+}
+
+function loadMeta() {
+  if (!metaFetch) metaFetch = api('/api/meta').then(data => {
+    META = data;
+    setTopMeta(META.range.end);
+    return META;
+  }).catch(error => {
+    metaFetch = null;
+    throw error;
+  });
+  return metaFetch;
+}
+
+function loadChartLibrary() {
+  if (!chartsFetch) chartsFetch = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = '/static/echarts.min.js';
+    script.onload = resolve;
+    script.onerror = () => {
+      chartsFetch = null;
+      script.remove();
+      reject(new Error('图表组件加载失败，请稍后重试'));
+    };
+    document.head.append(script);
+  });
+  return chartsFetch;
 }
 
 function readPage(path) {
@@ -359,6 +394,8 @@ function dashFilterDefs() {
 }
 
 async function loadDash() {
+  await Promise.all([loadMeta(), loadChartLibrary()]);
+  if (VIEW !== 'dash') return;
   if (!DF) DF = makeFilters($('#dashFilters'), dashFilterDefs(), () => run(loadDash));
   const f = readF(DF);
   const d = await latest('dash', '/api/overview?' + qs(f));
@@ -614,7 +651,18 @@ async function loadTrack(page = 1, fromSearch = false) {
   const query = f.q?.trim();
   const {q, sort, ...scope} = f;
   TF._info.textContent = query ? '正在搜索…' : ME.preview ? '' : '正在读取履约单…';
-  let d = await latest('track', '/api/track?' + qs(f, page, 40));
+  let d;
+  try {
+    if (ME.preview && !query) {
+      pendingRequests.delete('track');
+      d = {rows: [], total: 0, page: 1, size: 40};
+    } else {
+      d = await latest('track', '/api/track?' + qs(f, page, 40));
+    }
+  } catch (error) {
+    if (VIEW === 'track' && trackMode === 'tracking') TF._info.textContent = `查询失败 · ${error.message}`;
+    throw error;
+  }
   if (!d || VIEW !== 'track' || trackMode !== 'tracking') return;
   let clearedFilters = false;
   if (fromSearch && query && !d.total && Object.keys(scope).length) {
@@ -729,6 +777,8 @@ let channelBasis = 'shipped';
 let renderedChannels = null;
 
 async function loadChannels() {
+  await Promise.all([loadMeta(), loadChartLibrary()]);
+  if (VIEW !== 'channels') return;
   if (!CF) CF = makeFilters($('#channelFilters'), [
     ...dashFilterDefs(),
     { type: 'select', label: '最少单量（默认 100）', key: 'min_n', options: [1, 10, 30, 100, 500] },
@@ -1230,7 +1280,9 @@ function closeDrawer() {
 
 /* ================= 启动 ================= */
 run(async function boot() {
-  [ME, META] = await Promise.all([api('/api/me'), api('/api/meta')]);
+  ME = await api('/api/me');
+  if (!ME.preview) await loadMeta();
+  else setTopMeta(null);
   $('#opsAssistant').hidden = !ME.opsAssistant;
   $('#cloudSharing').hidden = !ME.cloudSharing;
   if (!ME.preview) $('#currentChannelTip').textContent += ' · 点击渠道查看履约单';
@@ -1241,7 +1293,6 @@ run(async function boot() {
     }
     $('#trackIntro').textContent = '输入完整的履约单号、运单号、订单号或平台订单号，查看物流状态和时间线。';
   }
-  setTopMeta(META.range.end);
   $('#who').textContent = ME.preview ? ME.display_name : `${ME.display_name} · ${ME.role_label}`;
   $('#batchAction').append(...allowedActions().map(([key, label]) => new Option(label, key)));
   $('#batchAction').hidden = !ME.can_edit;
