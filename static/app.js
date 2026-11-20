@@ -586,7 +586,7 @@ const trackingGroups = () => [...new Map(META.trackStatuses.map(row => [row.stat
   .map(([v, t]) => ({ v, t }));
 const ruleOptions = () => META.ruleOptions || META.rules.map(row => ({ v: row.rule, t: row.rule_cn }));
 const blankRow = (cols, message) => `<tr><td colspan="${cols}" class="empty">${message}</td></tr>`;
-const orderButton = (no, tracking) => `<button type="button" class="order-link mono" data-order="${esc(no)}">${esc(no)}</button>
+const orderButton = (no, tracking) => `<button type="button" class="order-link mono" data-order="${esc(no)}" aria-haspopup="dialog" aria-controls="drawer">${esc(no)}</button>
   <small class="cell-sub mono">${esc(tracking || '—')}</small>`;
 const trackBadge = (status, label, sub, missing, fallback = '其他履约单 · 无本地结果') => status
   ? `<span class="badge ${status === 'Delivered' ? 'ok' : status === 'Exception' ? 'h' : 'blue'}">${esc(label || status)}</span>
@@ -790,6 +790,16 @@ async function loadTrack(page = 1, fromSearch = false) {
         <small class="cell-sub mono">${r.最新事件当地时间 || r.最新事件时间 ? esc(trackTime(r.最新事件当地时间, r.最新事件时间)) : '—'}${r.逐条事件数 ? ` · ${fmt(r.逐条事件数)} 条事件` : ''}</small></td></tr>`).join('') :
     blankRow(ME.preview ? 6 : 7, ME.preview && !query ? '输入完整单号查询物流轨迹' : '没有匹配的履约单');
   $('#trackBody').closest('.tblwrap').scrollTop = 0;
+  if (d.rows.length && (query ? d.total === 1 : d.page === 1)) {
+    const selection = pendingRequests.get('track');
+    const generation = readGeneration;
+    setTimeout(() => {
+      if (VIEW === 'track' && trackMode === 'tracking' && selection === pendingRequests.get('track') &&
+          generation === readGeneration && !drawerOrder) {
+        preloadOrder(d.rows[0].履约单号, 'low');
+      }
+    }, query ? 0 : 250);
+  }
   if (!ME.preview && !query && trackRowsOnly(f) && d.page * d.size < d.total) {
     const selection = pendingRequests.get('track');
     const generation = readGeneration;
@@ -1361,46 +1371,109 @@ function carrierEventText(stage, sub, description) {
 }
 
 let drawerOrder = null;
+let drawerPrefetch = null;
+let drawerIntentTimer;
+const orderDetailsPath = no => '/api/orders/' + encodeURIComponent(no) +
+  (ME.preview ? '?q=' + encodeURIComponent(lastTrackingQuery) : '');
 
-async function openOrder(no, refresh = false) {
+function preloadOrder(no, priority = 'auto') {
+  if (drawerPrefetch || drawerOrder || VIEW !== 'track' || document.hidden || navigator.connection?.saveData) return;
+  const path = orderDetailsPath(no);
+  const cached = pageResponses.get(path);
+  if (cached && (!cached.until || cached.until > performance.now())) return;
+  drawerPrefetch = readPage(path, {signal: AbortSignal.timeout(12_000), priority})
+    .catch(() => {}).finally(() => { drawerPrefetch = null; });
+}
+
+function watchOrderIntent(event) {
+  const button = event.target.closest('[data-order]');
+  if (!button || (event.relatedTarget instanceof Node && button.contains(event.relatedTarget))) return;
+  clearTimeout(drawerIntentTimer);
+  drawerIntentTimer = setTimeout(() => {
+    if (button.isConnected && button.matches(':hover, :focus-visible')) preloadOrder(button.dataset.order);
+  }, 120);
+}
+
+function orderFields(fields) {
+  return `<div class="kv">${fields.map(([label, value]) =>
+    `<div class="i">${esc(label)}<b>${esc(value) || '—'}</b></div>`).join('')}</div>`;
+}
+
+function orderTrackStatus(order) {
+  return order.轨迹状态中文 || (order.未注册 ? 'API 账号登记未匹配' :
+    order.回补状态 === 'empty' ? '已查询 · 未返回轨迹' :
+    order.已签收 ? '已签收 · 轨迹未入库' : order.签出时间 ? '已出库 · 待同步轨迹' : '无本地查询结果');
+}
+
+function showOrderSummary(no, trigger) {
+  const alert = trackMode === 'alerts' ? alertRows.find(row => row.order_no === no) : null;
+  const order = trackMode === 'tracking' ? trackRows.find(row => row.履约单号 === no) : null;
+  const channel = order?.当前渠道 || alert?.current_channel || order?.物流商 || alert?.carrier;
+  const country = order?.目的国中文 || alert?.country;
+  const shipped = order?.签出时间 || alert?.shipped_at || alert?.shipped_date;
+  const platform = order && (order.平台名称 || (order.平台 && platformName(order.平台)));
+  const officialStatus = order ? orderTrackStatus(order) :
+    trackingGroups().find(row => row.v === alert?.track_status)?.t || alert?.track_status;
+  $('#dTitle').textContent = no;
+  $('#dSub').textContent = [platform, order?.仓库 || alert?.warehouse, channel, country].filter(Boolean).join(' · ');
+  const fields = [
+    ['运单号', order?.快递单号 || alert?.tracking_no], ['当前物流渠道', channel], ['收货国家', country],
+    ['出库（北京时间）', shipped && dt(shipped)], ['17TRACK 主状态', officialStatus],
+    ['C 端承运商', order?.C端承运商],
+    ...(!ME.preview && order?.订单号 ? [['订单号', order.订单号]] : []),
+  ].filter(([, value]) => value);
+  const recent = order?.最新描述 ? `<section class="timeline-panel carrier-timeline" aria-label="最新物流轨迹">
+    <h4>最新物流轨迹 · 当地时间</h4>
+    <div class="t">${esc(trackTime(order.最新事件当地时间, order.最新事件时间))}</div>
+    ${carrierEventText(order.轨迹状态, order.轨迹子状态, order.最新描述)}
+  </section>` : '';
   const body = $('#dBody');
-  const lookup = ME.preview ? '?q=' + encodeURIComponent(lastTrackingQuery) : '';
-  const path = '/api/orders/' + encodeURIComponent(no) + lookup;
-  if (refresh) {
-    pageResponses.delete(path);
-    if (drawerOrder !== no) return;
-  } else {
-    if (drawerOrder !== no) drawerTrigger = document.activeElement;
-    drawerOrder = no;
-    const row = trackMode === 'alerts' ? alertRows.find(item => item.order_no === no) :
-      trackRows.find(item => item.履约单号 === no);
-    $('#dTitle').textContent = no;
-    $('#dSub').textContent = row?.快递单号 || row?.tracking_no || '';
-    const loading = el('p', 'note', '正在读取履约单详情和物流轨迹…');
-    loading.setAttribute('role', 'status');
-    body.replaceChildren(loading);
-    body.scrollTop = 0;
-    $('#mask').classList.add('on');
-    $('#drawer').classList.add('on');
-    $('#drawer').inert = false;
-    $('.app').inert = true;
-    $('#dClose').focus();
-  }
+  body.innerHTML = `${fields.length ? orderFields(fields) : ''}${recent}
+    <div class="note" id="drawerProgress" role="status">正在加载完整轨迹和履约明细…</div>`;
+  body.scrollTop = 0;
+  drawerOrder = no;
+  drawerTrigger = trigger;
+  $('#mask').classList.add('on');
+  $('#drawer').classList.add('on');
+  $('#drawer').inert = false;
+  $('.app').inert = true;
+  $('#dClose').focus({preventScroll: true});
+}
+
+async function openOrder(no, trigger) {
+  clearTimeout(drawerIntentTimer);
+  showOrderSummary(no, trigger);
+  await loadOrderDetail(no, orderDetailsPath(no));
+}
+
+async function refreshOrder(no) {
+  const path = orderDetailsPath(no);
+  pageResponses.delete(path);
+  if (drawerOrder === no) await loadOrderDetail(no, path, true);
+}
+
+async function loadOrderDetail(no, path, refresh = false) {
+  const body = $('#dBody');
   let d;
   try {
-    d = await latest('drawer', path, {signal: AbortSignal.timeout(12_000)});
+    d = await latest('drawer', path, {signal: AbortSignal.timeout(12_000), priority: 'high'});
+    if (!d) return;
+    if (!d.order) throw new Error('详情数据不完整');
   } catch (error) {
+    pageResponses.delete(path);
     if (refresh) throw error;
-    const message = el('p', 'note');
-    message.setAttribute('role', 'status');
-    message.textContent = error.name === 'TimeoutError' ? '详情加载超时' : '详情加载失败：' + error.message;
+    const progress = $('#drawerProgress');
+    progress.textContent = error.name === 'TimeoutError' ? '完整详情加载超时。' : '完整详情加载失败。' + error.message;
     const retry = el('button', 'btn ghost sm', '重试加载详情');
     retry.type = 'button';
-    retry.onclick = () => run(() => openOrder(no));
-    body.replaceChildren(message, retry);
+    retry.onclick = () => {
+      progress.textContent = '正在加载完整轨迹和履约明细…';
+      $('#dClose').focus({preventScroll: true});
+      run(() => loadOrderDetail(no, path));
+    };
+    progress.append(' ', retry);
     return;
   }
-  if (!d) return;
   const oldScroll = body.scrollTop;
   const o = d.order;
   $('#dTitle').textContent = o.履约单号;
@@ -1417,9 +1490,7 @@ async function openOrder(no, refresh = false) {
       trackTime(o.签收当地时间, o.承运商签收时间) : '—'],
     ['妥投统计来源', o.妥投统计来源 === 'WMS' ? 'WMS 补算' : o.妥投统计来源 || '—'],
     ['C 端承运商', o.C端承运商],
-    ['17TRACK 主状态', o.轨迹状态中文 || (o.未注册 ? 'API 账号登记未匹配' :
-      o.回补状态 === 'empty' ? '已查询 · 未返回轨迹' :
-      o.已签收 ? '已签收 · 轨迹未入库' : o.签出时间 ? '已出库 · 待同步轨迹' : '无本地查询结果')],
+    ['17TRACK 主状态', orderTrackStatus(o)],
     ['17TRACK 子状态', o.轨迹子状态], ['最近查询', dt(o.查询时间)],
   ];
 
@@ -1464,7 +1535,7 @@ async function openOrder(no, refresh = false) {
     || '<div style="color:#8b98ab;font-size:12px">暂无备注</div>';
 
   $('#dBody').innerHTML = `
-    <div class="kv">${kv.map(([k, v]) => `<div class="i">${k}<b>${esc(v) || '—'}</b></div>`).join('')}</div>
+    ${orderFields(kv)}
     ${ME.preview ? '' : `<div class="sect">业务预警</div>${alerts}`}
     <div class="sect drawer-section">
       <span>物流时间线</span>
@@ -1499,7 +1570,7 @@ async function openOrder(no, refresh = false) {
       try {
         await jsonPost(`/api/orders/${encodeURIComponent(no)}/notes`, { body: v });
         toast('已保存备注');
-        await openOrder(no, true);
+        await refreshOrder(no);
       } finally { save.disabled = false; }
     });
   };
@@ -1510,7 +1581,7 @@ async function openOrder(no, refresh = false) {
         await jsonPost('/api/alerts/action', { order_no: no, rule: b.dataset.rule, action: b.dataset.act });
         toast(`处理状态已更新 · ${actions[b.dataset.act]}`);
         invalidatePages();
-        await openOrder(no, true);
+        await refreshOrder(no);
         await Promise.all([loadActivity(), trackMode === 'alerts' ? loadAlerts(alertPage) : null]);
       } finally { b.disabled = false; }
     });
@@ -1525,7 +1596,7 @@ function closeDrawer() {
   $('#drawer').classList.remove('on');
   $('#drawer').inert = true;
   $('.app').inert = false;
-  if (drawerTrigger?.isConnected) drawerTrigger.focus();
+  if (drawerTrigger?.isConnected) drawerTrigger.focus({preventScroll: true});
 }
 
 /* ================= 启动 ================= */
@@ -1591,11 +1662,14 @@ run(async function boot() {
   };
   const orderClick = event => {
     const button = event.target.closest('[data-order]');
-    if (button) run(() => openOrder(button.dataset.order));
+    if (button) openOrder(button.dataset.order, button).catch(error => toast(error.message));
   };
-  $('#trackBody').onclick = orderClick;
+  for (const list of [$('#trackBody'), $('#alertBody')]) {
+    list.onclick = orderClick;
+    list.addEventListener('pointerover', watchOrderIntent);
+    list.addEventListener('focusin', watchOrderIntent);
+  }
   $('#showDetailed').onclick = () => openTracking({ coverage: 'detailed', sort: '逐条事件数' });
-  $('#alertBody').onclick = orderClick;
   $('#alertBody').onchange = refreshSelection;
   $('#batchAction').onchange = refreshSelection;
   $('#applyBatch').onclick = () => run(applyBatch);
