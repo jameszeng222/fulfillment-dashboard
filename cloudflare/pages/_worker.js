@@ -53,15 +53,8 @@ function redirectLocation(location, upstream, publicOrigin, path, configuredAuth
 
 export default {
   async fetch(request, env) {
-    if (env.FULFILLMENT_PRIVATE_WORKER) {
-      try {
-        return await env.FULFILLMENT_PRIVATE_WORKER.fetch(request);
-      } catch {
-        return unavailable("private_worker_unreachable", "履约私有连接暂时无法访问。", 502);
-      }
-    }
     const url = new URL(request.url);
-    const vpc = env.FULFILLMENT_VPC_SERVICE;
+    const vpc = env.FULFILLMENT_PRIVATE_WORKER;
     const origin = vpc ? "http://localhost:8770" : httpsOrigin(env.FULFILLMENT_ORIGIN_URL);
     const key = env.FULFILLMENT_EDGE_KEY;
     const configured = Boolean(origin && origin !== url.origin &&

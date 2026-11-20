@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import worker from "../cloudflare/pages/_worker.js";
+import relay from "../cloudflare/private-worker/index.js";
 
 const site = "https://fulfillment-monitor.pages.dev";
 const upstream = "https://fulfillment-origin.example";
@@ -54,16 +55,16 @@ test("The OAuth endpoint permits only the configured identity provider", async (
 
 test("Pages reaches the local port only via its private Worker binding", async () => {
   const origin = {
-    FULFILLMENT_EDGE_KEY: shared,
     FULFILLMENT_VPC_SERVICE: {
-      async fetch(target, options) {
-        assert.equal(target, "http://localhost:8770/api/me");
-        assert.equal(options.headers.get("x-fulfillment-edge-key"), shared);
+      async fetch(request) {
+        assert.equal(request.url, "http://localhost:8770/api/me");
+        assert.equal(request.headers.get("x-fulfillment-edge-key"), shared);
         return Response.json({ username: "test-operator" });
       },
     },
   };
-  const pages = { FULFILLMENT_PRIVATE_WORKER: { fetch: request => worker.fetch(request, origin) } };
+  const pages = { FULFILLMENT_EDGE_KEY: shared,
+    FULFILLMENT_PRIVATE_WORKER: { fetch: (url, options) => relay.fetch(new Request(url, options), origin) } };
   const response = await worker.fetch(new Request(site + "/api/me"), pages);
   assert.equal(response.status, 200);
   assert.equal((await response.json()).username, "test-operator");
