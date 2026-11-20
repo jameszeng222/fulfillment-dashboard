@@ -397,6 +397,16 @@ button.rank-row:hover { background: #f4f7fc; }
 .carrier-timeline .e::after { background: #c9e0d8; }
 .carrier-timeline .e:last-child { padding-bottom: 0; }
 .tl .d { line-height: 1.55; }
+.carrier-event-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 7px; }
+.event-label { flex: 0 0 auto; font-size: 11px; font-weight: 750; line-height: 1.6;
+  border-radius: 4px; padding: 0 6px; color: #154681; background: #dceaff; }
+.event-label.delivered { color: #07523d; background: #c9edda; }
+.event-label.attention { color: #892319; background: #ffe2d5; }
+.event-label.customs { color: #5b367c; background: #ede2fa; }
+.carrier-timeline .e:has(.event-label.attention)::before { background: #c3422f; }
+.carrier-timeline .e:has(.event-label.delivered)::before { background: #127959; }
+.definitions-card .tbl td, .definitions-card .tbl th { white-space: normal; line-height: 1.65; vertical-align: top; }
+.definitions-card .tbl th[scope="row"] { min-width: 102px; color: var(--ink); text-align: left; }
 
 .filters { position: relative; z-index: 5; }
 .multi-filter { position: relative; }

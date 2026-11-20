@@ -31,7 +31,7 @@ let chartsFetch = null;
 const charts = {};
 const pendingRequests = new Map();
 const pageResponses = new Map();
-const cachedPages = new Set(['activity', 'dash', 'health', 'track', 'channels', 'rules']);
+const cachedPages = new Set(['activity', 'dash', 'health', 'track', 'trackSummary', 'channels', 'rules']);
 let readGeneration = 0;
 let resizeFrame = 0;
 let toastTimer;
@@ -101,11 +101,11 @@ function loadChartLibrary() {
   return chartsFetch;
 }
 
-function readPage(path) {
+function readPage(path, options) {
   const current = pageResponses.get(path);
   if (current && (!current.until || current.until > performance.now())) return current.result;
   const entry = { until: 0 };
-  entry.result = api(path).then(data => {
+  entry.result = api(path, options).then(data => {
     entry.until = performance.now() + 25_000;
     return data;
   }, error => {
@@ -130,7 +130,7 @@ async function latest(key, path, options) {
   const cached = cachedPages.has(key);
   const stillCurrent = () => pendingRequests.get(key) === id && (!cached || generation === readGeneration);
   try {
-    const result = await (cached ? readPage(path) : api(path, options));
+    const result = await (cached ? readPage(path, options) : api(path, options));
     return stillCurrent() ? result : null;
   } catch (error) {
     if (stillCurrent()) throw error;
@@ -631,6 +631,7 @@ function prepareTrack() {
 }
 
 function openTracking(values = {}) {
+  if (!ME.preview && !META) return run(async () => { await loadMeta(); openTracking(values); });
   prepareTrack();
   Object.entries(TF).forEach(([key, control]) => { if (key !== '_info') control.value = values[key] || ''; });
   if (!ME.preview) updateSubstates();
@@ -645,50 +646,108 @@ function filterByTrackStatus(label, scope = {}) {
 }
 
 let lastTrackingQuery = '';
+let trackSummaryPath = '';
+
+async function loadTrackFilters() {
+  if (TF) return;
+  const host = $('#trackFilters');
+  if (!ME.preview && !META) {
+    host.textContent = '正在载入筛选项…';
+    try {
+      await loadMeta();
+    } catch {
+      const retry = el('button', 'btn ghost sm', '重试加载筛选项');
+      retry.type = 'button';
+      retry.onclick = () => run(loadTrackFilters);
+      host.replaceChildren(retry);
+      return;
+    }
+  }
+  prepareTrack();
+  $('#trackBody').querySelectorAll('[data-platform]').forEach(node => {
+    node.textContent = platformName(node.dataset.platform);
+  });
+}
+
+function trackRowsOnly(filters) {
+  return !filters.tstat && !filters.sub && !filters.rule && !filters.coverage &&
+    ['签出时间', '创建时间', '履约单号'].includes(filters.sort);
+}
+
+async function loadTrackSummary(filters, available = null) {
+  const {sort, ...scope} = filters;
+  const path = '/api/track?' + qs({...scope, part: 'summary'});
+  const host = $('#trackChips');
+  if (trackSummaryPath !== path) host.replaceChildren();
+  trackSummaryPath = path;
+  try {
+    if (available) pendingRequests.delete('trackSummary');
+    const data = available || await latest('trackSummary', path, {signal: AbortSignal.timeout(18_000)});
+    if (!data || VIEW !== 'track' || trackMode !== 'tracking') return;
+    host.innerHTML = (data.statusSummary || []).slice(0, 7).map(row =>
+      `<button type="button" class="chipstat" data-track-status="${esc(row.状态)}">${esc(row.状态)} <b>${fmt(row.n)}</b></button>`).join('');
+  } catch {
+    if (VIEW === 'track' && trackMode === 'tracking') {
+      const retry = el('button', 'btn ghost sm', '重试加载状态统计');
+      retry.type = 'button';
+      retry.onclick = () => run(() => loadTrackSummary(filters));
+      host.replaceChildren(retry);
+    }
+  }
+}
 
 async function loadTrack(page = 1, fromSearch = false) {
-  prepareTrack();
-  const f = { sort: '签出时间', ...readF(TF) };
+  if (!TF) run(loadTrackFilters);
+  let f = { sort: '签出时间', ...readF(TF || {}) };
   const query = f.q?.trim();
   const {q, sort, ...scope} = f;
-  TF._info.textContent = query ? '正在搜索…' : ME.preview ? '' : '正在读取履约单…';
-  let d;
+  const status = $('#trackListStatus');
+  const retry = $('#retryTrack');
+  retry.hidden = true;
+  retry.onclick = () => run(() => loadTrack(page, fromSearch));
+  status.textContent = query ? '正在搜索…' : ME.preview ? '' : '正在读取履约单…';
+  const fetchRows = (filters, number) => latest('track',
+    '/api/track?' + qs({...filters, part: trackRowsOnly(filters) ? 'rows' : 'all'}, number, 40),
+    {signal: AbortSignal.timeout(18_000)});
+  let d, clearedFilters = false;
   try {
     if (ME.preview && !query) {
       pendingRequests.delete('track');
       d = {rows: [], total: 0, page: 1, size: 40};
     } else {
-      d = await latest('track', '/api/track?' + qs(f, page, 40));
+      d = await fetchRows(f, page);
+    }
+    if (!d || VIEW !== 'track' || trackMode !== 'tracking') return;
+    if (fromSearch && query && !d.total && Object.keys(scope).length) {
+      const broad = await fetchRows({q, sort}, 1);
+      if (!broad || VIEW !== 'track' || trackMode !== 'tracking') return;
+      if (broad.total) {
+        for (const key of Object.keys(scope)) TF[key].value = '';
+        updateSubstates();
+        clearedFilters = true;
+        f = {q, sort};
+        d = broad;
+      }
     }
   } catch (error) {
-    if (VIEW === 'track' && trackMode === 'tracking') TF._info.textContent = `查询失败 · ${error.message}`;
-    throw error;
-  }
-  if (!d || VIEW !== 'track' || trackMode !== 'tracking') return;
-  let clearedFilters = false;
-  if (fromSearch && query && !d.total && Object.keys(scope).length) {
-    const broad = await latest('track', '/api/track?' + qs({q, sort}, 1, 40));
-    if (!broad || VIEW !== 'track' || trackMode !== 'tracking') return;
-    if (broad.total) {
-      for (const key of Object.keys(scope)) TF[key].value = '';
-      updateSubstates();
-      clearedFilters = true;
-      d = broad;
+    if (VIEW === 'track' && trackMode === 'tracking') {
+      status.textContent = error.name === 'TimeoutError' ? '列表加载超时' : '列表加载失败';
+      retry.hidden = false;
     }
+    return;
   }
   trackRows = d.rows;
   lastTrackingQuery = query || '';
-  TF._info.textContent = ME.preview && !query ? '' :
+  status.textContent = ME.preview && !query ? '' :
     `${clearedFilters ? '已切换至全部履约单搜索 · ' : ''}共 ${fmt(d.total)} 单`;
+  if (!ME.preview) run(() => loadTrackSummary(f, !trackRowsOnly(f) || !d.total ? d : null));
   if (renderedTrack === d) return;
   renderedTrack = d;
-  $('#trackChips').innerHTML = ME.preview ? '' : (d.statusSummary || []).slice(0, 7).map(row =>
-    `<button type="button" class="chipstat" data-track-status="${esc(row.状态)}">${esc(row.状态)} <b>${fmt(row.n)}</b></button>`).join('');
 
   $('#trackBody').innerHTML = d.rows.length ? d.rows.map(r => `
     <tr><td>${orderButton(r.履约单号, r.快递单号)}</td>
       <td>${esc(r.当前渠道 || '—')}<small class="cell-sub">${esc(r.物流商 || '—')} / ${esc(r.C端承运商 || '—')}</small></td>
-      <td>${esc(r.仓库 || '—')}<small class="cell-sub">${esc(r.目的国中文 || '—')} · ${esc(r.平台名称 || platformName(r.平台))}</small></td>
+      <td>${esc(r.仓库 || '—')}<small class="cell-sub">${esc(r.目的国中文 || '—')} · <span data-platform="${esc(r.平台 || '')}">${esc(r.平台名称 || platformName(r.平台))}</span></small></td>
       <td>${trackBadge(r.轨迹状态, r.轨迹状态中文, r.轨迹子状态, r.未注册,
         r.回补状态 === 'empty' ? '已查询 · 未返回轨迹' :
         r.已签收 ? '已签收 · 轨迹未入库' :
@@ -727,6 +786,7 @@ function refreshSelection() {
 }
 
 async function loadAlerts(page = 1) {
+  await loadMeta();
   prepareAlerts();
   const d = await latest('alerts', '/api/alerts?' + qs({ sort: 'level', ...readF(AF) }, page, 40));
   if (!d) return;
@@ -984,7 +1044,7 @@ function updateActivity(pending, importedAt, through) {
 
 async function loadActivity() {
   const d = await latest('activity', '/api/activity');
-  if (d) updateActivity(d.pendingOrders, d.lastImportAt, META.range.end);
+  if (d) updateActivity(d.pendingOrders, d.lastImportAt, META?.range.end);
 }
 
 async function loadHealth() {
@@ -1016,13 +1076,16 @@ function setRulePane(pane) {
     button.setAttribute('aria-pressed', String(selected));
     $('#rules-' + button.dataset.rulePane).hidden = !selected;
   });
+  $('#refreshRules').hidden = pane === 'definitions';
   run(loadRules);
 }
 
 async function loadRules() {
+  if (!$('#rules-definitions').hidden) return;
   if (!$('#rules-data').hidden) return loadHealth();
   if (!$('#rules-sync').hidden) return refreshSyncStatus();
   if (!$('#rules-dictionary').hidden) {
+    await loadMeta();
     $('#dictionaryBody').innerHTML = META.trackStatuses.map(row =>
       `<tr><td>${esc(row.label)}</td><td class="mono">${esc(row.status)}</td><td>${esc(row.sub_label)}</td>
         <td class="mono">${esc(row.sub)}</td></tr>`).join('') || blankRow(4, '暂无状态字典');
@@ -1143,6 +1206,54 @@ async function reloadRules() {
 /* ================= 详情抽屉 ================= */
 let drawerTrigger = null;
 
+const carrierEventLabels = {
+  delivered: ['妥投', 'delivered'],
+  dispatch: ['外出派送', ''],
+  pickup: ['承运商已提取', ''],
+  collection: ['待自提', ''],
+  customsHold: ['疑似卡关', 'attention'],
+  customsOpen: ['清关中', 'customs'],
+  customsReleased: ['清关放行', 'customs'],
+  failure: ['派送失败', 'attention'],
+};
+
+function carrierEventLabel(stage, sub, description) {
+  if (sub === 'InTransit_CustomsRequiringInformation' ||
+      /clearance delay|customs (?:delay|hold)|held by customs|held in customs|清关延误|海关扣留|清关需补充材料|等待清关资料/i.test(description)) {
+    return carrierEventLabels.customsHold;
+  }
+  if (stage === 'DeliveryFailure' || sub.startsWith('DeliveryFailure_') ||
+      /attempted delivery|delivery attempt (?:failed|unsuccessful|made)|delivery failed|not delivered|派送失败|投递失败|未妥投/i.test(description)) {
+    return carrierEventLabels.failure;
+  }
+  if (stage === 'AvailableForPickup' || sub.startsWith('AvailableForPickup_') ||
+      /available for (?:pickup|collection)|ready for (?:pickup|collection)|待自提|已到达取件点/i.test(description)) {
+    return carrierEventLabels.collection;
+  }
+  if (stage === 'Delivered' || sub.startsWith('Delivered_') || /^delivered\b|^已签收|^已妥投/i.test(description)) {
+    return carrierEventLabels.delivered;
+  }
+  if (stage === 'OutForDelivery' || sub.startsWith('OutForDelivery_') ||
+      /out for delivery|外出派送|正在派送|^派送中/i.test(description)) return carrierEventLabels.dispatch;
+  if (stage === 'PickedUp' || sub === 'InTransit_PickedUp' ||
+      /^(?:shipment )?picked up\b|^shipment pickup\b|^已揽收|^承运商已提取/i.test(description)) {
+    return carrierEventLabels.pickup;
+  }
+  if (sub === 'InTransit_CustomsReleased' ||
+      /shipment release|cleared customs|customs clearance completed|清关完成|海关放行/i.test(description)) {
+    return carrierEventLabels.customsReleased;
+  }
+  if (sub === 'InTransit_CustomsProcessing' || /清关中/i.test(description)) return carrierEventLabels.customsOpen;
+  return null;
+}
+
+function carrierEventText(stage, sub, description) {
+  const label = carrierEventLabel(stage, sub || '', description || '');
+  const badge = label ? `<span class="event-label ${label[1]}">${label[0]}</span>` : '';
+  const text = description || (label ? '' : '承运商未提供事件描述');
+  return `<div class="d carrier-event-text">${badge}${text === label?.[0] ? '' : esc(text)}</div>`;
+}
+
 async function openOrder(no, refresh = false) {
   if (!refresh) drawerTrigger = document.activeElement;
   const oldScroll = refresh ? $('#dBody').scrollTop : 0;
@@ -1183,17 +1294,16 @@ async function openOrder(no, refresh = false) {
         `<button type="button" class="btn ghost sm" data-rule="${esc(a.rule)}" data-act="${key}">${label}</button>`).join('')}</div>
     </div>`).join('') || '<p class="note">该单没有命中预警</p>';
 
-  const milestoneLabels = { InfoReceived: '收到运单信息', PickedUp: '已揽收',
-    Departure: '起运', Arrival: '到达', AvailableForPickup: '等待自提',
-    OutForDelivery: '正在派送', Delivered: '签收', Returning: '退运中', Returned: '已退回' };
+  const milestoneLabels = { InfoReceived: '收到运单信息', Departure: '起运', Arrival: '到达',
+    Returning: '退运中', Returned: '已退回' };
   const events = d.events || [];
   const ms = (d.milestones || []).map(m =>
-    `<div class="e"><div class="t">${esc(trackTime(m.当地时间, m.时间))}</div><div class="d">${esc(milestoneLabels[m.节点] || m.节点)}</div></div>`).join('');
+    `<div class="e"><div class="t">${esc(trackTime(m.当地时间, m.时间))}</div>${carrierEventText(m.节点, '', milestoneLabels[m.节点])}</div>`).join('');
   const timeline = events.length ? events.map(event => `
     <div class="e">
       <div class="t">${esc(trackTime(event.当地时间, event.事件时间))}
         ${event.事件承运商 ? ` · ${esc(event.事件承运商)}` : ''}</div>
-      <div class="d">${esc(event.描述 || milestoneLabels[event.主状态] || '承运商未提供事件描述')}</div>
+      ${carrierEventText(event.主状态, event.子状态, event.描述 || milestoneLabels[event.主状态])}
       ${event.地点 ? `<div class="cell-sub">${esc(event.地点)}</div>` : ''}
     </div>`).join('') : ms;
   const timelineLabel = events.length ? `${d.eventSource === 'archive' ? '17TRACK 历史回补' : '承运商逐条事件'} · ${fmt(events.length)} 条 · 当地时间` :
@@ -1223,7 +1333,8 @@ async function openOrder(no, refresh = false) {
     </section>` : ''}
     <section class="timeline-panel carrier-timeline" aria-label="承运商轨迹">
       <h4>${timelineLabel}</h4>
-      ${!events.length && o.最新描述 ? `<div class="note"><b>最新轨迹</b> · ${esc(trackTime(o.最新事件当地时间, o.最新事件时间))}<br>${esc(o.最新描述)}${o.地点 ? ` · ${esc(o.地点)}` : ''}</div>` : ''}
+      ${!events.length && o.最新描述 ? `<div class="note"><b>最新轨迹</b> · ${esc(trackTime(o.最新事件当地时间, o.最新事件时间))}
+        ${carrierEventText(o.轨迹状态, o.轨迹子状态, o.最新描述)}${o.地点 ? `<div class="cell-sub">${esc(o.地点)}</div>` : ''}</div>` : ''}
       ${timeline ? `<div class="tl">${timeline}</div>` : ''}
     </section>
     ${ME.preview ? '' : `<div class="sect">SKU 明细</div>
@@ -1282,8 +1393,7 @@ function closeDrawer() {
 /* ================= 启动 ================= */
 run(async function boot() {
   ME = await api('/api/me');
-  if (!ME.preview) await loadMeta();
-  else setTopMeta(null);
+  setTopMeta(null);
   $('#opsAssistant').hidden = !ME.opsAssistant;
   $('#cloudSharing').hidden = !ME.cloudSharing;
   $('#logout').hidden = ME.preview || ME.openTest;
@@ -1315,15 +1425,16 @@ run(async function boot() {
   setInterval(() => {
     if (VIEW === 'rules' && !$('#rules-sync').hidden && !document.hidden) refreshSyncStatus();
   }, 30_000);
-  $('#openPending').onclick = () => {
+  $('#openPending').onclick = () => run(async () => {
+    await loadMeta();
     prepareAlerts();
     AF.state.value = pendingStates;
     setTrackMode('alerts');
     showView('track');
-  };
+  });
   $('#trackChips').onclick = event => {
     const target = event.target.closest('[data-track-status]');
-    if (target) filterByTrackStatus(target.dataset.trackStatus, readF(TF));
+    if (target && TF) filterByTrackStatus(target.dataset.trackStatus, readF(TF));
   };
   $('#alertChips').onclick = event => {
     const target = event.target.closest('[data-alert-rule]');
@@ -1364,13 +1475,14 @@ run(async function boot() {
     const config = event.target.closest('[data-config-rule]');
     if (config) return openConfiguration('rule', config.dataset.configRule);
     const button = event.target.closest('[data-rule-track]');
-    if (button) {
+    if (button) run(async () => {
+      await loadMeta();
       prepareAlerts();
       AF.rule.value = button.dataset.ruleTrack;
       AF.state.value = '';
       setTrackMode('alerts');
       showView('track');
-    }
+    });
   };
   $('#slaSearch').oninput = renderSLATable;
   $('#slaBody').onclick = event => {

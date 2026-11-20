@@ -16,28 +16,31 @@ def elapsed_minutes(start, end):
                 THEN date_diff('microsecond',{start},{end}) / 60000000.0 END"""
 
 
-def reporting_facts(con, facts):
+def reporting_facts(con, facts, *, page_only=False):
+    where = f"WHERE 单号 IN (SELECT 单号归一 FROM {facts})" if page_only else ""
+    statuses = f"(SELECT * FROM trk_status {where})" if where else "trk_status"
     event_fields = core.columns(con, "trk_event")
     if event_fields:
         same_carrier = " AND (e.运输商代码=s.carrier OR e.运输商代码 IS NULL)" if "运输商代码" in event_fields else ""
         native = f"""
             SELECT s.单号,s.carrier,greatest(s.签收时间,max(e.事件时间)) AS delivered
-            FROM trk_status s LEFT JOIN trk_event e
+            FROM {statuses} s LEFT JOIN trk_event e
               ON e.单号=s.单号 {same_carrier}
              AND (e.主状态='Delivered' OR starts_with(e.子状态,'Delivered_'))
             GROUP BY s.单号,s.carrier,s.签收时间
             HAVING delivered IS NOT NULL
         """
     else:
-        native = "SELECT 单号,carrier,签收时间 AS delivered FROM trk_status WHERE 签收时间 IS NOT NULL"
+        native = f"SELECT 单号,carrier,签收时间 AS delivered FROM {statuses} WHERE 签收时间 IS NOT NULL"
 
     archive_join = ""
     instant = "n.delivered"
     if "签收时间" in core.columns(con, ARCHIVE):
+        archived = f"(SELECT * FROM {ARCHIVE} {where})" if where else ARCHIVE
         archive_join = f"""
             LEFT JOIN (
                 SELECT 履约单号,单号,max(carrier) AS carrier,max(签收时间) AS delivered
-                FROM {ARCHIVE} WHERE 回补状态='tracked' AND 签收时间 IS NOT NULL
+                FROM {archived} WHERE 回补状态='tracked' AND 签收时间 IS NOT NULL
                 GROUP BY 履约单号,单号 HAVING count(DISTINCT carrier)<=1
             ) h ON h.履约单号=o.履约单号 AND h.单号=o.单号归一
         """

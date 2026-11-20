@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261120-performance">
+<link rel="stylesheet" href="/static/app.css?v=20261120-tracking">
 </head>
 <body>
 <div class="app">
@@ -88,6 +88,8 @@
         <div class="chips" id="trackChips"></div>
         <div class="card table-card">
           <div class="ct table-head"><h2>履约单列表</h2><div class="toolbar">
+            <span class="tip" id="trackListStatus" role="status"></span>
+            <button type="button" class="btn ghost sm" id="retryTrack" hidden>重试列表</button>
             <button type="button" class="btn ghost sm" id="showDetailed">有逐条轨迹</button>
             <button type="button" class="btn ghost sm" id="exportTrack">导出本页</button>
           </div></div>
@@ -187,6 +189,7 @@
         <div class="page-head"><div><h1>数据与规则</h1><p>核对数据来源、17TRACK 覆盖和当前预警计算口径。</p></div><button type="button" class="btn ghost" id="refreshRules">刷新数据</button></div>
         <div class="tabs" id="ruleTabs" aria-label="数据与规则分类">
           <button type="button" data-rule-pane="data" aria-pressed="true">数据健康</button>
+          <button type="button" data-rule-pane="definitions" aria-pressed="false">数据口径</button>
           <button type="button" data-rule-pane="sync" aria-pressed="false">17TRACK 同步</button>
           <button type="button" data-rule-pane="business" aria-pressed="false">业务预警规则</button>
           <button type="button" data-rule-pane="sla" aria-pressed="false">渠道 SLA</button>
@@ -221,6 +224,33 @@
             <div class="ct table-head"><h2>最近 ERP 导入记录</h2></div>
             <div class="tblwrap"><table class="tbl"><thead><tr><th>文件</th><th>导入时间</th></tr></thead><tbody id="importBody"></tbody></table></div>
           </div>
+        </div>
+        <div class="workspace-stack" id="rules-definitions" hidden>
+          <section class="card table-card definitions-card">
+            <div class="ct"><h2>时间字段与取值</h2><p class="tip">按履约单统计。ERP、WMS 与承运商的时间在计算时统一到同一时区。</p></div>
+            <div class="tblwrap"><table class="tbl">
+              <thead><tr><th scope="col">字段</th><th scope="col">来源</th><th scope="col">取值及显示</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">客户下单</th><td>ERP 支付时间</td><td>同一履约单取明细中最早的有效支付时间，按北京时间显示。</td></tr>
+                <tr><th scope="row">创建履约单</th><td>ERP 创建时间</td><td>取同一履约单最早的有效创建时间。日单量、月单量及日期筛选均按建单日期统计。</td></tr>
+                <tr><th scope="row">出库</th><td>ERP / WMS 签出时间</td><td>取同一履约单最早的有效签出时间，按北京时间显示。分配和打包时间取各自在明细中最后一次记录，供查看库内节点。</td></tr>
+                <tr><th scope="row">物流上网</th><td>17TRACK 首条有效揽收或运输扫描</td><td>按归一运单号，从关键节点、近期轨迹与可匹配的历史轨迹取最早的一条揽收、起运、到达、清关或其他有效运输扫描。面单创建、电子信息预报、等待收件等记录不计。最早扫描换算后早于建单，或没有可用扫描时，该单不计上网时效。</td></tr>
+                <tr><th scope="row">物流妥投</th><td>优先 17TRACK，缺失时用 ERP / WMS 补算</td><td>统计使用有效签收记录。国内仓（如 JY01、XC01）按原值北京时间处理，WINIT 仓按目的地时区及夏令时换算。时区不明确或时间顺序异常的 WMS 记录不用于补算。轨迹时间线保留承运商当地时间。</td></tr>
+              </tbody>
+            </table></div>
+          </section>
+          <section class="card table-card definitions-card">
+            <div class="ct"><h2>指标计算</h2><p class="tip">时效使用自然时间。业务预警的工作日口径以各规则说明为准。</p></div>
+            <div class="tblwrap"><table class="tbl">
+              <thead><tr><th scope="col">指标</th><th scope="col">计算方式</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">库内处理</th><td>出库时间减创建履约单时间。按分钟计算，取大于 0 的样本平均值，换算为小时。分配、打包节点供核对过程。</td></tr>
+                <tr><th scope="row">下单 / 出库 / 上网到妥投</th><td>妥投时间减所选起点，换算为天。缺有效起点或妥投时间、耗时小于等于 0 的记录不计入平均时效及达成率。</td></tr>
+                <tr><th scope="row">妥投覆盖率</th><td>有有效妥投时间的履约单数 ÷ 本次筛选范围内的履约单数。取消单仅计入出库单状态统计。</td></tr>
+                <tr><th scope="row">承诺时效达成率</th><td>在承诺天数内妥投的有效样本数 ÷ 有效签收样本数。按每单的「当前渠道」配置确定 SLA 起点与承诺天数，渠道表现按 C 端显示物流渠道对比。</td></tr>
+              </tbody>
+            </table></div>
+          </section>
         </div>
         <div class="workspace-stack" id="rules-business" hidden>
         <div class="card">
@@ -269,6 +299,6 @@
   </form>
 </dialog>
 
-<script src="/static/app.js?v=20261120-open-test" defer></script>
+<script src="/static/app.js?v=20261120-tracking" defer></script>
 </body>
 </html>

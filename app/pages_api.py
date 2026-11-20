@@ -185,7 +185,8 @@ def track(request: Request,
           cn: str = "", tstat: str = "", rule: str = "", signed: str = "",
           sort: str = "停滞天数", order: str = "desc",
           start: str = "", end: str = "", lastmile: str = "",
-          sub: str = "", coverage: str = "", channel: str = ""):
+          sub: str = "", coverage: str = "", channel: str = "",
+          part: Literal["all", "rows", "summary"] = "all"):
     if core.require_reader(request)["preview"]:
         return public_preview.search(q, page, size)
     cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q=q, lastmile=lastmile, channel=channel)
@@ -220,13 +221,28 @@ def track(request: Request,
     con = core.duck()
     try:
         facts = delivery_facts(con, core.active_facts(core.order_facts(con)))
-        tracking, missing, archive = tracking_sources(con)
+        order_only = not any((tstat, sub, rule, coverage))
+        fast_page = part == "rows" and order_only and sc in ("o.签出时间", "o.创建时间", "o.履约单号")
+        if fast_page:
+            # Select the visible orders before joining carrier status and alerts.
+            con.execute(f"""
+                CREATE TEMP TABLE selected_track_orders AS
+                SELECT o.* FROM {facts} o WHERE 1=1{cond}
+                ORDER BY {sc} {direction} NULLS LAST, o.履约单号
+                LIMIT ? OFFSET ?
+            """, [*args, size, off])
+        numbers = "SELECT 单号归一 FROM selected_track_orders" if fast_page else None
+        tracking, missing, archive = tracking_sources(con, numbers)
+        alert_where, alert_args = "", []
+        if fast_page:
+            alert_args = [row[0] for row in con.execute("SELECT 履约单号 FROM selected_track_orders").fetchall()]
+            alert_where = f'WHERE order_no IN ({",".join("?" * len(alert_args))})' if alert_args else "WHERE 0"
         with core.ops() as ops:
-            summaries = ops.execute("""
+            summaries = ops.execute(f"""
                 SELECT order_no, max(rule_cn) FILTER (WHERE is_main), max(rule) FILTER (WHERE is_main),
                        max(level) FILTER (WHERE is_main), count(*)
-                FROM alerts GROUP BY order_no
-            """).fetchall()
+                FROM alerts {alert_where} GROUP BY order_no
+            """, alert_args).fetchall()
         con.register("live_alerts", pd.DataFrame.from_records(
             summaries, columns=["履约单号", "主预警名称", "主预警规则", "主预警级别", "预警数"]
         ).astype({"履约单号": "string", "主预警名称": "string", "主预警规则": "string",
@@ -240,13 +256,34 @@ def track(request: Request,
             cond += f" AND (h.事件数>0{native})"
         native_count = f"(SELECT count(*) FROM trk_event e WHERE {event_key})" if event_columns else "0"
         event_count = f"coalesce(nullif(h.事件数,0),{native_count})"
-        joined = (f"LEFT JOIN {tracking} t ON t.单号 = o.单号归一 "
+        joins = (f"LEFT JOIN {tracking} t ON t.单号 = o.单号归一 "
                 f"LEFT JOIN {missing} m ON m.单号 = o.单号归一 "
                 f"LEFT JOIN {archive} h ON h.履约单号=o.履约单号 AND h.单号=o.单号归一 "
-                "LEFT JOIN live_alerts a ON a.履约单号 = o.履约单号"
-                " WHERE 1=1" + cond)
+                "LEFT JOIN live_alerts a ON a.履约单号 = o.履约单号")
+        joined = joins + " WHERE 1=1" + cond
+        if part != "rows":
+            summary = con.execute(f"""
+                SELECT grouping(状态) AS by_rule, coalesce(状态,异常) AS label, count(*) AS n
+                FROM (SELECT {TRACK_STATUS_LABEL} 状态, coalesce(a.主预警名称,'无异常') 异常 FROM {facts} o {joined})
+                GROUP BY GROUPING SETS ((状态),(异常))
+                ORDER BY n DESC,label
+            """, args).fetchall()
+            status_summary = [{"状态": label, "n": count} for by_rule, label, count in summary if not by_rule]
+            rule_summary = [{"异常": label, "n": count} for by_rule, label, count in summary if by_rule]
+            total = sum(row["n"] for row in status_summary)
+            if part == "summary":
+                return {"total": total, "statusSummary": status_summary, "ruleSummary": rule_summary}
+        else:
+            status_summary, rule_summary = [], []
+            count_scope = (" WHERE 1=1" + cond) if order_only else joined
+            total = con.execute(f"SELECT count(*) FROM {facts} o {count_scope}", args).fetchone()[0]
+
         timed_sort = sc == "o.物流分钟"
         page_facts = reporting_facts(con, facts) if timed_sort else facts
+        if fast_page:
+            page_facts = "selected_track_orders"
+            joined = joins
+            args, off = [], 0
         timing_columns = f"o.{DELIVERED_UTC}, o.{DELIVERED_BJ}, o.{DELIVERY_SOURCE}, o.{WMS_CLOCK}," if timed_sort else ""
         # Counting native events for all matching orders is only required when
         # that count determines the sort order. Otherwise count the chosen page.
@@ -277,7 +314,7 @@ def track(request: Request,
                 if "运输商代码" in event_columns:
                     match += " AND (e.运输商代码=coalesce(p.运输商代码,0) OR e.运输商代码 IS NULL)"
                 native_on_page = f"(SELECT count(*) FROM trk_event e WHERE {match})"
-        measured = "page_rows" if timed_sort else reporting_facts(con, "page_rows")
+        measured = "page_rows" if timed_sort else reporting_facts(con, "page_rows", page_only=True)
         excluded = [DELIVERED_UTC, DELIVERED_BJ, "tracked_delivery", "tracked_delivery_local"]
         event_projection = ""
         if not order_by_count:
@@ -295,15 +332,6 @@ def track(request: Request,
         rows = con.execute(page_query, args + [size, off]).df().to_dict("records")
         fill_local_times(con, rows)
 
-        summary = con.execute(f"""
-            SELECT grouping(状态) AS by_rule, coalesce(状态,异常) AS label, count(*) AS n
-            FROM (SELECT {TRACK_STATUS_LABEL} 状态, coalesce(a.主预警名称,'无异常') 异常 FROM {facts} o {joined})
-            GROUP BY GROUPING SETS ((状态),(异常))
-            ORDER BY n DESC,label
-        """, args).fetchall()
-        status_summary = [{"状态": label, "n": count} for by_rule, label, count in summary if not by_rule]
-        rule_summary = [{"异常": label, "n": count} for by_rule, label, count in summary if by_rule]
-        total = sum(row["n"] for row in status_summary)
     finally:
         con.close()
 

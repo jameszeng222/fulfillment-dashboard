@@ -140,27 +140,34 @@ def _refresh_summary(con, frame):
         con.unregister("archive_carriers")
 
 
-def sources(con):
+def sources(con, waybills=None):
     """Return the status, missing-registration, and archive summaries used by the web app."""
     columns = core.columns(con, "trk_status")
     missing_clocks = [f"NULL::VARCHAR AS {name}" for name in ("最新事件当地时间", "签收当地时间")
                       if name not in columns]
     native = f"(SELECT *, {', '.join(missing_clocks)} FROM trk_status)" if missing_clocks else "trk_status"
+    missing_native = "trk_missing"
+    archived = TABLE
+    if waybills:
+        condition = f"单号 IN ({waybills})"
+        native = f"(SELECT * FROM {native} WHERE {condition})"
+        missing_native = f"(SELECT 单号 FROM trk_missing WHERE {condition})"
+        archived = f"(SELECT * FROM {TABLE} WHERE {condition})"
     if not core.columns(con, TABLE):
-        return native, "trk_missing", _EMPTY
+        return native, missing_native, _EMPTY
     status = f"""(SELECT * FROM {native} n WHERE NOT EXISTS (
-        SELECT 1 FROM {TABLE} h WHERE h.单号=n.单号 AND h.回补状态='tracked'
+        SELECT 1 FROM {archived} h WHERE h.单号=n.单号 AND h.回补状态='tracked'
           AND (n.最新事件时间 IS NULL OR h.最新事件时间>=n.最新事件时间))
         UNION ALL BY NAME
         SELECT 单号, carrier, 状态, 状态中文, 子状态, 最新事件时间, 最新描述, 地点,
                是否签收, 签收时间, 查询时间
-        FROM {TABLE} h WHERE h.回补状态='tracked' AND NOT EXISTS (
-            SELECT 1 FROM trk_status n WHERE n.单号=h.单号
+        FROM {archived} h WHERE h.回补状态='tracked' AND NOT EXISTS (
+            SELECT 1 FROM {native} n WHERE n.单号=h.单号
               AND n.最新事件时间 IS NOT NULL
               AND (h.最新事件时间 IS NULL OR n.最新事件时间>h.最新事件时间)))"""
-    missing = f"""(SELECT 单号 FROM trk_missing
-                  UNION SELECT 单号 FROM {TABLE} WHERE 回补状态='registry_unmatched')"""
-    return status, missing, TABLE
+    missing = f"""(SELECT 单号 FROM {missing_native}
+                  UNION SELECT 单号 FROM {archived} WHERE 回补状态='registry_unmatched')"""
+    return status, missing, archived
 
 
 def events(con, number, carrier):
