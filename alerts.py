@@ -8,7 +8,7 @@
 
 已实现（数据支持）：
   R02 超时未签出   履约单生成 >24h 仍未签出
-  R03 物流未上网   签出 >2 自然日且无揽收轨迹
+  R03 物流未上网   签出超阈值，已有电子预报且无有效运输扫描
   R04 运输超时     已签出未签收，超过当前渠道 SLA 加配置的自然日缓冲
   R05 物流断更     有轨迹但最后一条有效轨迹 >3 工作日
   R07 海关卡关     清关中/需补资料，且停滞 >3 工作日
@@ -40,7 +40,7 @@ import pandas as pd
 
 from app import core, rules
 from app.carrier_delivery import DELIVERED_UTC, reporting_facts
-from app.channel_timing import online_scan_join, timing_start
+from app.channel_timing import ONLINE_START, online_scan_join, timing_start
 from app.order_time import delivery_facts
 from app.tracking_archive import sources as tracking_sources
 from app.rules import PRIORITY as RULE_PRIORITY, RULES_BY_KEY
@@ -106,7 +106,9 @@ def calculate(con, asof: str | None, rule_overrides, sla_overrides):
     slas = rules.current_channel_slas(con, raw_facts, sla_overrides)
     sla_sql, sla_values = rules.sla_table(slas)
     have_online = any(config["basis"] == "online" for config in slas.values())
-    scan_join = online_scan_join(con) if have_online else ""
+    need_scans = have_online or "not_online" in enabled
+    scan_join = online_scan_join(con) if need_scans else ""
+    scanned = f"({ONLINE_START}) IS NOT NULL" if need_scans else "FALSE"
     sla_start = timing_start("target.basis", have_online)
     print(f"评估基准日: {asof}（最新履约单创建日，北京时间）")
 
@@ -118,6 +120,7 @@ def calculate(con, asof: str | None, rule_overrides, sla_overrides):
            o.仓库 AS 仓库代码, o.目的国, o.单号归一 AS 快递单号,
            o.支付时间, o.创建时间, o.签出时间, o.签收时间, o.创建日期,
            t.状态 AS 轨迹状态, t.子状态 AS 轨迹子状态, t.最新事件时间, t.停滞天数,
+           {scanned} AS 已有有效运输扫描,
            o.{DELIVERED_UTC} AS 承运商签收时间,
            coalesce(target.days, {rules.DEFAULT_SLA_DAYS}) AS 承诺天数,
            CASE target.basis WHEN 'paid' THEN '客户下单（支付）' WHEN 'online' THEN '物流上网'
@@ -193,14 +196,12 @@ def calculate(con, asof: str | None, rule_overrides, sla_overrides):
     WHERE 轨迹子状态 = 'InTransit_Arrival' AND 停滞天数 > {thresholds['stagnation']} AND 签收时间 IS NULL
 
     UNION ALL
-    -- R03 物流未上网：签出 >2 自然日，且**有轨迹但停在"仅收到信息/查无此单"**
-    -- 注意：完全没有轨迹数据的单不算未上网——那可能只是单号没同步进 17track，
-    -- 无法区分"没上网"和"没数据"，硬报会制造 3 万条假预警。
-    -- 这类单单独计入数据健康（无轨迹数据），不进入业务预警。
+    -- R03 物流未上网：有电子预报，尚无有效揽收或运输扫描。
+    -- 查无此单和没有查询结果属于轨迹覆盖状态。
     SELECT 履约单号, 'not_online', coalesce(轨迹状态,''), 签出已过天
     FROM b
     WHERE 签收时间 IS NULL AND 签出时间 IS NOT NULL AND 签出已过天 > {thresholds['not_online']}
-      AND 轨迹状态 IN ('InfoReceived','NotFound')
+      AND 轨迹状态 = 'InfoReceived' AND NOT 已有有效运输扫描 AND 承运商签收时间 IS NULL
 
     UNION ALL
     -- R04 运输超时：从当前渠道承诺的计时起点算起。

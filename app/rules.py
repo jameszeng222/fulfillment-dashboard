@@ -50,9 +50,9 @@ RULES = [
         "category": "未上网异常",
         "level": "高",
         "scope": "全部团队 · 全部渠道",
-        "trigger": "已签出超过 2 个自然日，17TRACK 仍停留在「仅收到信息」或「查无此单」",
-        "basis": "签出时间 · 17TRACK 主状态 ∈ {InfoReceived, NotFound}",
-        "exclude": "签出时间缺失；**完全没有轨迹数据的单不报**（无法区分「没上网」与「单号未同步进 17TRACK」，属数据缺口）",
+        "trigger": "已签出超过 2 个自然日，17TRACK 仍为「已收到信息」且没有有效揽收或运输扫描",
+        "basis": "签出时间、17TRACK 电子预报状态及首条有效运输扫描",
+        "exclude": "签出时间缺失、已妥投或已有有效运输扫描的履约单。查无此单和无查询结果归入轨迹覆盖。",
         "recovery": "出现 InTransit_PickedUp 等揽收轨迹后自动恢复",
         "enabled": True,
     },
@@ -203,7 +203,7 @@ def public_rules():
 
 RULE_THRESHOLDS = {
     "signout_timeout": (1, "自然日", "自创建日起达到 {days} 个自然日仍未签出"),
-    "not_online": (2, "自然日", "签出超过 {days} 个自然日，17TRACK 仍为仅收到信息或查无此单"),
+    "not_online": (2, "自然日", "签出超过 {days} 个自然日，17TRACK 仍仅收到信息且没有有效运输扫描"),
     "transport_timeout": (2, "自然日", "已签出的包裹，从当前渠道 SLA 起点计时，超过承诺时效 + {days} 个自然日仍未签收"),
     "no_update": (3, "工作日", "运输中且最后有效轨迹距今超过 {days} 个工作日"),
     "stagnation": (3, "天", "到达目的地节点且记录的停滞时间超过 {days} 天"),
