@@ -2,8 +2,13 @@ name: Deploy fulfillment monitor to Cloudflare
 
 on:
   workflow_dispatch:
+    inputs:
+      retire_legacy:
+        description: Redirect the retired static Pages dashboard to the fulfillment monitor
+        type: boolean
+        default: false
   push:
-    branches: [main, codex/fulfillment-control-platform]
+    branches: [main]
     paths:
       - cloudflare/**
       - app/**
@@ -82,3 +87,19 @@ jobs:
           else
             echo "Pages is live. The fulfillment backend still needs its private origin configured." >> "$GITHUB_STEP_SUMMARY"
           fi
+      - name: Retire the legacy static dashboard
+        if: github.ref_name == 'main' && inputs.retire_legacy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          target="https://$CF_PAGES_PROJECT.pages.dev/"
+          redirect_dir=$(mktemp -d)
+          printf '/* %s 302\n' "$target" > "$redirect_dir/_redirects"
+          printf '<!doctype html><meta charset="utf-8"><title>履约监控系统</title><a href="%s">打开新版履约监控系统</a>\n' "$target" > "$redirect_dir/index.html"
+          npx --yes --package=wrangler@4.135.0 wrangler pages deploy "$redirect_dir" \
+            --project-name logistics-dashboard --branch main --commit-hash "$GITHUB_SHA" --commit-dirty=false
+          actual=$(curl --fail --silent --show-error --retry 5 --retry-all-errors --max-time 15 \
+            --output /dev/null --write-out '%{http_code} %{redirect_url}' https://logistics-dashboard.pages.dev/)
+          test "$actual" = "302 $target"

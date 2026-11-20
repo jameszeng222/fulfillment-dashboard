@@ -6,6 +6,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime
+from hashlib import file_digest
 import json
 import os
 from pathlib import Path
@@ -16,7 +17,6 @@ import duckdb
 import alerts
 import build_orders
 import ingest
-import sync
 import track17
 from app import core, rules, tracking_archive, tracking_sync
 from app.tracking_clock import ensure_display_columns
@@ -26,6 +26,19 @@ from backfill_tracking import REGISTRY_BATCH, ReadOnlyClient, chunks, fetch_batc
 INPUT = Path.home() / "Desktop" / "履约单2026"
 ERP_JOB = "履约单滚动导入"
 TRACK_LIMIT = 4000
+LEDGER_DDL = """
+CREATE TABLE IF NOT EXISTS sync_ledger (
+    sha256 VARCHAR PRIMARY KEY,
+    filename VARCHAR,
+    size_bytes BIGINT,
+    rows BIGINT,
+    orders BIGINT,
+    创建日起 DATE,
+    创建日止 DATE,
+    batch VARCHAR,
+    ingested_at TIMESTAMP
+)
+"""
 
 
 def file_stamp(path):
@@ -33,13 +46,22 @@ def file_stamp(path):
     return [stat.st_size, stat.st_mtime_ns]
 
 
+def export_digest(path):
+    with path.open("rb") as source:
+        return file_digest(source, "sha256").hexdigest()
+
+
 def new_exports(con, folder):
-    seen = {row[0] for row in con.execute("SELECT sha256 FROM sync_ledger").fetchall()}
+    seen = set()
+    if core.columns(con, "sync_ledger"):
+        seen.update(row[0] for row in con.execute("SELECT sha256 FROM sync_ledger").fetchall())
     exports = []
-    for path in sorted(sync.find_candidates([folder], "履约单数据_*.xls*"), key=lambda entry: entry.name):
+    for path in sorted(folder.glob("履约单数据_*.xls*")):
+        if not path.is_file() or path.suffix.lower() not in ingest.SUPPORTED:
+            continue
         try:
             stamp = file_stamp(path)
-            digest = sync.sha256_of(path)
+            digest = export_digest(path)
             if stamp != file_stamp(path) or digest in seen:
                 continue
         except OSError:
@@ -50,11 +72,13 @@ def new_exports(con, folder):
 
 
 def import_exports(con, exports):
+    if exports:
+        con.execute(LEDGER_DDL)
     imported = []
     for path, stamp, digest in exports:
         print(f"导入 {path.name}", flush=True)
         rows = ingest.read_one(path)
-        if file_stamp(path) != stamp or sync.sha256_of(path) != digest:
+        if file_stamp(path) != stamp or export_digest(path) != digest:
             raise RuntimeError(f"文件仍在更新，下次重试：{path.name}")
         stats = ingest.ingest_df(con, rows, batch=path.stem, mode="upsert", keep_newer=True)
         con.execute("""

@@ -1,7 +1,7 @@
 # 履约监控系统在 Cloudflare Pages 上的入口
 
 GitHub Actions 发布独立的 `fulfillment-monitor` Pages 项目，只上传 `cloudflare/pages`。
-已有 `logistics-dashboard` 继续走原发布流程。此入口转发完整监控系统的页面和接口。
+此入口转发完整监控系统的页面和接口。原静态站点的旧地址转向新版。
 
 ## Windows 私有连接
 

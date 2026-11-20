@@ -16,7 +16,7 @@
       **仅当确认文件是该区间的全量导出时使用**，否则会丢数据。
 
 派生列（时间戳、创建日期/月份、时间异常）由本脚本按与清洗时一致的规则重新计算。
-本模块的 `load_input` / `ingest_df` 也被 sync.py 复用。
+滚动更新通过本模块的 `read_one` 和 `ingest_df` 读取并合并 ERP 导出。
 """
 from __future__ import annotations
 

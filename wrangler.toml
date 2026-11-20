@@ -1,4 +1,0 @@
-﻿# Cloudflare Pages 配置（静态站，无后端）
-# 构建：python assemble.py → public/index.html，再拷成 dist/index.html 部署
-name = "logistics-dashboard"
-pages_build_output_dir = "./dist"
