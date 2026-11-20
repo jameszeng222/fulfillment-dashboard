@@ -62,7 +62,7 @@ def login_page(request: Request):
     html = (TPL / "login.html").read_text(encoding="utf-8")
     return HTMLResponse(html.replace("<!--OPS_LOGIN-->", button)
                         .replace("<!--LOGIN_MESSAGE-->", escape(error))
-                        .replace("<!--CLOUD_LOGIN-->", '<p>请双击本机桌面的「履约监控 · 免密码登录」。</p>' if cloud_login.enabled() else "")
+                        .replace("<!--CLOUD_LOGIN-->", '<p>请双击本机桌面的「履约监控 - 免密码登录」。</p>' if cloud_login.enabled() else "")
                         .replace("<!--LOCAL_LOGIN_STATE-->", "" if ops_auth.local_login_enabled() else "hidden"),
                         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 

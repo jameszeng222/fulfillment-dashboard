@@ -6,11 +6,12 @@ GitHub Actions 发布独立的 `fulfillment-monitor` Pages 项目，只上传 `c
 ## Windows 私有连接
 
 `fulfillment-monitor-origin` Tunnel 只向 Workers VPC 发布 `127.0.0.1:8770`。
-Actions 读取 GitHub 变量 `FULFILLMENT_VPC_SERVICE_ID`，部署无公网路由的源站 Worker，
-并为 Pages 绑定这个 Worker。来源密钥从 GitHub Secret 读取。本机使用当前 Windows 用户的
+Actions 首次部署无公网路由的源站 Worker。Cloudflare 管理界面上的 VPC 绑定单独保留，
+GitHub 变量 `FULFILLMENT_PRIVATE_WORKER_BOUND` 设为 `true` 后 Actions 会为 Pages 绑定这个 Worker。
+来源密钥从 GitHub Secret 读取。本机使用当前 Windows 用户的
 加密凭据，文件保存在 `%LOCALAPPDATA%\FulfillmentMonitorCloud`。
 
-从本机桌面打开「履约监控 · 免密码登录」，或从当前项目目录运行
+从本机桌面打开「履约监控 - 免密码登录」，或从当前项目目录运行
 `.\cloudflare\run_local.ps1 -Component Login`。该命令为专用账号 `fulfillment-online`
 生成一次性登录链接，有效期 90 秒。线上实例不启用密码登录，原本地账号照常使用。
 
