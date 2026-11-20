@@ -51,3 +51,20 @@ test("The OAuth endpoint permits only the configured identity provider", async (
     new Response(null, {status: 303, headers: {Location: "https://outside.example/"}}));
   assert.equal((await worker.fetch(login, settings)).status, 502);
 });
+
+test("Pages reaches the local port only via its private Worker binding", async () => {
+  const origin = {
+    FULFILLMENT_EDGE_KEY: shared,
+    FULFILLMENT_VPC_SERVICE: {
+      async fetch(target, options) {
+        assert.equal(target, "http://localhost:8770/api/me");
+        assert.equal(options.headers.get("x-fulfillment-edge-key"), shared);
+        return Response.json({ username: "test-operator" });
+      },
+    },
+  };
+  const pages = { FULFILLMENT_PRIVATE_WORKER: { fetch: request => worker.fetch(request, origin) } };
+  const response = await worker.fetch(new Request(site + "/api/me"), pages);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).username, "test-operator");
+});

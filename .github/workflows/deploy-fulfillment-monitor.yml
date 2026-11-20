@@ -36,6 +36,8 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          FULFILLMENT_VPC_SERVICE_ID: ${{ vars.FULFILLMENT_VPC_SERVICE_ID }}
+          FULFILLMENT_EDGE_KEY: ${{ secrets.FULFILLMENT_EDGE_KEY }}
         run: |
           set -euo pipefail
           test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID"
@@ -43,6 +45,16 @@ jobs:
             --header "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$CF_PAGES_PROJECT")
           wrangler() { npx --yes --package=wrangler@4.135.0 wrangler "$@"; }
+          if [ -n "$FULFILLMENT_VPC_SERVICE_ID" ]; then
+            [[ "$FULFILLMENT_VPC_SERVICE_ID" =~ ^[0-9a-fA-F-]{36}$ ]]
+            [[ "$FULFILLMENT_EDGE_KEY" =~ ^[A-Za-z0-9_-]{43,128}$ ]]
+            printf '\n[[vpc_services]]\nbinding = "FULFILLMENT_VPC_SERVICE"\nservice_id = "%s"\n' \
+              "$FULFILLMENT_VPC_SERVICE_ID" >> cloudflare/private-worker/wrangler.toml
+            wrangler --cwd cloudflare/private-worker deploy
+            printf '%s' "$FULFILLMENT_EDGE_KEY" | wrangler --cwd cloudflare/private-worker secret put FULFILLMENT_EDGE_KEY
+            printf '\n[[services]]\nbinding = "FULFILLMENT_PRIVATE_WORKER"\nservice = "fulfillment-monitor-origin"\n' \
+              >> cloudflare/wrangler.toml
+          fi
           case "$code" in
             200) ;;
             404) wrangler pages project create "$CF_PAGES_PROJECT" --production-branch main ;;

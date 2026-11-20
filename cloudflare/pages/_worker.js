@@ -53,8 +53,16 @@ function redirectLocation(location, upstream, publicOrigin, path, configuredAuth
 
 export default {
   async fetch(request, env) {
+    if (env.FULFILLMENT_PRIVATE_WORKER) {
+      try {
+        return await env.FULFILLMENT_PRIVATE_WORKER.fetch(request);
+      } catch {
+        return unavailable("private_worker_unreachable", "履约私有连接暂时无法访问。", 502);
+      }
+    }
     const url = new URL(request.url);
-    const origin = httpsOrigin(env.FULFILLMENT_ORIGIN_URL);
+    const vpc = env.FULFILLMENT_VPC_SERVICE;
+    const origin = vpc ? "http://localhost:8770" : httpsOrigin(env.FULFILLMENT_ORIGIN_URL);
     const key = env.FULFILLMENT_EDGE_KEY;
     const configured = Boolean(origin && origin !== url.origin &&
       typeof key === "string" && /^[A-Za-z0-9_-]{43,128}$/.test(key));
@@ -78,9 +86,10 @@ export default {
 
     let response;
     try {
-      response = await fetch(upstream, {
+      const options = {
         method: request.method, headers, body: request.body, redirect: "manual", duplex: "half",
-      });
+      };
+      response = vpc ? await vpc.fetch(upstream.href, options) : await fetch(upstream, options);
     } catch {
       return unavailable("origin_unreachable", "履约数据服务暂时无法连接。", 502);
     }
