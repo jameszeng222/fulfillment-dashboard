@@ -1233,6 +1233,7 @@ run(async function boot() {
   [ME, META] = await Promise.all([api('/api/me'), api('/api/meta')]);
   $('#opsAssistant').hidden = !ME.opsAssistant;
   $('#cloudSharing').hidden = !ME.cloudSharing;
+  if (!ME.preview) $('#currentChannelTip').textContent += ' · 点击渠道查看履约单';
   if (ME.preview) {
     for (const selector of ['[data-v="rules"]', '#logout', '#openPending',
       '#trackTabs', '#showDetailed', '#exportTrack', '#trackAlertHeading']) {
