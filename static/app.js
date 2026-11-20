@@ -401,7 +401,8 @@ async function loadDash() {
   const d = await latest('dash', '/api/overview?' + qs(f));
   if (!d || VIEW !== 'dash' || renderedDash === d) return;
   renderedDash = d;
-  DF._info.hidden = true;
+  DF._info.hidden = !d.snapshotFiltersSkipped;
+  DF._info.textContent = d.snapshotFiltersSkipped ? '实时筛选暂不可用，图表显示全量快照' : '';
   setTopMeta(d.asof);
 
   const k = d.kpi;
@@ -687,7 +688,7 @@ async function loadTrack(page = 1, fromSearch = false) {
   $('#trackBody').innerHTML = d.rows.length ? d.rows.map(r => `
     <tr><td>${orderButton(r.履约单号, r.快递单号)}</td>
       <td>${esc(r.当前渠道 || '—')}<small class="cell-sub">${esc(r.物流商 || '—')} / ${esc(r.C端承运商 || '—')}</small></td>
-      <td>${esc(r.仓库 || '—')}<small class="cell-sub">${esc(r.目的国中文 || '—')} · ${esc(platformName(r.平台))}</small></td>
+      <td>${esc(r.仓库 || '—')}<small class="cell-sub">${esc(r.目的国中文 || '—')} · ${esc(r.平台名称 || platformName(r.平台))}</small></td>
       <td>${trackBadge(r.轨迹状态, r.轨迹状态中文, r.轨迹子状态, r.未注册,
         r.回补状态 === 'empty' ? '已查询 · 未返回轨迹' :
         r.已签收 ? '已签收 · 轨迹未入库' :
@@ -806,7 +807,7 @@ async function loadChannels() {
   results.setAttribute('aria-busy', 'false');
   if (renderedChannels === d) return;
   renderedChannels = d;
-  CF._info.textContent = `数据截止 ${d.asof}`;
+  CF._info.textContent = d.snapshotFiltersSkipped ? '实时筛选暂不可用，表格显示全量快照' : `数据截止 ${d.asof}`;
 
   const rows = d.rows || [];
   channelRows = rows;
@@ -1150,7 +1151,7 @@ async function openOrder(no, refresh = false) {
   if (!d) return;
   const o = d.order;
   $('#dTitle').textContent = o.履约单号;
-  $('#dSub').textContent = [platformName(o.平台), o.仓库, o.当前渠道 || o.物流商, o.目的国中文 || o.目的国].filter(Boolean).join(' · ');
+  $('#dSub').textContent = [o.平台名称 || platformName(o.平台), o.仓库, o.当前渠道 || o.物流商, o.目的国中文 || o.目的国].filter(Boolean).join(' · ');
 
   const kv = [
     ...(!ME.preview ? [['订单号', o.订单号], ['平台订单号', o.平台订单号]] : []),

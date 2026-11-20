@@ -1,7 +1,17 @@
 # 履约监控系统在 Cloudflare Pages 上的入口
 
-GitHub Actions 发布独立的 `fulfillment-monitor` Pages 项目，只上传 `cloudflare/pages`。
-此入口转发完整监控系统的页面和接口。原静态站点已下线，旧地址返回 410。
+GitHub Actions 发布独立的 `fulfillment-monitor` Pages 项目，并将当前网页和脚本一起发布至边缘。
+访客页面、总览与标准时效统计、完整单号和轨迹时间线可从云端只读快照读取。原静态站点已下线，旧地址返回 410。
+
+## 访客快照
+
+发布流程为 Pages 绑定私有 Workers KV 命名空间 `fulfillment-monitor-preview`。首次发布需要部署凭据有 Workers KV Storage 写入权限。也可以预先创建命名空间，将其 ID 写入 GitHub 变量 `FULFILLMENT_SNAPSHOT_KV_ID`。
+
+Windows 任务 `履约监控-Cloudflare-快照同步` 登录时检查快照，每六小时检查一次本机履约数据和轨迹。手动同步运行 `.\cloudflare\run_local.ps1 -Component Snapshot`，日志在 `%LOCALAPPDATA%\FulfillmentMonitorCloud\snapshot-sync.log`。查询云端发布状态可访问 `/__edge/health`，其中 `snapshotAt` 是当前快照时间。
+
+发布脚本生成分片的单号索引、脱敏履约记录和物流事件，连同总览及三种时效口径的全量统计存入 KV。变化分片上传完成后才切换版本，保留前一份供回退。按计划运行时每次最多上传 193 个数据块和一份清单。可用 `python -m cloudflare.publish_snapshot --check` 在本机核对大小。
+
+访客打开总览、渠道时效或按完整单号查轨迹时优先读快照，页面标出快照时间。日期、仓库等组合筛选在线时交给本机，离线时显示标注了筛选暂不可用的全量快照。预警、规则和管理会话依赖本机在线。
 
 ## Windows 私有连接
 
@@ -33,5 +43,4 @@ GitHub 变量 `FULFILLMENT_PRIVATE_WORKER_BOUND` 设为 `true` 后 Actions 会�
    `originConfigured: true`，随后用正式账号验证首页、订单详情、预警和退出。健康页只显示边缘配置，
    浏览器联调才确认数据服务可用。
 
-本地 Windows 更新任务可继续运行。完整网页的可用性取决于本地数据服务和 Tunnel。
-数据库、用户操作库、轨迹明细和连接密钥均由各自运行环境保管。
+本地 Windows 更新任务仍负责导入履约单和接收轨迹。主库、管理操作库、原始轨迹描述和连接密钥由本机保管。

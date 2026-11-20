@@ -1,5 +1,5 @@
 param(
-    [Parameter(Mandatory)][ValidateSet('Origin','Tunnel','Login')][string]$Component,
+    [Parameter(Mandatory)][ValidateSet('Origin','Tunnel','Login','Snapshot')][string]$Component,
     [string]$PythonPath = (Get-Command python.exe).Source
 )
 
@@ -31,6 +31,10 @@ try {
     $env:FULFILLMENT_CLOUD_TICKETS = 'true'
     $env:FULFILLMENT_ONLINE_USERS = 'fulfillment-online'
     $env:FULFILLMENT_EDGE_KEY = Read-ProtectedValue 'edge-key.dpapi'
+    if ($Component -eq 'Snapshot') {
+        & $PythonPath -u -m cloudflare.publish_snapshot *>> (Join-Path $state 'snapshot-sync.log')
+        exit $LASTEXITCODE
+    }
     & $PythonPath -m uvicorn app.cloudflare_origin:application --host 127.0.0.1 --port 8770 --lifespan on --no-access-log
     exit $LASTEXITCODE
 } finally {
