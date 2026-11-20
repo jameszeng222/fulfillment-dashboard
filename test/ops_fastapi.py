@@ -331,12 +331,13 @@ class OpsTests(unittest.TestCase):
         with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):
             with core.ops() as db:
                 db.executemany(
-                    "INSERT INTO alerts(order_no,rule,carrier,shipped_date,shipped_at) VALUES (?,'sample',?,?,?)",
-                    [("A", "UPS", "2026-11-18", "2026-11-18 09:00:00"),
-                     ("B", "FedEx", "2026-11-18", "2026-11-18 18:00:00"),
-                     ("C", " POSTNET ", "2026-11-19", "2026-11-19 09:00:00"),
-                     ("D", "Posnet", "2026-11-20", "2026-11-20 09:00:00"),
-                     ("E", None, None, None)]
+                    "INSERT INTO alerts(order_no,rule,carrier,shipped_date,shipped_at,current_channel) "
+                    "VALUES (?,'sample',?,?,?,?)",
+                    [("A", "UPS", "2026-11-18", "2026-11-18 09:00:00", "Route A"),
+                     ("B", "FedEx", "2026-11-18", "2026-11-18 18:00:00", "Route B"),
+                     ("C", " POSTNET ", "2026-11-19", "2026-11-19 09:00:00", "Route A"),
+                     ("D", "Posnet", "2026-11-20", "2026-11-20 09:00:00", "Route B"),
+                     ("E", None, None, None, None)]
                 )
             for page, order_no in enumerate(("B", "A", "E"), 1):
                 status, _, result = self.browser.request(f"/api/alerts?page={page}&size=1")
@@ -348,6 +349,12 @@ class OpsTests(unittest.TestCase):
             status, _, result = self.browser.request("/api/alerts?cr=Posnet")
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(result)["rows"], [])
+            filters = urlencode({"channel": json.dumps(["Route A", "__empty__"])})
+            status, _, result = self.browser.request("/api/alerts?" + filters)
+            self.assertEqual(status, 200)
+            data = json.loads(result)
+            self.assertEqual([row["current_channel"] for row in data["rows"]], ["Route A", None])
+            self.assertEqual(sum(row["n"] for row in data["summary"]), 2)
             with core.ops() as db:
                 self.assertEqual(db.execute("SELECT count(*) FROM alerts").fetchone()[0], 5)
 

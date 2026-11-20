@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     created_date TEXT,
     shipped_date TEXT,
     shipped_at   TEXT,
+    current_channel TEXT,
     base_date   TEXT,
     synced_at   TEXT,
     PRIMARY KEY (order_no, rule)

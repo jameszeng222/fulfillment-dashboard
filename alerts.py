@@ -278,31 +278,39 @@ def push_to_ops(dcon):
     print(f"  已镜像到 ops.db: {n:,} 条预警")
 
 
-def add_alert_shipped_at(db):
+ALERT_ORDER_FIELDS = {
+    "shipped_at": "o.签出时间::VARCHAR",
+    "current_channel": "nullif(trim(o.当前渠道),'')",
+}
+
+
+def add_alert_order_fields(db):
     columns = {row[1] for row in db.execute("PRAGMA table_info(alerts)")}
-    if not columns or "shipped_at" in columns:
-        return False
-    db.execute("ALTER TABLE alerts ADD COLUMN shipped_at TEXT")
-    return True
+    added = [field for field in ALERT_ORDER_FIELDS if columns and field not in columns]
+    for field in added:
+        db.execute(f"ALTER TABLE alerts ADD COLUMN {field} TEXT")
+    return added
 
 
-def migrate_alert_shipped_at():
-    """Backfill existing mirrored alerts without replacing their rule or handling records."""
+def migrate_alert_order_fields():
+    """Backfill new fulfillment fields without rebuilding alerts or changing handling state."""
     with core.ops() as db:
-        if "shipped_at" in {row[1] for row in db.execute("PRAGMA table_info(alerts)")}:
+        if ALERT_ORDER_FIELDS.keys() <= {row[1] for row in db.execute("PRAGMA table_info(alerts)")}:
             return
         db.execute("BEGIN IMMEDIATE")
-        if not add_alert_shipped_at(db):
+        added = add_alert_order_fields(db)
+        if not added:
             return
         orders = [row[0] for row in db.execute("SELECT DISTINCT order_no FROM alerts")]
         if not orders:
             return
         with core.duck() as con:
-            times = con.execute("""
-                SELECT 签出时间::VARCHAR, 履约单号
-                FROM fct_order WHERE 履约单号 IN (SELECT unnest(?::VARCHAR[]))
+            values = con.execute(f"""
+                SELECT {', '.join(ALERT_ORDER_FIELDS[field] for field in added)}, o.履约单号
+                FROM {core.order_facts(con)} o WHERE o.履约单号 IN (SELECT unnest(?::VARCHAR[]))
             """, [orders]).fetchall()
-        db.executemany("UPDATE alerts SET shipped_at=? WHERE order_no=?", times)
+        assignments = ", ".join(f"{field}=?" for field in added)
+        db.executemany(f"UPDATE alerts SET {assignments} WHERE order_no=?", values)
 
 
 def update_alert_mirror(dcon, db, *, computed=True):
@@ -311,18 +319,19 @@ def update_alert_mirror(dcon, db, *, computed=True):
         SELECT a.履约单号, a.规则, a.规则中文, a.业务分类, a.级别, a.是否主预警, a.证据, a.天数,
                a.出库单状态, a.物流服务商, a.仓库代码, a.目的国, a.快递单号,
                a.轨迹状态, a.轨迹子状态, a.创建日期::VARCHAR, a.签出日期::VARCHAR,
-               o.签出时间::VARCHAR, a.评估基准日::VARCHAR
-        FROM {table} a LEFT JOIN fct_order o USING (履约单号)
+               {ALERT_ORDER_FIELDS['shipped_at']}, a.评估基准日::VARCHAR, {ALERT_ORDER_FIELDS['current_channel']}
+        FROM {table} a LEFT JOIN {core.order_facts(dcon)} o USING (履约单号)
     """).fetchall()
     now = datetime.now().isoformat(timespec="seconds")
     db.execute("DELETE FROM alerts")
-    add_alert_shipped_at(db)
+    add_alert_order_fields(db)
     db.executemany(
         "INSERT OR REPLACE INTO alerts (order_no,rule,rule_cn,category,level,is_main,evidence,days,"
         "order_status,carrier,warehouse,country,tracking_no,track_status,track_sub,"
-        "created_date,shipped_date,shipped_at,base_date,synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "created_date,shipped_date,shipped_at,base_date,current_channel,synced_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         [(r[0], r[1], r[2], r[3], r[4], 1 if r[5] else 0, r[6], r[7], r[8], r[9], r[10], r[11], r[12],
-          r[13], r[14], r[15], r[16], r[17], r[18], now) for r in rows])
+          *r[13:], now) for r in rows])
     return len(rows)
 
 

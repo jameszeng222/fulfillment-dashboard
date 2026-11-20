@@ -16,6 +16,7 @@ from .rules import RULES as BUSINESS_RULES, visible_alerts
 from .tracking_clock import utc_key
 
 router = APIRouter(prefix="/api")
+ALERT_CHANNEL_VALUE = "coalesce(nullif(a.current_channel,''),'__empty__')"
 
 # ---------------------------------------------------------------- 认证
 
@@ -121,7 +122,7 @@ def meta(request: Request):
     finally:
         con.close()
 
-    rules, states = [], []
+    rules, states, alert_channels = [], [], []
     if not preview:
         with core.ops() as o:
             rules = [dict(r) for r in o.execute(
@@ -132,13 +133,20 @@ def meta(request: Request):
                 "LEFT JOIN alert_state s ON s.order_no=a.order_no AND s.rule=a.rule "
                 f"WHERE {visible_alerts('a.carrier')} "
                 "GROUP BY 1 ORDER BY n DESC").fetchall()]
+            if "current_channel" in {row[1] for row in o.execute("PRAGMA table_info(alerts)")}:
+                alert_channels = [{"v": value, "t": "未填写当前渠道" if value == "__empty__" else value, "n": count}
+                                  for value, count in o.execute(f"""
+                    SELECT {ALERT_CHANNEL_VALUE} AS channel, count(DISTINCT a.order_no) AS n
+                    FROM alerts a WHERE {visible_alerts('a.carrier')}
+                    GROUP BY 1 ORDER BY n DESC, channel
+                """)]
 
     return {
         "warehouses": whs, "platforms": pfs, "carriers": crs, "countries": cns,
         "months": months, "orderStatuses": sts,
         "lastMileCarriers": last_mile, "countryItems": countries, "trackStatuses": tracking_statuses,
         "filterOptions": dimension_counts, "platformNames": platform_names,
-        "rules": rules, "alertStates": states,
+        "rules": rules, "alertStates": states, "alertChannels": alert_channels,
         "ruleOptions": [] if preview else [{"v": rule["key"], "t": rule["name"]} for rule in BUSINESS_RULES],
         "range": {"start": str(b[0]), "end": str(b[1]), "orders": b[2]},
     }
@@ -344,7 +352,7 @@ def list_alerts(request: Request,
                 rule: str = "", level: str = "", state: str = "", assignee: str = "",
                 q: str = "", wh: str = "", cr: str = "", cn: str = "",
                 month: str = "", sort: str = "shipped", start: str = "", end: str = "",
-                main_only: bool = False):
+                main_only: bool = False, channel: str = ""):
     core.require_user(request)
     w, a = [visible_alerts("a.carrier")], []
 
@@ -379,12 +387,15 @@ def list_alerts(request: Request,
         w.append("(instr(upper(a.order_no), ?) > 0 OR instr(upper(a.tracking_no), ?) > 0)")
         a.extend([q.strip().upper()] * 2)
 
-    where = " WHERE " + " AND ".join(w)
     off = (page - 1) * size
     base = ("FROM alerts a LEFT JOIN alert_state s "
             "ON s.order_no=a.order_no AND s.rule=a.rule")
     with core.ops() as o:
-        has_timestamp = "shipped_at" in {row[1] for row in o.execute("PRAGMA table_info(alerts)")}
+        columns = {row[1] for row in o.execute("PRAGMA table_info(alerts)")}
+        has_timestamp = "shipped_at" in columns
+        has_channel = "current_channel" in columns
+        inlist(ALERT_CHANNEL_VALUE if has_channel else "'__empty__'", _multi(channel))
+        where = " WHERE " + " AND ".join(w)
         shipped = "coalesce(a.shipped_at,a.shipped_date)" if has_timestamp else "a.shipped_date"
         ordering = {
             "days": "a.days DESC",
@@ -393,9 +404,10 @@ def list_alerts(request: Request,
         }
         order_by = ordering.get(sort, f"{shipped} DESC NULLS LAST") + ", a.order_no, a.rule"
         shipped_column = "" if has_timestamp else ", NULL AS shipped_at"
+        channel_column = "" if has_channel else ", NULL AS current_channel"
         total = o.execute(f"SELECT count(*) {base}{where}", a).fetchone()[0]
         rows = [dict(r) for r in o.execute(
-            f"SELECT a.*{shipped_column}, coalesce(s.status,'open') state, s.assignee, s.updated_at handle_at "
+            f"SELECT a.*{shipped_column}{channel_column}, coalesce(s.status,'open') state, s.assignee, s.updated_at handle_at "
             f"{base}{where} ORDER BY {order_by} LIMIT ? OFFSET ?", a + [size, off]).fetchall()]
         summ = [dict(r) for r in o.execute(
             f"SELECT a.rule, a.rule_cn, a.level, count(*) n {base}{where} GROUP BY 1,2,3 ORDER BY n DESC",

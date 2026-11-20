@@ -213,7 +213,7 @@ function multiFilter(def, onChange) {
   all.type = 'checkbox';
   const allLabel = el('label', 'multi-row multi-all', '<span>全部</span>');
   allLabel.prepend(all);
-  allLabel.append(el('small', '', fmt(META.range.orders)));
+  allLabel.append(el('small', '', fmt(def.total ?? META.range.orders)));
   const list = el('div', 'multi-options');
   panel.append(search, allLabel, list);
   root.append(trigger, panel);
@@ -770,9 +770,12 @@ async function loadTrack(page = 1, fromSearch = false) {
 
 function prepareAlerts() {
   if (AF) return;
+  const channels = META.alertChannels || [];
   AF = makeFilters($('#alertFilters'), [
     { type: 'text', label: '履约单号 / 运单号', key: 'q', w: 222 },
     ...dashFilterDefs().filter(def => !['pf', 'lastmile', 'channel'].includes(def.key)),
+    { type: 'multi', label: '当前物流渠道', key: 'channel', options: channels,
+      total: channels.reduce((sum, channel) => sum + channel.n, 0) },
     { type: 'select', label: '处理状态', key: 'state', options: [
       { v: pendingStates, t: '待跟进（待处理、已认领、处理中）' },
       ...Object.entries(states).map(([v, [, t]]) => ({ v, t }))] },
@@ -808,10 +811,11 @@ async function loadAlerts(page = 1) {
       <td>${orderButton(r.order_no, r.tracking_no)}</td>
       <td class="mono">${esc(r.shipped_at || r.shipped_date || '—')}</td>
       <td><span class="badge ${levelTone(r.level)}">${esc(r.level)}</span> ${esc(r.rule_cn)}<small class="cell-sub">${r.is_main ? '主预警' : '次预警'} · ${esc(r.category || '—')}</small></td>
+      <td>${esc(r.current_channel || '—')}</td>
       <td>${esc(r.carrier || '—')}<small class="cell-sub">${esc(r.country || '—')}</small></td>
       <td>${trackBadge(r.track_status, trackingGroups().find(row => row.v === r.track_status)?.t, r.track_sub)}</td>
       <td>${measure(r.days, ' 天')}</td><td>${stateBadge(r.state)}</td><td>${esc(r.assignee || '—')}</td>
-    </tr>`).join('') : blankRow(9, '没有符合条件的预警');
+    </tr>`).join('') : blankRow(10, '没有符合条件的预警');
   pager($('#alertPager'), d.total, d.page, d.size, p => run(() => loadAlerts(p)));
   refreshSelection();
 }
@@ -1531,7 +1535,7 @@ run(async function boot() {
     ['履约单号', row => row.order_no], ['运单号', row => row.tracking_no], ['预警', row => row.rule_cn],
     ['履约出库时间（北京时间）', row => row.shipped_at || row.shipped_date],
     ['级别', row => row.level], ['处理状态', row => states[row.state]?.[1]], ['负责人', row => row.assignee],
-    ['后台物流商', row => row.carrier], ['异常持续天数', row => row.days],
+    ['当前物流渠道', row => row.current_channel], ['后台物流商', row => row.carrier], ['异常持续天数', row => row.days],
   ], alertRows);
   $('#exportChannels').onclick = () => exportCsv('渠道时效-' + TIMING_BASIS[channelBasis].label, [
     ['时效口径', () => TIMING_BASIS[channelBasis].label],
