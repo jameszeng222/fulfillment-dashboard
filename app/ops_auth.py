@@ -169,7 +169,7 @@ def callback(request: Request):
     except (GatewayError, ValueError, TypeError, OverflowError):
         return failed("exchange", target)
     username = resolve_user(profile)
-    if not username:
+    if not username or not core.allowed_online_account(username):
         return failed("access", target)
     max_age = min(ttl, core.session_seconds())
     sid, _ = core.create_session(username, ip=request.client.host if request.client else "",

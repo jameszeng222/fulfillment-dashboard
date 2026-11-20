@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from app import core, ops_auth
+from app import cloud_login, core, ops_auth
 from app.main import app
 from init_ops import SCHEMA, hash_pw
 
@@ -206,6 +206,24 @@ class OpsTests(unittest.TestCase):
         self.assertEqual(self.browser.request("/api/login", "POST", credentials)[0], 403)
         with patch.dict("os.environ", {"OPS_LOCAL_LOGIN": "true"}):
             self.assertEqual(self.browser.request("/api/login", "POST", credentials)[0], 200)
+
+    def test_cloud_ticket_is_local_scope_single_use_and_expires(self):
+        from cloudflare.open_online import prepare_account
+
+        with patch.dict("os.environ", {"FULFILLMENT_CLOUD_TICKETS": "true",
+                                      "FULFILLMENT_ONLINE_USERS": cloud_login.USERNAME}):
+            prepare_account()
+            body = {"ticket": cloud_login.issue_ticket()}
+            path = "/api/cloud/session"
+            self.assertEqual(self.browser.request(path, "POST", body, {"origin": HUB})[0], 403)
+            self.assertEqual(self.browser.request(path, "POST", body, {"origin": SITE})[0], 200)
+            self.assertEqual(self.browser.request(path, "POST", body, {"origin": SITE})[0], 401)
+            profile = json.loads(self.browser.request("/api/me")[2])
+            self.assertEqual(profile["username"], cloud_login.USERNAME)
+            expired = {"ticket": cloud_login.issue_ticket()}
+            with core.ops() as db:
+                db.execute("UPDATE cloud_login_ticket SET expires=0")
+            self.assertEqual(self.browser.request(path, "POST", expired, {"origin": SITE})[0], 401)
 
     def test_mcp(self):
         csrf = self.login()

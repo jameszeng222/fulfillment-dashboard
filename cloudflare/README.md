@@ -3,7 +3,21 @@
 GitHub Actions 发布独立的 `fulfillment-monitor` Pages 项目，只上传 `cloudflare/pages`。
 已有 `logistics-dashboard` 继续走原发布流程。此入口转发完整监控系统的页面和接口。
 
-## 配置数据服务连接
+## Windows 私有连接
+
+`fulfillment-monitor-origin` Tunnel 只向 Workers VPC 发布 `127.0.0.1:8770`。
+Actions 读取 GitHub 变量 `FULFILLMENT_VPC_SERVICE_ID`，部署无公网路由的源站 Worker，
+并为 Pages 绑定这个 Worker。来源密钥从 GitHub Secret 读取。本机使用当前 Windows 用户的
+加密凭据，文件保存在 `%LOCALAPPDATA%\FulfillmentMonitorCloud`。
+
+从本机桌面打开「履约监控 · 免密码登录」，或从当前项目目录运行
+`.\cloudflare\run_local.ps1 -Component Login`。该命令为专用账号 `fulfillment-online`
+生成一次性登录链接，有效期 90 秒。线上实例不启用密码登录，原本地账号照常使用。
+
+本机分别运行 `.\cloudflare\run_local.ps1 -Component Tunnel` 和
+`.\cloudflare\run_local.ps1 -Component Origin`。可由 Windows 登录任务启动两项服务。
+
+## 使用已配置的 HTTPS 源站
 
 1. 在运行履约数据库的机器上，把服务端环境变量 `OPS_SITE_ORIGIN` 设为 Pages 的实际 HTTPS 站点地址。
    设置随机的 `FULFILLMENT_EDGE_KEY`，它应由至少 32 个随机字节进行 URL 安全 Base64 编码。

@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import core, ops_auth, ops_assistant
+from . import cloud_login, core, ops_auth, ops_assistant
 from .ops_gateway import GatewayError
 from .api import router
 from .pages_api import router as pages_router
@@ -33,6 +33,7 @@ app.include_router(pages_router, dependencies=[Depends(protect_site_mutations)])
 app.include_router(tracking_sync_router)
 app.include_router(ops_auth.router)
 app.include_router(ops_assistant.router)
+app.include_router(cloud_login.router)
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
 
@@ -56,11 +57,12 @@ def login_page(request: Request):
     if ops_auth.enabled():
         link = "/ops/auth/login?" + urlencode({"next": target})
         button = f'<a class="btn" style="display:block;text-align:center" href="{escape(link, quote=True)}">使用智能中枢登录</a>'
-    elif not ops_auth.local_login_enabled():
+    elif not ops_auth.local_login_enabled() and not cloud_login.enabled():
         error = error or ops_auth.ERRORS["unavailable"]
     html = (TPL / "login.html").read_text(encoding="utf-8")
     return HTMLResponse(html.replace("<!--OPS_LOGIN-->", button)
                         .replace("<!--LOGIN_MESSAGE-->", escape(error))
+                        .replace("<!--CLOUD_LOGIN-->", '<p>请双击本机桌面的「履约监控 · 免密码登录」。</p>' if cloud_login.enabled() else "")
                         .replace("<!--LOCAL_LOGIN_STATE-->", "" if ops_auth.local_login_enabled() else "hidden"),
                         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 

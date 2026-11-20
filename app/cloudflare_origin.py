@@ -5,7 +5,7 @@ import re
 
 from fastapi.responses import JSONResponse
 
-from . import core
+from . import cloud_login, core
 from .main import app
 from .ops_auth import enabled, local_login_enabled
 from .ops_gateway import setting, site_origin
@@ -25,14 +25,20 @@ def check_operating_mode():
     if not core.DUCK_DB.is_file() or not core.OPS_DB.is_file():
         raise RuntimeError("履约主库或操作库不存在")
     if not local_login_enabled():
-        if not enabled():
-            raise RuntimeError("必须完成线上登录配置")
-        return
+        if enabled():
+            return
+        if cloud_login.enabled() and core.allowed_online_account(cloud_login.USERNAME):
+            with core.ops() as db:
+                if db.execute("""SELECT 1 FROM users WHERE username=? AND active=1 AND password_hash=?""",
+                              (cloud_login.USERNAME, cloud_login.LOCAL_ACCOUNT_MARKER)).fetchone():
+                    return
+        raise RuntimeError("必须完成线上登录配置")
 
     from init_ops import SEED_USERS, verify_pw
 
     with core.ops() as db:
-        accounts = dict(db.execute("SELECT username,password_hash FROM users WHERE active=1").fetchall())
+        accounts = {name: password for name, password in db.execute(
+            "SELECT username,password_hash FROM users WHERE active=1") if core.allowed_online_account(name)}
     if not accounts:
         raise RuntimeError("必须配置正式站内账号")
     for username, password, *_ in SEED_USERS:

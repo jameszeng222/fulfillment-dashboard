@@ -13,6 +13,7 @@
     <h1>履约监控系统</h1>
     <p class="sub">物流部 · 客服部内部系统</p>
     <!--OPS_LOGIN-->
+    <!--CLOUD_LOGIN-->
     <p class="err" role="status"><!--LOGIN_MESSAGE--></p>
     <form id="form" <!--LOCAL_LOGIN_STATE-->>
     <div class="field">
@@ -30,6 +31,17 @@
 </div>
 <script>
 const form = document.getElementById('form');
+const ticket = new URLSearchParams(location.hash.slice(1)).get('cloud_ticket');
+if (ticket) {
+  history.replaceState(null, '', location.pathname + location.search);
+  fetch('/api/cloud/session', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ticket})
+  }).then(async response => {
+    if (!response.ok) throw new Error('登录链接已失效。请从本机桌面重新打开。');
+    location.replace('/');
+  }).catch(error => { document.querySelector('[role=status]').textContent = error.message; });
+}
 form.onsubmit = async (e) => {
   e.preventDefault();
   const err = document.getElementById('err'), go = document.getElementById('go');

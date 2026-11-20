@@ -1,0 +1,37 @@
+param(
+    [Parameter(Mandatory)][ValidateSet('Origin','Tunnel','Login')][string]$Component,
+    [string]$PythonPath = (Get-Command python.exe).Source
+)
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+$state = Join-Path $env:LOCALAPPDATA 'FulfillmentMonitorCloud'
+
+function Read-ProtectedValue([string]$Name) {
+    $sealed = Get-Content -LiteralPath (Join-Path $state $Name) -Raw | ConvertTo-SecureString
+    [Net.NetworkCredential]::new('', $sealed).Password
+}
+
+Push-Location -LiteralPath $root
+try {
+    if ($Component -eq 'Tunnel') {
+        $env:TUNNEL_TOKEN = Read-ProtectedValue 'cloudflared.dpapi'
+        & (Join-Path $state 'cloudflared.exe') tunnel --no-autoupdate run
+        exit $LASTEXITCODE
+    }
+
+    $env:PYTHONUTF8 = '1'
+    $env:OPS_SITE_ORIGIN = 'https://fulfillment-monitor.pages.dev'
+    if ($Component -eq 'Login') {
+        & $PythonPath -m cloudflare.open_online
+        exit $LASTEXITCODE
+    }
+    $env:OPS_LOCAL_LOGIN = 'false'
+    $env:FULFILLMENT_CLOUD_TICKETS = 'true'
+    $env:FULFILLMENT_ONLINE_USERS = 'fulfillment-online'
+    $env:FULFILLMENT_EDGE_KEY = Read-ProtectedValue 'edge-key.dpapi'
+    & $PythonPath -m uvicorn app.cloudflare_origin:application --host 127.0.0.1 --port 8770 --lifespan on --no-access-log
+    exit $LASTEXITCODE
+} finally {
+    Pop-Location
+}

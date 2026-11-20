@@ -34,7 +34,8 @@ def login(body: LoginIn, request: Request, response: Response):
     with core.ops() as con:
         row = con.execute("SELECT username,password_hash,active,display_name,role FROM users WHERE username=?",
                           (body.username,)).fetchone()
-    if not row or not row["active"] or not verify_pw(body.password, row["password_hash"]):
+    if (not row or not row["active"] or not core.allowed_online_account(row["username"])
+            or not verify_pw(body.password, row["password_hash"])):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
     sid, exp = core.create_session(body.username,

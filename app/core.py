@@ -159,6 +159,11 @@ def csrf_token(sid):
     return hashlib.sha256(("fd-csrf:" + sid).encode()).hexdigest()
 
 
+def allowed_online_account(username):
+    allowed = {name.strip() for name in setting("FULFILLMENT_ONLINE_USERS").split(",") if name.strip()}
+    return not allowed or username in allowed
+
+
 def create_session(username: str, ip: str = "", ua: str = "", max_age=None) -> tuple[str, str]:
     sid = new_sid()
     exp = (datetime.now(timezone.utc) + timedelta(seconds=max_age or session_seconds())).isoformat(timespec="seconds")
@@ -189,7 +194,8 @@ def current_user(request: Request) -> dict | None:
         """, (sid,)).fetchone()
     if not row:
         return None
-    if datetime.fromisoformat(row["expires_at"]) <= datetime.now(timezone.utc) or not row["active"]:
+    if (datetime.fromisoformat(row["expires_at"]) <= datetime.now(timezone.utc)
+            or not row["active"] or not allowed_online_account(row["username"])):
         return None
     return {
         "username": row["username"],
