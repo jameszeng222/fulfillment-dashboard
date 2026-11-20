@@ -236,14 +236,26 @@ def track(request: Request,
         facts = delivery_facts(con, core.active_facts(core.order_facts(con)))
         order_only = not any((tstat, sub, rule, coverage))
         fast_page = part == "rows" and order_only and sc in ("o.签出时间", "o.创建时间", "o.履约单号")
+        search_total = None
         if fast_page:
             # Select the visible orders before joining carrier status and alerts.
+            page_cond, page_args = cond, args
+            if q.strip():
+                con.execute(f"""
+                    CREATE TEMP TABLE matching_track_orders AS
+                    SELECT o.履约单号 FROM {facts} o WHERE 1=1{cond}
+                """, args)
+                search_total = con.execute("SELECT count(*) FROM matching_track_orders").fetchone()[0]
+                if off >= search_total:
+                    return {"total": search_total, "page": page, "size": size, "rows": [],
+                            "statusSummary": [], "ruleSummary": []}
+                page_cond, page_args = " AND o.履约单号 IN (SELECT 履约单号 FROM matching_track_orders)", []
             con.execute(f"""
                 CREATE TEMP TABLE selected_track_orders AS
-                SELECT o.* FROM {facts} o WHERE 1=1{cond}
+                SELECT o.* FROM {facts} o WHERE 1=1{page_cond}
                 ORDER BY {sc} {direction} NULLS LAST, o.履约单号
                 LIMIT ? OFFSET ?
-            """, [*args, size, off])
+            """, [*page_args, size, off])
         numbers = "SELECT 单号归一 FROM selected_track_orders" if fast_page else None
         tracking, missing, archive = tracking_sources(con, numbers)
         alert_where, alert_args = rules.visible_alerts(), []
@@ -289,7 +301,9 @@ def track(request: Request,
         else:
             status_summary, rule_summary = [], []
             count_scope = (" WHERE 1=1" + cond) if order_only else joined
-            total = con.execute(f"SELECT count(*) FROM {facts} o {count_scope}", args).fetchone()[0]
+            total = search_total
+            if total is None:
+                total = con.execute(f"SELECT count(*) FROM {facts} o {count_scope}", args).fetchone()[0]
 
         timed_sort = sc == "o.物流分钟"
         page_facts = reporting_facts(con, facts) if timed_sort else facts

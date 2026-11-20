@@ -232,9 +232,13 @@ def order_detail(order_no: str, request: Request, q: str = ""):
     match_sql, match_args = match
     con = core.duck()
     try:
-        facts = reporting_facts(con, delivery_facts(con, core.active_facts(core.order_facts(con))))
-        tracking, missing, archive = tracking_archive.sources(con)
+        orders = delivery_facts(con, core.active_facts(core.order_facts(con)))
+        facts = reporting_facts(con, "selected_order", page_only=True)
+        tracking, missing, archive = tracking_archive.sources(con, "SELECT 单号归一 FROM selected_order")
         row = con.execute(f"""
+            WITH selected_order AS MATERIALIZED (
+                SELECT o.* FROM {orders} o WHERE o.履约单号 = ?{match_sql}
+            )
             SELECT o.*, t.状态 AS 轨迹状态, t.状态中文 AS 轨迹状态中文, t.子状态 AS 轨迹子状态,
                    t.最新事件时间, t.最新事件当地时间, t.最新描述, t.地点,
                    o.{DELIVERED_UTC} AS 承运商签收时间,
@@ -244,7 +248,6 @@ def order_detail(order_no: str, request: Request, q: str = ""):
                    (t.单号 IS NULL AND o.单号归一 IN (SELECT 单号 FROM {missing})) AS 未注册
             FROM {facts} o LEFT JOIN {tracking} t ON t.单号 = o.单号归一
             LEFT JOIN {archive} h ON h.履约单号=o.履约单号 AND h.单号=o.单号归一
-            WHERE o.履约单号 = ?{match_sql}
         """, [order_no, *match_args]).fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="履约单不存在")

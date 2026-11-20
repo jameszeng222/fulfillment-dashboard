@@ -31,7 +31,7 @@ let chartsFetch = null;
 const charts = {};
 const pendingRequests = new Map();
 const pageResponses = new Map();
-const cachedPages = new Set(['activity', 'dash', 'health', 'track', 'trackSummary', 'channels', 'rules']);
+const cachedPages = new Set(['activity', 'dash', 'health', 'track', 'trackSummary', 'drawer', 'channels', 'rules']);
 let readGeneration = 0;
 let resizeFrame = 0;
 let toastTimer;
@@ -654,6 +654,8 @@ function filterByTrackStatus(label, scope = {}) {
 
 let lastTrackingQuery = '';
 let trackSummaryPath = '';
+let trackSummaryUntil = 0;
+let trackSummaryGeneration = -1;
 
 async function loadTrackFilters() {
   if (TF) return;
@@ -681,20 +683,32 @@ function trackRowsOnly(filters) {
     ['签出时间', '创建时间', '履约单号'].includes(filters.sort);
 }
 
+function trackRowsPath(filters, page) {
+  const part = page > 1 || trackRowsOnly(filters) ? 'rows' : 'all';
+  return '/api/track?' + qs({...filters, part}, page, 40);
+}
+
 async function loadTrackSummary(filters, available = null) {
   const {sort, ...scope} = filters;
   const path = '/api/track?' + qs({...scope, part: 'summary'});
   const host = $('#trackChips');
-  if (trackSummaryPath !== path) host.replaceChildren();
+  if (trackSummaryPath !== path) {
+    host.replaceChildren();
+    trackSummaryUntil = 0;
+  }
   trackSummaryPath = path;
+  const generation = readGeneration;
+  if (!available && trackSummaryGeneration === generation && trackSummaryUntil > performance.now()) return;
   try {
     if (available) pendingRequests.delete('trackSummary');
     const data = available || await latest('trackSummary', path, {signal: AbortSignal.timeout(18_000)});
-    if (!data || VIEW !== 'track' || trackMode !== 'tracking') return;
+    if (!data || path !== trackSummaryPath || VIEW !== 'track' || trackMode !== 'tracking') return;
+    trackSummaryUntil = performance.now() + 25_000;
+    trackSummaryGeneration = generation;
     host.innerHTML = (data.statusSummary || []).slice(0, 7).map(row =>
       `<button type="button" class="chipstat" data-track-status="${esc(row.状态)}">${esc(row.状态)} <b>${fmt(row.n)}</b></button>`).join('');
   } catch {
-    if (VIEW === 'track' && trackMode === 'tracking') {
+    if (path === trackSummaryPath && VIEW === 'track' && trackMode === 'tracking') {
       const retry = el('button', 'btn ghost sm', '重试加载状态统计');
       retry.type = 'button';
       retry.onclick = () => run(() => loadTrackSummary(filters));
@@ -712,9 +726,10 @@ async function loadTrack(page = 1, fromSearch = false) {
   const retry = $('#retryTrack');
   retry.hidden = true;
   retry.onclick = () => run(() => loadTrack(page, fromSearch));
-  status.textContent = query ? '正在搜索…' : ME.preview ? '' : '正在读取履约单…';
-  const fetchRows = (filters, number) => latest('track',
-    '/api/track?' + qs({...filters, part: trackRowsOnly(filters) ? 'rows' : 'all'}, number, 40),
+  status.textContent = page > 1 ? `正在加载第 ${page} 页…` : query ? '正在搜索…' : ME.preview ? '' : '正在读取履约单…';
+  const pageLabel = $('#trackPager > span');
+  if (pageLabel && page > 1) pageLabel.textContent = status.textContent;
+  const fetchRows = (filters, number) => latest('track', trackRowsPath(filters, number),
     {signal: AbortSignal.timeout(18_000)});
   let d, clearedFilters = false;
   try {
@@ -739,6 +754,7 @@ async function loadTrack(page = 1, fromSearch = false) {
   } catch (error) {
     if (VIEW === 'track' && trackMode === 'tracking') {
       status.textContent = error.name === 'TimeoutError' ? '列表加载超时' : '列表加载失败';
+      if (pageLabel && page > 1) pageLabel.textContent = status.textContent;
       retry.hidden = false;
     }
     return;
@@ -747,7 +763,8 @@ async function loadTrack(page = 1, fromSearch = false) {
   lastTrackingQuery = query || '';
   status.textContent = ME.preview && !query ? '' :
     `${clearedFilters ? '已切换至全部履约单搜索 · ' : ''}共 ${fmt(d.total)} 单`;
-  if (!ME.preview) run(() => loadTrackSummary(f, !trackRowsOnly(f) || !d.total ? d : null));
+  if (!ME.preview) run(() => loadTrackSummary(f, (d.page === 1 && !trackRowsOnly(f)) || !d.total ? d : null));
+  pager($('#trackPager'), d.total, d.page, d.size, p => run(() => loadTrack(p)));
   if (renderedTrack === d) return;
   renderedTrack = d;
 
@@ -765,7 +782,18 @@ async function loadTrack(page = 1, fromSearch = false) {
       <td><span class="cell-truncate" title="${esc(r.最新描述 || '')}">${esc(r.最新描述 || '—')}</span>
         <small class="cell-sub mono">${r.最新事件当地时间 || r.最新事件时间 ? esc(trackTime(r.最新事件当地时间, r.最新事件时间)) : '—'}${r.逐条事件数 ? ` · ${fmt(r.逐条事件数)} 条事件` : ''}</small></td></tr>`).join('') :
     blankRow(ME.preview ? 6 : 7, ME.preview && !query ? '输入完整单号查询物流轨迹' : '没有匹配的履约单');
-  pager($('#trackPager'), d.total, d.page, d.size, p => run(() => loadTrack(p)));
+  $('#trackBody').closest('.tblwrap').scrollTop = 0;
+  if (!ME.preview && !query && trackRowsOnly(f) && d.page * d.size < d.total) {
+    const selection = pendingRequests.get('track');
+    const generation = readGeneration;
+    const next = trackRowsPath(f, d.page + 1);
+    setTimeout(() => {
+      if (VIEW === 'track' && trackMode === 'tracking' && !document.hidden &&
+          selection === pendingRequests.get('track') && generation === readGeneration) {
+        readPage(next, {signal: AbortSignal.timeout(18_000), priority: 'low'}).catch(() => {});
+      }
+    }, 100);
+  }
 }
 
 function prepareAlerts() {
@@ -1266,12 +1294,48 @@ function carrierEventText(stage, sub, description) {
   return `<div class="d carrier-event-text">${badge}${text === label?.[0] ? '' : esc(text)}</div>`;
 }
 
+let drawerOrder = null;
+
 async function openOrder(no, refresh = false) {
-  if (!refresh) drawerTrigger = document.activeElement;
-  const oldScroll = refresh ? $('#dBody').scrollTop : 0;
+  const body = $('#dBody');
   const lookup = ME.preview ? '?q=' + encodeURIComponent(lastTrackingQuery) : '';
-  const d = await latest('drawer', '/api/orders/' + encodeURIComponent(no) + lookup);
+  const path = '/api/orders/' + encodeURIComponent(no) + lookup;
+  if (refresh) {
+    pageResponses.delete(path);
+    if (drawerOrder !== no) return;
+  } else {
+    if (drawerOrder !== no) drawerTrigger = document.activeElement;
+    drawerOrder = no;
+    const row = trackMode === 'alerts' ? alertRows.find(item => item.order_no === no) :
+      trackRows.find(item => item.履约单号 === no);
+    $('#dTitle').textContent = no;
+    $('#dSub').textContent = row?.快递单号 || row?.tracking_no || '';
+    const loading = el('p', 'note', '正在读取履约单详情和物流轨迹…');
+    loading.setAttribute('role', 'status');
+    body.replaceChildren(loading);
+    body.scrollTop = 0;
+    $('#mask').classList.add('on');
+    $('#drawer').classList.add('on');
+    $('#drawer').inert = false;
+    $('.app').inert = true;
+    $('#dClose').focus();
+  }
+  let d;
+  try {
+    d = await latest('drawer', path, {signal: AbortSignal.timeout(12_000)});
+  } catch (error) {
+    if (refresh) throw error;
+    const message = el('p', 'note');
+    message.setAttribute('role', 'status');
+    message.textContent = error.name === 'TimeoutError' ? '详情加载超时' : '详情加载失败：' + error.message;
+    const retry = el('button', 'btn ghost sm', '重试加载详情');
+    retry.type = 'button';
+    retry.onclick = () => run(() => openOrder(no));
+    body.replaceChildren(message, retry);
+    return;
+  }
   if (!d) return;
+  const oldScroll = body.scrollTop;
   const o = d.order;
   $('#dTitle').textContent = o.履约单号;
   $('#dSub').textContent = [o.平台名称 || platformName(o.平台), o.仓库, o.当前渠道 || o.物流商, o.目的国中文 || o.目的国].filter(Boolean).join(' · ');
@@ -1369,7 +1433,7 @@ async function openOrder(no, refresh = false) {
       try {
         await jsonPost(`/api/orders/${encodeURIComponent(no)}/notes`, { body: v });
         toast('已保存备注');
-        if ($('#drawer').classList.contains('on')) await openOrder(no, true);
+        await openOrder(no, true);
       } finally { save.disabled = false; }
     });
   };
@@ -1380,20 +1444,16 @@ async function openOrder(no, refresh = false) {
         await jsonPost('/api/alerts/action', { order_no: no, rule: b.dataset.rule, action: b.dataset.act });
         toast(`处理状态已更新 · ${actions[b.dataset.act]}`);
         invalidatePages();
-        if ($('#drawer').classList.contains('on')) await openOrder(no, true);
+        await openOrder(no, true);
         await Promise.all([loadActivity(), trackMode === 'alerts' ? loadAlerts(alertPage) : null]);
       } finally { b.disabled = false; }
     });
   });
-  $('#mask').classList.add('on');
-  $('#drawer').classList.add('on');
-  $('#drawer').inert = false;
-  $('.app').inert = true;
-  $('#dBody').scrollTop = oldScroll;
-  if (!refresh) $('#dClose').focus();
+  body.scrollTop = oldScroll;
 }
 
 function closeDrawer() {
+  drawerOrder = null;
   pendingRequests.delete('drawer');
   $('#mask').classList.remove('on');
   $('#drawer').classList.remove('on');
