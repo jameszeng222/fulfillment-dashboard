@@ -12,6 +12,12 @@ import json
 
 LEVEL_ORDER = {"紧急": 0, "高": 1, "中": 2}
 
+
+def visible_alerts(carrier="carrier"):
+    """Pause Postnet in the visible alert workflow while keeping its history."""
+    return f"lower(trim(coalesce({carrier},''))) NOT IN ('postnet','posnet')"
+
+
 # 判定优先级（数字越小越优先，一单多命中时取最小者为主预警）
 PRIORITY = {
     "signout_timeout": 1,

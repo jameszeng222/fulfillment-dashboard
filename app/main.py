@@ -124,5 +124,8 @@ def _startup():
     logging.getLogger("uvicorn.access").addFilter(HideCallbackQuery())
     if not core.OPS_DB.exists():
         print("[warn] ops.db 不存在，先运行: python init_ops.py")
+    elif core.DUCK_DB.exists():
+        from alerts import migrate_alert_shipped_at
+        migrate_alert_shipped_at()
     print(f"事实层: {core.DUCK_DB}")
     print(f"操作层: {core.OPS_DB}")

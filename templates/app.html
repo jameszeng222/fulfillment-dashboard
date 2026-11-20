@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261120-tracking">
+<link rel="stylesheet" href="/static/app.css?v=20261120-shipped">
 </head>
 <body>
 <div class="app">
@@ -48,9 +48,15 @@
           <section class="card plot-card daily-card" aria-labelledby="dailyTitle">
             <div class="ct">
               <div><h2 id="dailyTitle">日单量</h2><p class="tip" id="dailyRange">按履约单创建日期</p></div>
-              <div class="tabs period-tabs" id="dailyPeriod" role="group" aria-label="日单量范围">
-                <button type="button" data-days="45" aria-pressed="true">近 45 天</button>
-                <button type="button" data-days="0" aria-pressed="false">全部</button>
+              <div class="daily-controls">
+                <div class="tabs period-tabs" id="dailyBasis" role="group" aria-label="日单量日期口径">
+                  <button type="button" data-date-basis="created" aria-pressed="true">按建单</button>
+                  <button type="button" data-date-basis="shipped" aria-pressed="false">按出库</button>
+                </div>
+                <div class="tabs period-tabs" id="dailyPeriod" role="group" aria-label="日单量范围">
+                  <button type="button" data-days="45" aria-pressed="true">近 45 天</button>
+                  <button type="button" data-days="0" aria-pressed="false">全部</button>
+                </div>
               </div>
             </div>
             <div class="chart" id="cDaily" role="img" aria-label="每日履约单量趋势"></div>
@@ -110,7 +116,7 @@
           <div class="chips" id="alertChips"></div>
           <div class="card table-card">
             <div class="ct table-head">
-              <h2>预警处理清单</h2>
+              <div><h2>预警处理清单</h2><p class="tip">按出库时间从近到远 · Postnet 预警暂缓显示</p></div>
               <div class="toolbar">
                 <span id="selectedAlerts" class="tip"></span>
                 <select id="batchAction" aria-label="批量处理动作"><option value="">批量操作</option></select>
@@ -122,7 +128,7 @@
               <table class="tbl">
                 <thead><tr>
                   <th class="check"><input id="selectPage" type="checkbox" aria-label="选择本页预警"></th>
-                  <th>履约单号 / 运单号</th><th>业务预警</th><th>后台物流商 / 国家</th>
+                  <th>履约单号 / 运单号</th><th aria-sort="descending">履约出库（北京时间）</th><th>业务预警</th><th>后台物流商 / 国家</th>
                   <th>官方状态</th><th>异常持续</th><th>处理状态</th><th>负责人</th>
                 </tr></thead>
                 <tbody id="alertBody"></tbody>
@@ -232,7 +238,7 @@
               <thead><tr><th scope="col">字段</th><th scope="col">来源</th><th scope="col">取值及显示</th></tr></thead>
               <tbody>
                 <tr><th scope="row">客户下单</th><td>ERP 支付时间</td><td>同一履约单取明细中最早的有效支付时间，按北京时间显示。</td></tr>
-                <tr><th scope="row">创建履约单</th><td>ERP 创建时间</td><td>取同一履约单最早的有效创建时间。日单量、月单量及日期筛选均按建单日期统计。</td></tr>
+                <tr><th scope="row">创建履约单</th><td>ERP 创建时间</td><td>取同一履约单最早的有效创建时间。月单量和多数页面的默认日期口径为建单日，日单量支持切换到出库日。</td></tr>
                 <tr><th scope="row">出库</th><td>ERP / WMS 签出时间</td><td>取同一履约单最早的有效签出时间，按北京时间显示。分配和打包时间取各自在明细中最后一次记录，供查看库内节点。</td></tr>
                 <tr><th scope="row">物流上网</th><td>17TRACK 首条有效揽收或运输扫描</td><td>按归一运单号，从关键节点、近期轨迹与可匹配的历史轨迹取最早的一条揽收、起运、到达、清关或其他有效运输扫描。面单创建、电子信息预报、等待收件等记录不计。最早扫描换算后早于建单，或没有可用扫描时，该单不计上网时效。</td></tr>
                 <tr><th scope="row">物流妥投</th><td>优先 17TRACK，缺失时用 ERP / WMS 补算</td><td>统计使用有效签收记录。国内仓（如 JY01、XC01）按原值北京时间处理，WINIT 仓按目的地时区及夏令时换算。时区不明确或时间顺序异常的 WMS 记录不用于补算。轨迹时间线保留承运商当地时间。</td></tr>
@@ -248,6 +254,35 @@
                 <tr><th scope="row">下单 / 出库 / 上网到妥投</th><td>妥投时间减所选起点，换算为天。缺有效起点或妥投时间、耗时小于等于 0 的记录不计入平均时效及达成率。</td></tr>
                 <tr><th scope="row">妥投覆盖率</th><td>有有效妥投时间的履约单数 ÷ 本次筛选范围内的履约单数。取消单仅计入出库单状态统计。</td></tr>
                 <tr><th scope="row">承诺时效达成率</th><td>在承诺天数内妥投的有效样本数 ÷ 有效签收样本数。按每单的「当前渠道」配置确定 SLA 起点与承诺天数，渠道表现按 C 端显示物流渠道对比。</td></tr>
+                <tr><th scope="row">平均时效和 P90</th><td>使用当前选择的时效起点及有效妥投样本。P90 是时效的第 90 百分位，约 90% 的有效样本在这个耗时内妥投。</td></tr>
+                <tr><th scope="row">在途超时占比</th><td>分母是有可用 SLA 起点的在途单。分子是在数据基准日已超过当前渠道承诺天数的订单。相比业务预警的「运输超时」，这里按渠道承诺天数计算。</td></tr>
+              </tbody>
+            </table></div>
+          </section>
+          <section class="card table-card definitions-card">
+            <div class="ct"><h2>单量、筛选与汇总维度</h2></div>
+            <div class="tblwrap"><table class="tbl">
+              <thead><tr><th scope="col">项目</th><th scope="col">口径</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">履约单数与总件数</th><td>按履约单号汇总，一张履约单计一单。总件数来自订单明细的商品数量之和，同一平台订单拆成多个履约单时分别计数。</td></tr>
+                <tr><th scope="row">按建单 / 按出库</th><td>日单量按所选口径的北京时间自然日分组。按出库时仅计有签出时间的单，日期和月份也按签出日筛选。点击图中的日期会打开对应口径的履约单列表。</td></tr>
+                <tr><th scope="row">近 45 天与有单日均</th><td>近 45 天从当前口径下最后一个有单日倒推。日均用范围内单量除以有单的天数，峰值取其中单量最高的一天。</td></tr>
+                <tr><th scope="row">渠道与物流商</th><td>「后台物流商」是 ERP 物流服务商，「当前渠道」用于配置 SLA，「C 端渠道」是客户可见的承运商名称。三个字段分别筛选。</td></tr>
+                <tr><th scope="row">取消单</th><td>只纳入「出库单状态」统计。总览单量、日单量、时效、轨迹清单及业务预警均按有效履约单统计。</td></tr>
+              </tbody>
+            </table></div>
+          </section>
+          <section class="card table-card definitions-card">
+            <div class="ct"><h2>轨迹覆盖、业务预警和数据更新</h2></div>
+            <div class="tblwrap"><table class="tbl">
+              <thead><tr><th scope="col">项目</th><th scope="col">怎么判断</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">轨迹覆盖状态</th><td>「已签收 · 轨迹未入库」表示 ERP 有签收记录，本地还没有匹配的承运商轨迹。「已查询 · 未返回轨迹」表示查询已完成且承运商暂无轨迹。「API 账号登记未匹配」表示未在当前 API 账号下匹配到该运单。</td></tr>
+                <tr><th scope="row">物流未上网</th><td>已出库且未签收，超过配置天数，同时 17TRACK 状态仍是「已收到信息」或「查无此单」。完全没有本地查询数据的单单独统计覆盖情况。</td></tr>
+                <tr><th scope="row">主预警与待跟进</th><td>一单可命中多条规则，按规则优先级取主预警。清单按命中记录分页，待跟进数字按待处理、已认领或处理中的履约单去重。Postnet 预警暂停展示，其命中从可见计数中排除。</td></tr>
+                <tr><th scope="row">时效与预警评估基准</th><td>通常取有效履约单中最新建单日。业务规则中配置为工作日的项目按周一至周五计算，其他项目根据各规则采用小时或自然日。</td></tr>
+                <tr><th scope="row">建单截止与最近导入</th><td>建单截止取有效履约单的最新创建日期。最近导入取 ERP 文件最后一次成功入库的时间。17TRACK 拉取和推送进度在「17TRACK 同步」中查看。</td></tr>
+                <tr><th scope="row">离线快照</th><td>离线时显示最后一次成功同步的总览和已入库轨迹，页面顶部标出快照时间。实时筛选暂不可用时会提示。</td></tr>
               </tbody>
             </table></div>
           </section>
@@ -299,6 +334,6 @@
   </form>
 </dialog>
 
-<script src="/static/app.js?v=20261120-tracking" defer></script>
+<script src="/static/app.js?v=20261120-shipped" defer></script>
 </body>
 </html>

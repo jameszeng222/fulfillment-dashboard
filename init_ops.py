@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     track_sub   TEXT,
     created_date TEXT,
     shipped_date TEXT,
+    shipped_at   TEXT,
     base_date   TEXT,
     synced_at   TEXT,
     PRIMARY KEY (order_no, rule)

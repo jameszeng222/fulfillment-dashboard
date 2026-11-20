@@ -284,6 +284,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .plot-card .ct .tip { margin-top: 4px; }
 .plot-card h2 { font-size: 16px; }
 .daily-card .ct { align-items: flex-start; margin-bottom: 3px; }
+.daily-controls { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 5px 8px; }
 .daily-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; }
 .daily-footer b { color: var(--ink); font-variant-numeric: tabular-nums; }
 .status-card .rank-row { min-height: 37px; }

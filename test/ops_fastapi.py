@@ -327,6 +327,30 @@ class OpsTests(unittest.TestCase):
                 action = db.execute("SELECT status, updated_by FROM alert_state").fetchone()
                 self.assertEqual(tuple(action), ("resolved", "open-test"))
 
+    def test_alerts_show_newest_dispatch_and_suspend_postnet(self):
+        with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):
+            with core.ops() as db:
+                db.executemany(
+                    "INSERT INTO alerts(order_no,rule,carrier,shipped_date,shipped_at) VALUES (?,'sample',?,?,?)",
+                    [("A", "UPS", "2026-11-18", "2026-11-18 09:00:00"),
+                     ("B", "FedEx", "2026-11-18", "2026-11-18 18:00:00"),
+                     ("C", " POSTNET ", "2026-11-19", "2026-11-19 09:00:00"),
+                     ("D", "Posnet", "2026-11-20", "2026-11-20 09:00:00"),
+                     ("E", None, None, None)]
+                )
+            for page, order_no in enumerate(("B", "A", "E"), 1):
+                status, _, result = self.browser.request(f"/api/alerts?page={page}&size=1")
+                self.assertEqual(status, 200)
+                data = json.loads(result)
+                self.assertEqual(data["total"], 3)
+                self.assertEqual(data["rows"][0]["order_no"], order_no)
+                self.assertEqual(sum(row["n"] for row in data["summary"]), 3)
+            status, _, result = self.browser.request("/api/alerts?cr=Posnet")
+            self.assertEqual(status, 200)
+            self.assertEqual(json.loads(result)["rows"], [])
+            with core.ops() as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM alerts").fetchone()[0], 5)
+
     def test_mcp(self):
         csrf = self.login()
         status, _, body = self.browser.request("/api/mcp/tools")

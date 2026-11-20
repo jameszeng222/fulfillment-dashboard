@@ -381,7 +381,7 @@ function pager(host, total, page, size, go) {
 /* ================= 数据总览 ================= */
 let DF = null;
 let renderedDash = null;
-const trend = { days: [], filters: {}, span: 45 };
+const trend = { created: [], shipped: [], filters: {}, span: 45, basis: 'created' };
 
 function dashFilterDefs() {
   return [
@@ -439,7 +439,8 @@ async function loadDash() {
     ],
   });
 
-  trend.days = d.daily;
+  trend.created = d.daily;
+  trend.shipped = d.dailyShipped;
   trend.filters = f;
   drawDailyVolume();
 
@@ -475,13 +476,17 @@ function drawDispatchStatus(rows) {
 function drawDailyVolume() {
   const clock = day => Date.parse(day + 'T00:00:00Z');
   const dayMs = 86_400_000;
-  const last = trend.days.at(-1);
+  const series = trend[trend.basis] || [];
+  const shipped = trend.basis === 'shipped';
+  const last = series.at(-1);
   const latest = last ? clock(last.day) : 0;
-  const days = trend.span ? trend.days.filter(row => clock(row.day) >= latest - (trend.span - 1) * dayMs) : trend.days;
+  const days = trend.span ? series.filter(row => clock(row.day) >= latest - (trend.span - 1) * dayMs) : series;
   $('#dailyNote').hidden = ME.preview || !days.length;
+  $('#dailyNote').textContent = shipped ? '点击查看当天出库的履约单' : '点击查看当天创建的履约单';
   $('#cDaily').hidden = !days.length;
   $('#dailyRange').textContent = days.length ?
-    `${days[0].day} 至 ${days.at(-1).day} · 按履约单创建日` : '当前筛选无履约单';
+    `${days[0].day} 至 ${days.at(-1).day} · ${shipped ? '按出库日' : '按建单日'}（北京时间）` :
+    shipped && !trend.shipped ? '当前快照等待同步出库日单量' : '当前筛选无履约单';
   if (!days.length) {
     $('#dailyFocus').textContent = '';
     return;
@@ -536,7 +541,7 @@ function drawDailyVolume() {
     if (!chart.containPixel('grid', point)) return;
     const date = chart.convertFromPixel({ xAxisIndex: 0 }, point[0]);
     const row = days.find(day => Math.abs(clock(day.day) - date) <= dayMs / 2);
-    if (row) openTracking({ ...trend.filters, start: row.day, end: row.day });
+    if (row) openTracking({ ...trend.filters, start: row.day, end: row.day, date_basis: shipped ? 'shipped' : '' });
   });
 }
 
@@ -618,6 +623,7 @@ function prepareTrack() {
   }
   TF = makeFilters($('#trackFilters'), [
     lookup,
+    { type: 'select', label: '日期口径', key: 'date_basis', options: [{ v: 'shipped', t: '出库日期' }] },
     ...dashFilterDefs(),
     { type: 'select', label: '17TRACK 状态', key: 'tstat', options: trackingGroups() },
     { type: 'select', label: '子状态', key: 'sub' },
@@ -626,6 +632,7 @@ function prepareTrack() {
       options: coverageOptions.map(([v, t]) => ({ v, t })) },
     { type: 'select', label: '排序', key: 'sort', options: ['创建时间', '签出时间', '停滞天数', '逐条事件数'] },
   ], (_, action) => { updateSubstates(); run(() => loadTrack(1, action === 'search')); });
+  TF.date_basis.options[0].textContent = '建单日期';
   updateSubstates();
   TF._info.setAttribute('role', 'status');
 }
@@ -788,7 +795,7 @@ function refreshSelection() {
 async function loadAlerts(page = 1) {
   await loadMeta();
   prepareAlerts();
-  const d = await latest('alerts', '/api/alerts?' + qs({ sort: 'level', ...readF(AF) }, page, 40));
+  const d = await latest('alerts', '/api/alerts?' + qs(readF(AF), page, 40));
   if (!d) return;
   if (!d.rows.length && d.total && page > 1) return loadAlerts(Math.ceil(d.total / d.size));
   alertRows = d.rows;
@@ -799,11 +806,12 @@ async function loadAlerts(page = 1) {
   $('#alertBody').innerHTML = d.rows.length ? d.rows.map((r, index) => `
     <tr><td class="check"><input type="checkbox" data-alert-index="${index}" aria-label="选择这条预警" ${ME.can_edit ? '' : 'disabled'}></td>
       <td>${orderButton(r.order_no, r.tracking_no)}</td>
+      <td class="mono">${esc(r.shipped_at || r.shipped_date || '—')}</td>
       <td><span class="badge ${levelTone(r.level)}">${esc(r.level)}</span> ${esc(r.rule_cn)}<small class="cell-sub">${r.is_main ? '主预警' : '次预警'} · ${esc(r.category || '—')}</small></td>
       <td>${esc(r.carrier || '—')}<small class="cell-sub">${esc(r.country || '—')}</small></td>
       <td>${trackBadge(r.track_status, trackingGroups().find(row => row.v === r.track_status)?.t, r.track_sub)}</td>
       <td>${measure(r.days, ' 天')}</td><td>${stateBadge(r.state)}</td><td>${esc(r.assignee || '—')}</td>
-    </tr>`).join('') : blankRow(8, '没有符合条件的预警');
+    </tr>`).join('') : blankRow(9, '没有符合条件的预警');
   pager($('#alertPager'), d.total, d.page, d.size, p => run(() => loadAlerts(p)));
   refreshSelection();
 }
@@ -1417,6 +1425,14 @@ run(async function boot() {
     periods.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
     drawDailyVolume();
   });
+  const dailyBases = [...document.querySelectorAll('#dailyBasis button')];
+  dailyBases.forEach(button => button.onclick = () => {
+    const basis = button.dataset.dateBasis;
+    if (trend.basis === basis) return;
+    trend.basis = basis;
+    dailyBases.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+    drawDailyVolume();
+  });
   document.querySelectorAll('#trackTabs [data-mode]').forEach(btn => btn.onclick = () => {
     setTrackMode(btn.dataset.mode);
     showView('track');
@@ -1513,6 +1529,7 @@ run(async function boot() {
   ]), trackRows);
   $('#exportAlerts').onclick = () => exportCsv('预警处理-本页', [
     ['履约单号', row => row.order_no], ['运单号', row => row.tracking_no], ['预警', row => row.rule_cn],
+    ['履约出库时间（北京时间）', row => row.shipped_at || row.shipped_date],
     ['级别', row => row.level], ['处理状态', row => states[row.state]?.[1]], ['负责人', row => row.assignee],
     ['后台物流商', row => row.carrier], ['异常持续天数', row => row.days],
   ], alertRows);

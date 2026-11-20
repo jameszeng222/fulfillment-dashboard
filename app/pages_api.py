@@ -30,7 +30,7 @@ TRACK_STATUS_LABEL = """coalesce(t.状态中文, CASE
 # ---------------------------------------------------------------- 公共
 
 def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="",
-          alias="o", lastmile="", channel=""):
+          alias="o", lastmile="", channel="", date_basis="created"):
     """返回 (sql, args)，sql 形如 " AND ..."，可直接拼在 WHERE 1=1 之后。"""
     w, a = [], []
 
@@ -40,14 +40,17 @@ def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="
             w.append(f'{column} IN ({",".join("?" * len(vals))})')
             a.extend(vals)
 
-    for column, value in (("创建月份", month), ("仓库", wh), ("平台", pf), ("物流商", cr),
+    date_column = f"CAST({alias}.签出时间 AS DATE)" if date_basis == "shipped" else f"{alias}.创建日期"
+    month_column = f"strftime({date_column}, '%Y-%m')" if date_basis == "shipped" else f"{alias}.创建月份"
+    inl(month_column, month)
+    for column, value in (("仓库", wh), ("平台", pf), ("物流商", cr),
                           ("目的国", cn), ("状态", status), ("当前渠道", channel)):
         inl(f'{alias}."{column}"', value)
     inl(f"coalesce(nullif({alias}.C端承运商,''),'__empty__')", lastmile)
     if start:
-        w.append(f"{alias}.创建日期 >= ?"); a.append(start)
+        w.append(f"{date_column} >= ?"); a.append(start)
     if end:
-        w.append(f"{alias}.创建日期 <= ?"); a.append(end)
+        w.append(f"{date_column} <= ?"); a.append(end)
     query = normalize("NFKC", q).strip().upper()
     if query:
         columns = ("履约单号", "快递单号", "订单号", "平台订单号")
@@ -128,6 +131,13 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel):
             FROM {order_facts} o WHERE o.创建日期 IS NOT NULL{cond}
             GROUP BY 1 ORDER BY 1
         """, args).fetchall()
+        ship_cond, ship_args = _cond(month, wh, pf, cr, cn, start=start, end=end,
+                                    lastmile=lastmile, channel=channel, date_basis="shipped")
+        daily_shipped = con.execute(f"""
+            SELECT CAST(o.签出时间 AS DATE)::VARCHAR AS day, count(*) AS n
+            FROM {active_orders} o WHERE o.签出时间 IS NOT NULL{ship_cond}
+            GROUP BY 1 ORDER BY 1
+        """, ship_args).fetchall()
 
         by_carrier = by("物流商", 20)
         by_wh = by("仓库", 20)
@@ -171,6 +181,7 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel):
         },
         "monthly": monthly, "byCarrier": by_carrier, "byWarehouse": by_wh,
         "daily": [{"day": day, "n": count} for day, count in daily],
+        "dailyShipped": [{"day": day, "n": count} for day, count in daily_shipped],
         "byCountry": by_country, "byStatus": by_status,
         "byLastMile": by_last_mile, "byCurrentChannel": by_current_channel, "byTrackingStatus": track_states,
     })
@@ -186,10 +197,12 @@ def track(request: Request,
           sort: str = "停滞天数", order: str = "desc",
           start: str = "", end: str = "", lastmile: str = "",
           sub: str = "", coverage: str = "", channel: str = "",
+          date_basis: Literal["", "created", "shipped"] = "created",
           part: Literal["all", "rows", "summary"] = "all"):
     if core.require_reader(request)["preview"]:
         return public_preview.search(q, page, size)
-    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q=q, lastmile=lastmile, channel=channel)
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q=q, lastmile=lastmile, channel=channel,
+                       date_basis=date_basis)
 
     for column, value in (("t.状态", tstat), ("t.子状态", sub), ("a.主预警规则", rule)):
         vals = core.filter_values(value)
@@ -233,15 +246,15 @@ def track(request: Request,
             """, [*args, size, off])
         numbers = "SELECT 单号归一 FROM selected_track_orders" if fast_page else None
         tracking, missing, archive = tracking_sources(con, numbers)
-        alert_where, alert_args = "", []
+        alert_where, alert_args = rules.visible_alerts(), []
         if fast_page:
             alert_args = [row[0] for row in con.execute("SELECT 履约单号 FROM selected_track_orders").fetchall()]
-            alert_where = f'WHERE order_no IN ({",".join("?" * len(alert_args))})' if alert_args else "WHERE 0"
+            alert_where += f' AND order_no IN ({",".join("?" * len(alert_args))})' if alert_args else " AND FALSE"
         with core.ops() as ops:
             summaries = ops.execute(f"""
                 SELECT order_no, max(rule_cn) FILTER (WHERE is_main), max(rule) FILTER (WHERE is_main),
                        max(level) FILTER (WHERE is_main), count(*)
-                FROM alerts {alert_where} GROUP BY order_no
+                FROM alerts WHERE {alert_where} GROUP BY order_no
             """, alert_args).fetchall()
         con.register("live_alerts", pd.DataFrame.from_records(
             summaries, columns=["履约单号", "主预警名称", "主预警规则", "主预警级别", "预警数"]
@@ -433,7 +446,9 @@ def rules_api(request: Request):
     core.require_user(request)
     with core.ops() as ops:
         rule_overrides, sla_overrides = rules.load_settings(ops)
-        hits = dict(ops.execute("SELECT rule,count(*) FROM alerts WHERE is_main GROUP BY rule").fetchall())
+        hits = dict(ops.execute(
+            f"SELECT rule,count(*) FROM alerts WHERE is_main AND {rules.visible_alerts()} GROUP BY rule"
+        ).fetchall())
     con = core.duck()
     try:
         raw_facts = core.active_facts(core.order_facts(con))
