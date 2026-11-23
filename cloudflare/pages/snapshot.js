@@ -106,6 +106,10 @@ async function snapshotTrack(bucket, m, params) {
   }
   // Bound storage reads for references reused by several stores.
   const size = Math.min(40, rawSize);
+  if (["1", "true", "on", "yes", "t", "y"].includes((params.get("resolved_only") || "").toLowerCase())) {
+    return json({rows: [], total: 0, page, size, statusSummary: [], ruleSummary: [], snapshotAt: m.at,
+      snapshotFiltersSkipped: true});
+  }
   const offset = (page - 1) * size;
   const keys = lookupKeys(params.get("q") || "");
   const ids = await lookup(bucket, m, keys);

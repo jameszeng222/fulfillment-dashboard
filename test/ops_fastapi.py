@@ -357,6 +357,7 @@ class OpsTests(unittest.TestCase):
                 self.assertNotIn("A", history)
                 self.assertEqual((history["B"]["state"], history["B"]["handled_by"]), ("resolved", "开放测试"))
                 self.assertEqual((history["C"]["state"], history["C"]["handled_by"]), ("recovered", None))
+                self.assertEqual(list(alert_history.resolved_for_orders(db, manual_only=True)), ["B"])
                 db.execute("""INSERT INTO alerts(order_no,rule,rule_cn,first_seen_at) VALUES
                               ('A','sample','测试预警','2026-11-24')""")
             self.assertEqual([r["order_no"] for r in listing()], ["A"])
@@ -391,6 +392,7 @@ class OpsTests(unittest.TestCase):
             with core.ops() as db:
                 self.assertEqual(tuple(db.execute("SELECT state,evidence FROM alert_history").fetchone()),
                                  ("recovered", "原始证据"))
+                self.assertEqual(alert_history.resolved_for_orders(db, manual_only=True), {})
                 self.assertEqual(db.execute("SELECT count(*) FROM alert_state").fetchone()[0], 0)
                 self.assertEqual(db.execute("SELECT count(*) FROM audit_log WHERE action LIKE 'alert_undo_%'").fetchone()[0], 2)
 

@@ -51,21 +51,25 @@ def all_rows():
                SELECT {alert_fields('h')}, {HISTORY_METADATA}, 0, h.rowid FROM alert_history h"""
 
 
-def resolved_for_orders(db, order_numbers):
-    if not order_numbers:
+def resolved_for_orders(db, order_numbers=None, *, manual_only=False):
+    if order_numbers is not None and not order_numbers:
         return {}
-    slots = ",".join("?" for _ in order_numbers)
+    scope = ""
+    if order_numbers is not None:
+        slots = ",".join("?" for _ in order_numbers)
+        scope = f" AND order_no IN ({slots})"
+    states = "('resolved')" if manual_only else "('resolved','recovered')"
     rows = db.execute(f"""
         WITH ranked AS (
-            SELECT order_no, rule_cn, rule, state, handled_by, count(*) OVER by_order AS total,
+            SELECT order_no, rule_cn, rule, state, handled_by, handle_at, count(*) OVER by_order AS total,
                    row_number() OVER (by_order ORDER BY coalesce(handle_at,cleared_at,synced_at)
                        DESC NULLS LAST, rule) AS choice
             FROM ({all_rows()})
-            WHERE order_no IN ({slots}) AND state IN ('resolved','recovered') AND {visible_alerts()}
+            WHERE state IN {states} AND {visible_alerts()}{scope}
             WINDOW by_order AS (PARTITION BY order_no)
         )
-        SELECT order_no,rule_cn,rule,state,handled_by,total FROM ranked WHERE choice=1
-    """, order_numbers)
+        SELECT order_no,rule_cn,rule,state,handled_by,handle_at,total FROM ranked WHERE choice=1
+    """, order_numbers or ())
     return {row["order_no"]: dict(row) for row in rows}
 
 

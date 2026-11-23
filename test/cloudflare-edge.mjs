@@ -135,6 +135,9 @@ test("a visitor can open Pages and look up a complete reference without the tunn
   assert.equal(weeklyLookup.snapshotFiltersSkipped, true);
   const groupedLookup = await (await get("/api/track" + query + "&channel_group=test-group")).json();
   assert.equal(groupedLookup.snapshotFiltersSkipped, true);
+  const resolvedLookup = await (await get("/api/track" + query + "&resolved_only=true")).json();
+  assert.deepEqual(resolvedLookup.rows, []);
+  assert.equal(resolvedLookup.snapshotFiltersSkipped, true);
   const detail = await (await get("/api/orders/" + id + query)).json();
   assert.equal(detail.events[0].描述, "已揽收");
   assert.equal((await get("/api/orders/" + id)).status, 404);

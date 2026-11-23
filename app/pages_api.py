@@ -330,17 +330,23 @@ def track(request: Request,
           page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
           q: str = "", month: str = "", wh: str = "", pf: str = "", cr: str = "",
           cn: str = "", tstat: str = "", rule: str = "", signed: str = "",
-          sort: str = "停滞天数", order: str = "desc",
+          sort: str = "", order: str = "desc",
           start: str = "", end: str = "", lastmile: str = "",
           sub: str = "", coverage: str = "", channel: str = "", week: str = "",
-          date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = "",
+          date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = "", resolved_only: bool = False,
           part: Literal["all", "rows", "summary"] = "all"):
     if core.require_reader(request)["preview"]:
-        return public_preview.search(q, page, size)
+        return public_preview.search("" if resolved_only else q, page, size)
+    resolved = None
     selection = (None, None)
-    if channel_group:
+    if channel_group or resolved_only:
         with core.ops() as db:
-            selection = channel_groups.filter_values(channel_group, channel_groups.load(db)["groups"])
+            if channel_group:
+                selection = channel_groups.filter_values(channel_group, channel_groups.load(db)["groups"])
+            if resolved_only:
+                resolved = alert_history.resolved_for_orders(db, manual_only=True)
+    if resolved == {}:
+        return {"total": 0, "page": page, "size": size, "rows": [], "statusSummary": [], "ruleSummary": []}
     cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q=q, lastmile=lastmile, channel=channel,
                        date_basis=date_basis, week=week, group_selection=selection)
 
@@ -367,15 +373,24 @@ def track(request: Request,
 
     sort_cols = {"停滞天数": "t.停滞天数", "签出时间": "o.签出时间", "创建时间": "o.创建时间",
                  "物流分钟": "o.物流分钟", "履约单号": "o.履约单号", "逐条事件数": "逐条事件数"}
-    sc = sort_cols.get(sort, "t.停滞天数")
+    if resolved_only:
+        sort_cols["解决时间"] = "o.解决时间"
+    sc = sort_cols.get(sort, "o.解决时间" if resolved_only else "t.停滞天数")
     direction = "ASC" if order.lower() == "asc" else "DESC"
     off = (page - 1) * size
 
     con = core.duck()
     try:
         facts = delivery_facts(con, core.active_facts(core.order_facts(con)))
+        if resolved_only:
+            con.register("resolved_alerts", pd.DataFrame.from_records(
+                [(order_no, row["handle_at"]) for order_no, row in resolved.items()],
+                columns=["履约单号", "解决时间"],
+            ).astype("string"))
+            facts = f"""(SELECT f.*, r.解决时间 FROM {facts} f
+                         INNER JOIN resolved_alerts r USING (履约单号))"""
         order_only = not any((tstat, sub, rule, coverage))
-        fast_page = part == "rows" and order_only and sc in ("o.签出时间", "o.创建时间", "o.履约单号")
+        fast_page = part == "rows" and order_only and sc in ("o.签出时间", "o.创建时间", "o.履约单号", "o.解决时间")
         search_total = None
         if fast_page:
             # Select the visible orders before joining carrier status and alerts.
@@ -458,6 +473,7 @@ def track(request: Request,
             joined = joins
             args, off = [], 0
         timing_columns = f"o.{DELIVERED_UTC}, o.{DELIVERED_BJ}, o.{DELIVERY_SOURCE}, o.{WMS_CLOCK}," if timed_sort else ""
+        resolution_column = "o.解决时间," if sc == "o.解决时间" else ""
         # Counting native events for all matching orders is only required when
         # that count determines the sort order. Otherwise count the chosen page.
         order_by_count = sc == "逐条事件数"
@@ -465,7 +481,7 @@ def track(request: Request,
         page_query = f"""
             SELECT o.履约单号, o.订单号, o.快递单号, o.单号归一, o.平台, o.仓库, o.物流商, o.C端承运商, o.当前渠道,
                    o.目的国中文, o.状态, o.支付时间, o.创建时间, o.签出时间, o.签收时间,
-                   {timing_columns}
+                   {timing_columns} {resolution_column}
                    t.签收时间 AS tracked_delivery,t.签收当地时间 AS tracked_delivery_local,
                    o.签收北京时间, o.签收时区,
                    o.物流分钟, o.已签收,
@@ -505,8 +521,9 @@ def track(request: Request,
         """
         rows = con.execute(page_query, args + [size, off]).df().to_dict("records")
         fill_local_times(con, rows)
-        with core.ops() as ops:
-            resolved = alert_history.resolved_for_orders(ops, [row["履约单号"] for row in rows])
+        if resolved is None:
+            with core.ops() as ops:
+                resolved = alert_history.resolved_for_orders(ops, [row["履约单号"] for row in rows])
         for row in rows:
             row["历史预警"] = resolved.get(row["履约单号"])
 

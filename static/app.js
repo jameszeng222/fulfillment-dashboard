@@ -982,6 +982,7 @@ function prepareTrack() {
   TF = makeFilters($('#trackFilters'), [
     ...monitoringFilterDefs(),
     { type: 'select', label: '主预警', key: 'rule', options: ruleOptions() },
+    { type: 'select', label: '处理结果', key: 'resolved_only', options: [{v: 'true', t: '已标记解决'}] },
     { type: 'select', label: '轨迹覆盖', key: 'coverage',
       options: coverageOptions.map(([v, t]) => ({ v, t })) },
     { type: 'select', label: '排序', key: 'sort', options: ['创建时间', '签出时间', '停滞天数', '逐条事件数'] },
@@ -1044,7 +1045,7 @@ async function loadTrackFilters() {
 
 function trackRowsOnly(filters) {
   return !filters.tstat && !filters.sub && !filters.rule && !filters.coverage &&
-    ['签出时间', '创建时间', '履约单号'].includes(filters.sort);
+    ['签出时间', '创建时间', '履约单号', '解决时间'].includes(filters.sort);
 }
 
 function trackRowsPath(filters, page) {
@@ -1083,7 +1084,8 @@ async function loadTrackSummary(filters, available = null) {
 
 async function loadTrack(page = 1, fromSearch = false) {
   if (!TF) run(loadTrackFilters);
-  let f = { sort: '签出时间', ...readF(TF || {}) };
+  const filters = readF(TF || {});
+  let f = {sort: filters.resolved_only ? '解决时间' : '签出时间', ...filters};
   const query = f.q?.trim();
   const {q, sort, ...scope} = f;
   const status = $('#trackListStatus');
@@ -1104,7 +1106,7 @@ async function loadTrack(page = 1, fromSearch = false) {
       d = await fetchRows(f, page);
     }
     if (!d || VIEW !== 'track' || trackMode !== 'tracking') return;
-    if (fromSearch && query && !d.total && !scope.channel_group?.length &&
+    if (fromSearch && query && !d.total && !scope.channel_group?.length && !scope.resolved_only &&
         Object.keys(scope).some(key => key !== 'date_basis')) {
       const broad = await fetchRows({q, sort}, 1);
       if (!broad || VIEW !== 'track' || trackMode !== 'tracking') return;
@@ -1125,11 +1127,14 @@ async function loadTrack(page = 1, fromSearch = false) {
     }
     return;
   }
+  if (f.resolved_only && !d.rows.length && d.total && page > 1) {
+    return loadTrack(Math.ceil(d.total / d.size));
+  }
   trackRows = d.rows;
   trackPage = d.page;
   lastTrackingQuery = query || '';
   status.textContent = ME.preview && !query ? '' :
-    `${d.snapshotFiltersSkipped ? '离线快照暂不可按周次筛选 · ' :
+    `${d.snapshotFiltersSkipped ? '离线快照暂不可应用当前筛选 · ' :
       clearedFilters ? '已切换至全部履约单搜索 · ' : ''}共 ${fmt(d.total)} 单`;
   if (!ME.preview) run(() => loadTrackSummary(f, (d.page === 1 && !trackRowsOnly(f)) || !d.total ? d : null));
   pager($('#trackPager'), d.total, d.page, d.size, p => run(() => loadTrack(p)));
@@ -1149,7 +1154,8 @@ async function loadTrack(page = 1, fromSearch = false) {
       <td>${durationText(r.运输分钟)}</td>
       <td><span class="cell-truncate" title="${esc(r.最新描述 || '')}">${esc(r.最新描述 || '—')}</span>
         <small class="cell-sub mono">${r.最新事件当地时间 || r.最新事件时间 ? esc(trackTime(r.最新事件当地时间, r.最新事件时间)) : '—'}${r.逐条事件数 ? ` · ${fmt(r.逐条事件数)} 条事件` : ''}</small></td></tr>`).join('') :
-    blankRow(ME.preview ? 7 : 8, ME.preview && !query ? '输入完整单号查询物流轨迹' : '没有匹配的履约单');
+    blankRow(ME.preview ? 7 : 8, ME.preview && !query ? '输入完整单号查询物流轨迹' :
+      f.resolved_only && !d.snapshotFiltersSkipped ? '没有符合条件的已标记解决履约单' : '没有匹配的履约单');
   $('#trackBody').closest('.tblwrap').scrollTop = 0;
   if (d.rows.length && (query ? d.total === 1 : d.page === 1)) {
     const selection = pendingRequests.get('track');
@@ -1210,7 +1216,7 @@ function trackingAlerts(row) {
   const past = row.历史预警;
   const previous = past ? `<small class="cell-sub"><span class="badge ok">${past.state === 'resolved' ? '已解决' : '已不再命中'}</span>
     ${esc(past.rule_cn || past.rule)}${past.total > 1 ? ` · 共 ${fmt(past.total)} 条` : ''}
-    ${past.handled_by ? ` · ${esc(past.handled_by)}` : ''}</small>` : '';
+    ${past.handled_by ? ` · ${esc(past.handled_by)}` : ''}${past.handle_at ? ` · ${esc(syncTime(past.handle_at))}` : ''}</small>` : '';
   return current + previous || '—';
 }
 
@@ -2207,6 +2213,7 @@ run(async function boot() {
     ['履约单创建（北京时间）', row => row.创建时间], ['出库（北京时间）', row => row.签出时间],
     ['运输时间', row => durationText(row.运输分钟)],
     ['历史预警', row => row.历史预警?.rule_cn], ['处理人', row => row.历史预警?.handled_by],
+    ['处理时间（北京时间）', row => row.历史预警?.handle_at ? syncTime(row.历史预警.handle_at) : ''],
     ['ERP / WMS 妥投（原始值）', row => row.签收时间], ['WMS 时间口径', row => row.WMS时间口径],
     ['妥投统计来源', row => row.妥投统计来源],
     ['17TRACK 妥投（当地时间或标注 UTC）', row => row.签收当地时间 || row.承运商签收时间 ?
