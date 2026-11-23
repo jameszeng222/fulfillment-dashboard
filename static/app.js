@@ -71,9 +71,22 @@ function setTopMeta(createdThrough) {
   $('#topMeta').textContent = parts.join(' · ');
 }
 
-function toast(msg) {
+function toast(msg, undo) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('on');
-  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), 2200);
+  if (undo) {
+    const button = el('button', 'toast-undo', '撤销');
+    button.type = 'button';
+    button.onclick = () => {
+      button.disabled = true;
+      run(undo);
+    };
+    t.appendChild(button);
+  }
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    t.classList.remove('on');
+    t.replaceChildren();
+  }, undo ? 10000 : 2200);
 }
 
 async function api(path, opts = {}) {
@@ -240,11 +253,13 @@ function multiFilter(def, onChange) {
   all.type = 'checkbox';
   const allLabel = el('label', 'multi-row multi-all', '<span>全部</span>');
   allLabel.prepend(all);
-  allLabel.append(el('small', '', fmt(def.total ?? META.range.orders)));
+  const total = el('small', '', fmt(def.total ?? META.range.orders));
+  allLabel.append(total);
   const list = el('div', 'multi-options');
   panel.append(search, allLabel, list);
   root.append(trigger, panel);
   const selected = new Set();
+  let optionsSource = def.options;
 
   function update() {
     badge.textContent = selected.size ? `已选 ${selected.size}` : '全部';
@@ -295,6 +310,17 @@ function multiFilter(def, onChange) {
   renderOptions();
   return {
     root,
+    setOptions(options, count) {
+      if (optionsSource === options) return;
+      optionsSource = options;
+      const seen = new Set(options.map(option => option.v));
+      def.options = [...options, ...def.options.filter(option => selected.has(option.v) && !seen.has(option.v))
+        .map(option => ({...option, n: 0}))].sort((a, b) => ['month', 'week'].includes(def.key)
+        ? a.v.localeCompare(b.v, undefined, {numeric: true}) : 0);
+      total.textContent = fmt(count);
+      update();
+      renderOptions();
+    },
     get value() { return [...selected]; },
     set value(value) {
       selected.clear();
@@ -467,6 +493,93 @@ function pager(host, total, page, size, go) {
 let DF = null;
 let renderedDash = null;
 const trend = { created: [], shipped: [], filters: {}, span: 45, basis: 'created' };
+const channelGroupPath = '/api/overview/channel-groups';
+let channelGroups;
+let chosenChannels = new Set();
+
+async function openChannelGroups() {
+  const button = $('#openChannelGroups');
+  button.disabled = true;
+  try {
+    const [settings] = await Promise.all([api(channelGroupPath), loadMeta()]);
+    channelGroups = settings;
+    const choice = $('#channelGroupChoice');
+    choice.replaceChildren(new Option('新增分组', ''), ...settings.groups.map(group => new Option(group.name, group.name)));
+    choice.value = settings.groups[0]?.name || '';
+    editChannelGroup();
+    $('#channelGroupsDialog').showModal();
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function editChannelGroup() {
+  const name = $('#channelGroupChoice').value;
+  const group = channelGroups.groups.find(item => item.name === name);
+  chosenChannels = new Set(group?.channels || []);
+  $('#channelGroupName').value = name;
+  $('#channelGroupSearch').value = '';
+  $('#channelGroupError').textContent = '';
+  $('#channelGroupRemove').hidden = !group;
+  renderChannelGroupOptions();
+}
+
+function renderChannelGroupOptions() {
+  const active = $('#channelGroupChoice').value;
+  const query = $('#channelGroupSearch').value.trim().toLocaleLowerCase();
+  const channels = new Map((META.filterOptions.channel || []).map(channel => [channel.v, channel.n]));
+  const otherGroups = new Map(channelGroups.groups.filter(item => item.name !== active)
+    .flatMap(item => item.channels.map(key => [key, item.name])));
+  chosenChannels.forEach(key => { if (!channels.has(key)) channels.set(key, 0); });
+  const options = [...channels].filter(([key]) => key.toLocaleLowerCase().includes(query));
+  options.sort(([a, n], [b, m]) => Number(chosenChannels.has(b)) - Number(chosenChannels.has(a)) || m - n);
+  const host = $('#channelGroupOptions');
+  const rows = options.map(([key, count]) => {
+    const label = el('label', 'multi-row');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.checked = chosenChannels.has(key);
+    box.disabled = otherGroups.has(key);
+    box.onchange = () => {
+      if (box.checked) chosenChannels.add(key);
+      else chosenChannels.delete(key);
+      $('#channelGroupSelected').textContent = `已选 ${chosenChannels.size} 个当前渠道`;
+    };
+    label.append(box, el('span', '', key), el('small', '', otherGroups.get(key) || fmt(count)));
+    return label;
+  });
+  host.replaceChildren(...(rows.length ? rows : [el('p', 'empty', '没有匹配的当前渠道')]));
+  $('#channelGroupSelected').textContent = `已选 ${chosenChannels.size} 个当前渠道`;
+}
+
+async function saveChannelGroup(remove) {
+  const active = $('#channelGroupChoice').value;
+  const name = $('#channelGroupName').value.trim();
+  const error = $('#channelGroupError');
+  if (!remove && (!name || !chosenChannels.size)) {
+    error.textContent = '请填写分组名称，并勾选至少一个当前渠道。';
+    return;
+  }
+  const groups = channelGroups.groups.filter(group => group.name !== active);
+  if (!remove) groups.push({name, channels: [...chosenChannels]});
+  const controls = ['channelGroupSave', 'channelGroupRemove', 'channelGroupsClose', 'channelGroupChoice',
+    'channelGroupName', 'channelGroupSearch'].map(id => document.getElementById(id));
+  controls.forEach(control => { control.disabled = true; });
+  error.textContent = '';
+  try {
+    channelGroups = await api(channelGroupPath, {method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({revision: channelGroups.revision, groups})});
+  } catch (failure) {
+    error.textContent = failure.message;
+    return;
+  } finally {
+    controls.forEach(control => { control.disabled = false; });
+  }
+  $('#channelGroupsDialog').close();
+  invalidatePages();
+  toast(remove ? '已删除分组' : '已保存渠道分组');
+  if (VIEW === 'dash') await loadDash();
+}
 function drawWeekCalendar() {
   const body = $('#weekCalendarBody');
   if (body.rows.length) return;
@@ -482,8 +595,27 @@ function drawWeekCalendar() {
   }).join('') || blankRow(10, '暂时无法读取周次表');
 }
 
-function dashFilterDefs() {
+const dateBasisLabel = {created: '履约单创建时间', paid: '支付时间', shipped: '签出时间'};
+
+function dateBasisFilter(defaultBasis) {
+  const options = defaultBasis === 'paid' ? ['shipped'] :
+    defaultBasis === 'track' ? ['paid', 'shipped'] : ['shipped'];
+  return {type: 'select', label: '筛选时间', key: 'date_basis',
+    defaultLabel: dateBasisLabel[defaultBasis === 'track' ? 'created' : defaultBasis],
+    options: options.map(v => ({v, t: dateBasisLabel[v]}))};
+}
+
+function updateDateOptions(filters, basis) {
+  const options = META.dateOptions?.[basis];
+  for (const key of ['month', 'week']) {
+    filters[key]?.setOptions(options?.[key] || META.filterOptions[key] || [],
+      options?.total ?? META.range.orders);
+  }
+}
+
+function dashFilterDefs(basis) {
   return [
+    ...(basis ? [dateBasisFilter(basis)] : []),
     { type: 'time-range' },
     ...Object.entries({ month: '月份', week: '周次', wh: '仓库', pf: '平台', cr: '后台物流商',
       channel: '当前渠道', lastmile: 'C 端渠道', cn: '国家' }).map(([key, label]) =>
@@ -494,11 +626,14 @@ function dashFilterDefs() {
 async function loadDash() {
   await Promise.all([loadMeta(), loadChartLibrary()]);
   if (VIEW !== 'dash') return;
-  if (!DF) DF = makeFilters($('#dashFilters'), dashFilterDefs(), () => run(loadDash));
+  if (!DF) DF = makeFilters($('#dashFilters'), dashFilterDefs('created'), () => run(loadDash));
   const f = readF(DF);
+  updateDateOptions(DF, f.date_basis || 'created');
   const d = await latest('dash', '/api/overview?' + qs(f));
   if (!d || VIEW !== 'dash' || renderedDash === d) return;
   renderedDash = d;
+  const dateBasis = d.dateBasis || 'created';
+  $('#monthlyScope').textContent = `按${dateBasisLabel[dateBasis]}所属月份统计 · 物流时效为出库到妥投`;
   DF._info.hidden = !d.snapshotFiltersSkipped;
   DF._info.textContent = d.snapshotFiltersSkipped ? '实时筛选暂不可用，图表显示全量快照' : '';
   setTopMeta(d.asof);
@@ -539,22 +674,31 @@ async function loadDash() {
     ],
   });
 
+  if (trend.globalBasis !== dateBasis) {
+    trend.globalBasis = trend.basis = dateBasis;
+    document.querySelectorAll('#dailyBasis button').forEach(button =>
+      button.setAttribute('aria-pressed', String(button.dataset.dateBasis === dateBasis)));
+  }
   trend.created = d.daily;
   trend.shipped = d.dailyShipped;
   trend.filters = f;
   drawDailyVolume();
 
-  drawRank('cCarrier', d.byCarrier, 10,
+  drawRank('cCarrier', d.byCarrier, 10, k.orders,
     ME.preview ? null : value => openTracking({ ...f, cr: value }));
-  drawRank('cLastMile', d.byLastMile.map(r => ({ ...r, k: r.k || '未填写 C 端渠道', filter: r.k || '__empty__' })), 10,
+  drawRank('cLastMile', d.byLastMile.map(r => ({ ...r, k: r.k || '未填写 C 端渠道', filter: r.k || '__empty__' })), 10, k.orders,
     ME.preview ? null : value => openTracking({ ...f, lastmile: value }));
-  drawRank('cTrackingStatus', d.byTrackingStatus, 10,
+  drawRank('cTrackingStatus', d.byTrackingStatus, 10, k.orders,
     ME.preview ? null : value => filterByTrackStatus(value, f));
-  drawRank('cWarehouse', d.byWarehouse, 10,
+  drawRank('cWarehouse', d.byWarehouse, 10, k.orders,
     ME.preview ? null : value => openTracking({ ...f, wh: value }));
-  drawRank('cCountry', d.byCountry, 15);
-  drawRank('cCurrentChannel', d.byCurrentChannel || [], 10,
+  drawRank('cCountry', d.byCountry, 15, k.orders);
+  drawRank('cCurrentChannel', d.byCurrentChannel || [], 10, k.orders,
     ME.preview ? null : value => openTracking({ ...f, channel: value }));
+  drawRank('cChannelGroup', d.byChannelGroup || [], Number.POSITIVE_INFINITY, k.orders, ME.preview ? null : channels => {
+    const active = f.channel?.length ? channels.filter(channel => f.channel.includes(channel)) : channels;
+    openTracking({...f, channel: active});
+  });
   drawDispatchStatus(d.byStatus);
 }
 
@@ -616,7 +760,7 @@ function drawMix(id, numerator, denominator, summary, rows, groupTotal, {donut =
 }
 
 function drawDispatchStatus(rows) {
-  drawRank('cStatus', rows, rows.length);
+  drawRank('cStatus', rows, rows.length, rows.reduce((total, row) => total + row.n, 0));
   const toggle = $('#statusMore');
   const rest = [...document.querySelectorAll('#cStatus li')].filter((_, i) => i >= 5 && rows[i].k !== '已取消');
   toggle.hidden = !rest.length;
@@ -700,19 +844,21 @@ function drawDailyVolume() {
   });
 }
 
-function drawRank(id, rows, limit, onClick) {
+function drawRank(id, rows, limit, total, onClick) {
   const host = document.getElementById(id);
   const data = rows.slice(0, limit);
   if (!data.length) {
     host.innerHTML = '<p class="rank-empty tip">当前筛选无数据</p>';
     return;
   }
-  const max = Math.max(1, ...data.map(row => row.n));
   host.innerHTML = `<ol class="rank-list">${data.map((row, index) => {
     const name = esc(row.k || '未填写');
+    const share = total ? 100 * row.n / total : 0;
+    const percent = share > 0 && share < 0.1 ? '&lt;0.1%' : `${fmt1(share)}%`;
     const content = `<span class="rank-name" title="${name}">${name}</span><span class="rank-track" aria-hidden="true">
-      <span style="width:${100 * row.n / max}%"></span></span><strong class="rank-value">${fmt(row.n)}</strong>`;
-    return onClick && row.k ?
+      <span style="width:${share}%"></span></span><strong class="rank-value">${fmt(row.n)}</strong>
+      <span class="rank-share">${percent}</span>`;
+    return onClick && row.k && row.filter !== false ?
       `<li><button type="button" class="rank-row" data-rank="${index}">${content}</button></li>` :
       `<li class="rank-row">${content}</li>`;
   }).join('')}</ol>`;
@@ -799,8 +945,7 @@ function monitoringFilterDefs(alerts = false) {
   }
   return [
     trackingLookup(),
-    { type: 'select', label: '时间口径', key: 'date_basis', defaultLabel: '建单时间',
-      options: [{ v: 'shipped', t: '出库时间' }] },
+    dateBasisFilter(alerts ? 'created' : 'track'),
     ...common,
     { type: 'select', label: '17TRACK 状态', key: 'tstat', options: trackingGroups() },
     { type: 'select', label: '子状态', key: 'sub' },
@@ -820,7 +965,11 @@ function prepareTrack() {
     { type: 'select', label: '轨迹覆盖', key: 'coverage',
       options: coverageOptions.map(([v, t]) => ({ v, t })) },
     { type: 'select', label: '排序', key: 'sort', options: ['创建时间', '签出时间', '停滞天数', '逐条事件数'] },
-  ], (_, action) => { updateSubstates(TF); run(() => loadTrack(1, action === 'search')); });
+  ], (_, action) => {
+    updateDateOptions(TF, TF.date_basis.value || 'created');
+    updateSubstates(TF);
+    run(() => loadTrack(1, action === 'search'));
+  });
   updateSubstates(TF);
   TF._info.setAttribute('role', 'status');
 }
@@ -828,6 +977,7 @@ function prepareTrack() {
 function openTracking(values = {}) {
   if (!ME.preview && !META) return run(async () => { await loadMeta(); openTracking(values); });
   prepareTrack();
+  if (!ME.preview) updateDateOptions(TF, values.date_basis || 'created');
   Object.entries(TF).forEach(([key, control]) => { if (key !== '_info') control.value = values[key] || ''; });
   if (!ME.preview) updateSubstates(TF);
   setTrackMode('tracking');
@@ -1068,47 +1218,50 @@ async function loadAlerts(page = 1) {
       <td>${esc(r.carrier || '—')}<small class="cell-sub">${esc(r.country || '—')}</small></td>
       <td>${trackBadge(r.track_status, trackingGroups().find(row => row.v === r.track_status)?.t, r.track_sub)}</td>
       <td>${measure(r.days, ' 天')}</td>
-      ${archived ? `<td>${esc(r.handled_by || '—')}<small class="cell-sub">${esc(syncTime(r.handle_at))}</small></td>` : ''}
+      ${archived ? `<td>${esc(r.handled_by || '—')}<small class="cell-sub">${esc(syncTime(r.handle_at))}</small>
+        ${allowedActions().some(([action]) => action === 'archive') ? `<button class="btn ghost sm" type="button" data-undo-archive="${index}">撤销归档</button>` : ''}</td>` : ''}
     </tr>`).join('') : blankRow(9, archived ? '没有符合条件的归档记录' : '没有符合条件的待处理预警');
   pager($('#alertPager'), d.total, d.page, d.size, p => run(() => loadAlerts(p)));
+   $('#alertBody').querySelectorAll('[data-undo-archive]').forEach(button => {
+     button.onclick = () => run(() => {
+       button.disabled = true;
+       return changeAlerts('undo_archive', [alertTarget(d.rows[Number(button.dataset.undoArchive)])])
+         .finally(() => { button.disabled = false; });
+     });
+   });
   refreshSelection();
+}
+
+function alertTarget({order_no, rule, first_seen_at, history_id, handle_at}) {
+  return {order_no, rule, first_seen_at, history_id, handle_at};
+}
+
+async function changeAlerts(action, items) {
+  const result = await jsonPost('/api/alerts/batch', {action, items});
+  if (action.startsWith('undo_')) {
+    const detail = result.restored === result.updated ? '已回到待处理' :
+      result.restored === 0 ? '保留在历史预警' : `${result.restored} 条回到待处理，其余留在历史`;
+    toast(`已撤销 · ${detail}`);
+  } else {
+    const undo = () => changeAlerts('undo_' + action, items.map(item => ({...item, handle_at: result.handle_at})));
+    toast(`已${actions[action]} ${result.updated} 条预警`, undo);
+  }
+  invalidatePages();
+  await Promise.all([loadActivity(), drawerOrder ? refreshOrder(drawerOrder) : null,
+    VIEW === 'track' ? trackMode === 'tracking' ? loadTrack(trackPage) : loadAlerts(alertPage) : null]);
 }
 
 async function applyBatch() {
   const action = $('#batchAction').value;
-  const items = [...$('#alertBody').querySelectorAll('[data-alert-index]:checked')].map(input => {
-    const { order_no, rule, first_seen_at } = alertRows[Number(input.dataset.alertIndex)];
-    return { order_no, rule, first_seen_at };
-  });
+  const items = [...$('#alertBody').querySelectorAll('[data-alert-index]:checked')]
+    .map(input => alertTarget(alertRows[Number(input.dataset.alertIndex)]));
   if (!action || !items.length) return;
   $('#applyBatch').disabled = true;
   try {
-    const handler = await alertHandler(action);
-    if (handler == null) return;
-    const result = await jsonPost('/api/alerts/batch', { action, items, handler_name: handler });
-    toast(`已${actions[action]} ${result.updated} 条预警`);
-    invalidatePages();
-    await Promise.all([loadAlerts(alertPage), loadActivity()]);
+    await changeAlerts(action, items);
   } finally {
     refreshSelection();
   }
-}
-
-let recentAlertHandler = '';
-async function alertHandler(action) {
-  if (!ME.openTest) return '';
-  const dialog = $('#alertHandlerDialog');
-  const input = $('#alertHandlerName');
-  $('#alertHandlerTitle').textContent = actions[action];
-  input.value = recentAlertHandler;
-  input.setCustomValidity('');
-  dialog.returnValue = '';
-  const confirmed = new Promise(resolve => dialog.addEventListener('close', () =>
-    resolve(dialog.returnValue === 'confirm' ? input.value.trim() : null), { once: true }));
-  dialog.showModal();
-  const name = await confirmed;
-  if (name) recentAlertHandler = name;
-  return name;
 }
 
 /* ================= 渠道时效 ================= */
@@ -1136,9 +1289,10 @@ async function loadChannelFilters() {
   }
   if (CF) return;
   CF = makeFilters(host, [
-    ...dashFilterDefs(),
+    ...dashFilterDefs('paid'),
     { type: 'select', label: '最少单量（默认 100）', key: 'min_n', options: [1, 10, 30, 100, 500] },
   ], () => run(loadChannels));
+  updateDateOptions(CF, 'paid');
   if (renderedChannels) showChannelDataDate(renderedChannels);
 }
 
@@ -1151,9 +1305,10 @@ function showChannelDataDate(data) {
 function renderChannelPeriod(data, filters) {
   const period = [];
   if (data.snapshotFiltersSkipped) {
-    period.push(`全量离线快照 · 建单截至 ${data.asof} · 实时筛选未应用`);
+    period.push('全量离线快照 · 实时筛选未应用');
   } else {
     const {week, start, end, month} = filters;
+    period.push(`按${dateBasisLabel[data.dateBasis] || '快照日期口径'}筛选`);
     if (week?.length) {
       const options = new Map((META?.filterOptions.week || []).map(option => [option.v, option.t]));
       const weeks = [...week].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
@@ -1166,7 +1321,9 @@ function renderChannelPeriod(data, filters) {
         start ? `${show(start)} 起` : `截至 ${show(end)}`;
       period.push(`日期 ${range}（北京时间）`);
     }
-    if (!period.length) period.push(`全部日期 · 建单截至 ${data.asof}`);
+    if (!week?.length && !month?.length && !start && !end) {
+      period.push(data.dateAsof ? `全部日期 · 截至 ${data.dateAsof}` : '全部日期');
+    }
     if (data.snapshotAt) period.push('离线快照');
   }
   for (const id of ['channelComparisonPeriod', 'channelTablePeriod', 'channelCountryPeriod']) {
@@ -1216,6 +1373,7 @@ async function loadChannels() {
   if (!CF) run(loadChannelFilters);
   const basis = channelBasis;
   const filters = readF(CF || {});
+  if (CF) updateDateOptions(CF, filters.date_basis || 'paid');
   const loading = $('#channelLoading');
   const results = $('#channelResults');
   const currentResult = Boolean(renderedChannels);
@@ -1247,7 +1405,7 @@ async function loadChannels() {
   results.setAttribute('aria-busy', 'false');
   if (renderedChannels === d) return;
   renderedChannels = d;
-  renderedChannelFilters = d.snapshotFiltersSkipped ? {} : filters;
+  renderedChannelFilters = d.snapshotFiltersSkipped ? {} : {...filters, date_basis: d.dateBasis || filters.date_basis};
   showChannelDataDate(d);
   renderChannelPeriod(d, renderedChannelFilters);
 
@@ -1749,6 +1907,16 @@ async function loadOrderDetail(no, path, refresh = false) {
   ];
 
   const isPending = a => a.is_current && ['open', 'claimed', 'handling'].includes(a.state);
+  const orderAlerts = d.alerts || [];
+  const drawerActions = allowedActions();
+  const alertButtons = (a, pending) => {
+    const buttons = pending ? drawerActions : drawerActions.filter(([key]) =>
+      a.state === (key === 'archive' ? 'archived' : 'resolved'))
+      .map(([key]) => ['undo_' + key, key === 'archive' ? '撤销归档' : '撤销标记解决']);
+    return buttons.length ? `<div class="actrow">${buttons.map(([key, label]) =>
+      `<button type="button" class="btn ghost sm" data-alert-row="${orderAlerts.indexOf(a)}" data-act="${key}">${label}</button>`
+    ).join('')}</div>` : '';
+  };
   const alertCard = (a, pending) => `
     <div class="note">
       <div class="alert-detail">
@@ -1762,12 +1930,10 @@ async function loadOrderDetail(no, path, refresh = false) {
       ${!pending && a.first_seen_at ? `<p>首次留痕 · ${esc(dt(a.first_seen_at))}</p>` : ''}
       ${a.cleared_at ? `<p>不再命中 · ${esc(syncTime(a.cleared_at))}</p>` : ''}
       ${a.handle_note ? `<p>${esc(a.handle_note)}</p>` : ''}
-      ${pending ? `<div class="actrow">${allowedActions().map(([key, label]) =>
-        `<button type="button" class="btn ghost sm" data-rule="${esc(a.rule)}" data-seen="${esc(a.first_seen_at)}" data-act="${key}">${label}</button>`).join('')}</div>
-      ` : ''}
+      ${alertButtons(a, pending)}
     </div>`;
-  const activeAlerts = (d.alerts || []).filter(isPending).map(a => alertCard(a, true)).join('');
-  const pastAlerts = (d.alerts || []).filter(a => !isPending(a)).map(a => alertCard(a, false)).join('');
+  const activeAlerts = orderAlerts.filter(isPending).map(a => alertCard(a, true)).join('');
+  const pastAlerts = orderAlerts.filter(a => !isPending(a)).map(a => alertCard(a, false)).join('');
 
   const milestoneLabels = { InfoReceived: '收到运单信息', Departure: '起运', Arrival: '到达',
     Returning: '退运中', Returned: '已退回' };
@@ -1841,14 +2007,7 @@ async function loadOrderDetail(no, path, refresh = false) {
     b.onclick = () => run(async () => {
       b.disabled = true;
       try {
-        const handler = await alertHandler(b.dataset.act);
-        if (handler == null) return;
-        await jsonPost('/api/alerts/action', { order_no: no, rule: b.dataset.rule,
-          first_seen_at: b.dataset.seen || null, action: b.dataset.act, handler_name: handler });
-        toast(`已${actions[b.dataset.act]}`);
-        invalidatePages();
-        await refreshOrder(no);
-        await Promise.all([loadActivity(), trackMode === 'tracking' ? loadTrack(trackPage) : loadAlerts(alertPage)]);
+        await changeAlerts(b.dataset.act, [alertTarget(orderAlerts[Number(b.dataset.alertRow)])]);
       } finally { b.disabled = false; }
     });
   });
@@ -1870,6 +2029,7 @@ run(async function boot() {
   ME = await api('/api/me');
   setTopMeta(null);
   $('#opsAssistant').hidden = !ME.opsAssistant;
+  $('#openChannelGroups').hidden = !ME.can_edit;
   $('#cloudSharing').hidden = !ME.cloudSharing;
   $('#logout').hidden = ME.preview || ME.openTest;
   if (!ME.preview) $('#currentChannelTip').textContent += ' · 点击渠道查看履约单';
@@ -1974,6 +2134,13 @@ run(async function boot() {
     if (config) openConfiguration('sla', config.dataset.configSla);
   };
   $('#settingsForm').onsubmit = saveConfiguration;
+  $('#openChannelGroups').onclick = () => run(openChannelGroups);
+  $('#channelGroupsClose').onclick = () => $('#channelGroupsDialog').close();
+  $('#channelGroupChoice').onchange = editChannelGroup;
+  $('#channelGroupSearch').oninput = renderChannelGroupOptions;
+  $('#channelGroupsForm').onsubmit = event => { event.preventDefault(); run(() => saveChannelGroup(false)); };
+  $('#channelGroupRemove').onclick = () => run(() => saveChannelGroup(true));
+  $('#channelGroupsDialog').oncancel = event => { if ($('#channelGroupSave').disabled) event.preventDefault(); };
   $('#settingsCancel').onclick = $('#settingsClose').onclick = () => $('#settingsDialog').close();
   $('#settingsDialog').addEventListener('cancel', event => {
     if ($('#settingsSave').disabled) event.preventDefault();
@@ -2015,18 +2182,8 @@ run(async function boot() {
   ], channelRows);
   $('#dClose').onclick = closeDrawer;
   $('#mask').onclick = closeDrawer;
-  $('#alertHandlerCancel').onclick = () => $('#alertHandlerDialog').close();
-  $('#alertHandlerName').oninput = event => event.target.setCustomValidity('');
-  $('#alertHandlerForm').onsubmit = event => {
-    const input = $('#alertHandlerName');
-    if (!input.value.trim()) {
-      event.preventDefault();
-      input.setCustomValidity('请填写处理人姓名');
-      input.reportValidity();
-    }
-  };
   document.addEventListener('keydown', event => {
-    if (event.key !== 'Escape' || $('#alertHandlerDialog').open) return;
+    if (event.key !== 'Escape') return;
     if ($('#drawer').classList.contains('on')) closeDrawer();
     for (const filter of document.querySelectorAll('.multi-filter[open]')) {
       filter.open = false;

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261123-alert-history">
+<link rel="stylesheet" href="/static/app.css?v=20261123-overview-groups">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -102,7 +102,7 @@
           <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg></span>C 端承运商单量</h2><p class="tip icon-caption">客户看到的末端承运商 · 单量前 10</p></div></div><div id="cLastMile"></div></section>
         </div>
         <div class="grid overview-breakdown">
-          <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip">单量按创建月份统计 · 物流时效为出库到妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
+          <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip" id="monthlyScope">按履约单创建时间所属月份统计 · 物流时效为出库到妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
           <section class="card plot-card status-card" aria-labelledby="statusTitle">
             <div class="ct"><div><h2 id="statusTitle"><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>出库单状态</h2><p class="tip icon-caption">全部出库单状态，含已取消</p></div></div>
             <div id="cStatus"></div>
@@ -115,6 +115,13 @@
           <section class="card plot-card" aria-labelledby="currentChannelTitle">
             <div class="ct"><div><h2 id="currentChannelTitle">当前渠道单量</h2><p class="tip" id="currentChannelTip">单量前 10</p></div></div>
             <div id="cCurrentChannel"></div>
+          </section>
+          <section class="card plot-card" aria-labelledby="customChannelTitle">
+            <div class="ct">
+              <div><h2 id="customChannelTitle">自定义渠道分布</h2><p class="tip">按「当前渠道」归组 · 占筛选范围内有效履约单</p></div>
+              <button type="button" class="btn ghost sm" id="openChannelGroups" hidden>配置渠道分组</button>
+            </div>
+            <div id="cChannelGroup"></div>
           </section>
         </div>
       </section>
@@ -181,7 +188,7 @@
 
       <!-- ============ 渠道时效 ============ -->
       <section class="view" id="v-channels">
-        <div class="page-head"><div><h1>渠道时效</h1><p>按 C 端物流渠道对比，日期按履约单创建日筛选。妥投优先用 17TRACK，缺失时按仓库时间口径用 WMS 补算。</p></div></div>
+        <div class="page-head"><div><h1>渠道时效</h1><p>按 C 端物流渠道对比，可按支付时间或签出时间筛选。妥投优先用 17TRACK，缺失时按仓库时间口径用 WMS 补算。</p></div></div>
         <div class="filters" id="channelFilters"></div>
         <div class="card channel-basis">
           <div class="tabs" id="channelBasis" role="group" aria-label="时效统计口径">
@@ -313,7 +320,9 @@
                 <tr><th scope="row">履约单数与总件数</th><td>按履约单号汇总，一张履约单计一单。总件数来自订单明细的商品数量之和，同一平台订单拆成多个履约单时分别计数。</td></tr>
                 <tr><th scope="row">按建单 / 按出库</th><td>日单量按所选口径的北京时间自然日分组。按出库时仅计有签出时间的单，日期和月份也按签出日筛选。点击图中的日期会打开对应口径的履约单列表。</td></tr>
                 <tr><th scope="row">近 45 天与有单日均</th><td>近 45 天从当前口径下最后一个有单日倒推。日均用范围内单量除以有单的天数，峰值取其中单量最高的一天。</td></tr>
-                <tr><th scope="row">周次与日期范围</th><td>周次可多选，按下方 2026 年业务周表筛选。周次与月份、日期范围取交集。下拉选项中的数字是按建单日期统计的全量有效履约单数。只选日期时，开始默认 00:00，结束默认 23:59，包含该分钟内的记录。</td></tr>
+                <tr><th scope="row">周次与日期范围</th><td>周次、月份和日期范围取交集，使用所选时间字段。总览可按履约单创建时间或签出时间，渠道时效可按支付时间或签出时间。下拉数字是该时间口径下的全量有效履约单数。只选日期时默认从 00:00 到 23:59，包含最后一分钟的记录。</td></tr>
+                <tr><th scope="row">分布占比</th><td>分组单量 ÷ 筛选范围内的履约单总量。出库单状态的分母包含取消单。只显示排名靠前的分组时，仍以全部筛选结果为分母。</td></tr>
+                <tr><th scope="row">自定义渠道分组</th><td>使用履约单的「当前渠道」，每个渠道可归入一组，剩余单量计入「未归组」。分组用于总览统计。</td></tr>
                 <tr><th scope="row">渠道与物流商</th><td>「后台物流商」是 ERP 物流服务商，「当前渠道」用于配置 SLA，「C 端渠道」是客户可见的承运商名称。三个字段分别筛选。</td></tr>
                 <tr><th scope="row">取消单</th><td>只纳入「出库单状态」统计。总览单量、日单量、时效、轨迹清单及业务预警均按有效履约单统计。</td></tr>
               </tbody>
@@ -337,7 +346,7 @@
                 <tr><th scope="row">轨迹覆盖状态</th><td>「已签收 · 轨迹未入库」表示 ERP 有签收记录，本地还没有匹配的承运商轨迹。「已查询 · 未返回轨迹」表示查询已完成且承运商暂无轨迹。「API 账号登记未匹配」表示未在当前 API 账号下匹配到该运单。</td></tr>
                 <tr><th scope="row">物流未上网</th><td>已出库且未妥投，超过配置天数，17TRACK 仍显示「已收到信息」，且关键节点和逐条轨迹均没有有效揽收或运输扫描。「查无此单」和无查询结果归入轨迹覆盖。</td></tr>
                 <tr><th scope="row">主预警与待处理</th><td>一单可命中多条规则，按规则优先级展示主预警。待处理数字按仍需处理的履约单去重，Postnet 暂缓显示。</td></tr>
-                <tr><th scope="row">历史预警</th><td>重算后不再命中的预警留在履约单历史中。手动解决记录在运单轨迹显示，归档记录集中在归档列表。两种手动操作都会记录处理人和时间。</td></tr>
+                <tr><th scope="row">历史预警</th><td>重算后不再命中的预警留在履约单历史中。手动解决记录在运单轨迹显示，归档记录集中在归档列表。两种操作都支持撤销，仍命中时回到待处理，已自然消除时保留原预警历史。处理人由系统记录。</td></tr>
                 <tr><th scope="row">运输时间</th><td>从实际出库开始计时，已妥投算到妥投时间，未妥投算到查询时刻。妥投优先 17TRACK，缺失时按仓库时区规则用 ERP / WMS 补算。</td></tr>
                 <tr><th scope="row">时效与预警评估基准</th><td>通常取有效履约单中最新建单日。业务规则中配置为工作日的项目按周一至周五计算，其他项目根据各规则采用小时或自然日。</td></tr>
                 <tr><th scope="row">建单截止与最近导入</th><td>建单截止取有效履约单的最新创建日期。最近导入取 ERP 文件最后一次成功入库的时间。17TRACK 拉取和推送进度在「17TRACK 同步」中查看。</td></tr>
@@ -400,16 +409,26 @@
     <footer><button type="button" class="btn ghost" id="settingsCancel">取消</button><button type="submit" class="btn" id="settingsSave">保存并重算</button></footer>
   </form>
 </dialog>
-<dialog class="settings-dialog" id="alertHandlerDialog" aria-labelledby="alertHandlerTitle">
-  <form method="dialog" id="alertHandlerForm">
-    <header><h2 id="alertHandlerTitle"></h2></header>
+<dialog class="settings-dialog" id="channelGroupsDialog" aria-labelledby="channelGroupsTitle">
+  <form id="channelGroupsForm">
+    <header><h2 id="channelGroupsTitle">配置自定义渠道分组</h2>
+      <button type="button" class="btn ghost sm" id="channelGroupsClose">关闭</button></header>
     <div class="settings-fields">
-      <label><span>处理人姓名</span><input id="alertHandlerName" maxlength="64" required autofocus></label>
+      <label>选择分组<select id="channelGroupChoice"></select></label>
+      <label>分组名称<input id="channelGroupName" maxlength="80" required placeholder="例如 7日达"></label>
+      <div class="channel-group-picker">
+        <label>搜索当前渠道<input type="search" id="channelGroupSearch" placeholder="输入渠道名称"></label>
+        <p class="tip" id="channelGroupSelected"></p>
+        <div id="channelGroupOptions" role="group" aria-label="当前渠道"></div>
+      </div>
     </div>
-    <footer><button type="button" class="btn ghost" id="alertHandlerCancel">取消</button><button class="btn" value="confirm">确认</button></footer>
+    <p class="settings-error" id="channelGroupError" role="alert"></p>
+    <footer>
+      <button type="button" class="btn ghost" id="channelGroupRemove" hidden>删除此分组</button>
+      <button type="submit" class="btn" id="channelGroupSave">保存分组</button>
+    </footer>
   </form>
 </dialog>
-
-<script src="/static/app.js?v=20261123-alert-history" defer></script>
+<script src="/static/app.js?v=20261123-overview-groups" defer></script>
 </body>
 </html>

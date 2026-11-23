@@ -378,7 +378,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .status-more { margin-top: 13px; }
 .rank-list { padding: 0; list-style: none; }
 .rank-row {
-  display: grid; grid-template-columns: minmax(78px, 1fr) minmax(45px, 1.15fr) 68px;
+  display: grid; grid-template-columns: minmax(80px, 1fr) minmax(24px, .9fr) minmax(55px, max-content) 52px;
   align-items: center; gap: 8px; width: 100%; padding: 5px 0; min-height: 24px;
   border: 0; border-bottom: 1px solid #edf1f7; background: transparent; color: var(--ink2);
   text-align: left; font-size: 12px;
@@ -387,6 +387,7 @@ button.rank-row { cursor: pointer; }
 button.rank-row:hover { background: #f4f7fc; }
 .rank-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rank-value { text-align: right; color: var(--ink); font-variant-numeric: tabular-nums; }
+.rank-share { text-align: right; color: var(--ink2); font-variant-numeric: tabular-nums; }
 .rank-track { display: block; height: 5px; border-radius: 5px; background: #edf2fb; }
 .rank-track span { display: block; height: 100%; border-radius: inherit; background: var(--brand); }
 .rank-empty { padding: 24px 0; text-align: center; }
@@ -577,8 +578,14 @@ button.rank-row:hover { background: #f4f7fc; }
 .settings-hint { grid-column: 1 / -1; font-size: 12px; line-height: 1.5; }
 .settings-error { color: #a33232; padding: 0 17px 10px; }
 .settings-error:empty { display: none; }
-#alertHandlerDialog { width: min(370px, calc(100vw - 28px)); }
-#alertHandlerDialog .settings-fields { grid-template-columns: 1fr; }
+#channelGroupsDialog { width: min(550px, calc(100vw - 28px)); }
+.channel-group-picker { grid-column: 1 / -1; display: grid; gap: 8px; }
+#channelGroupOptions { max-height: min(280px, 36vh); overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+#channelGroupOptions .multi-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; padding: 7px 10px; }
+#channelGroupOptions label:has(input:disabled) { opacity: .55; }
+#channelGroupRemove { margin-inline-end: auto; }
+.toast-undo { margin-inline-start: 12px; color: inherit; border: 1px solid #9db3df; border-radius: 5px;
+  background: transparent; padding: 3px 9px; cursor: pointer; pointer-events: auto; }
 @media (max-width: 1060px) {
   .top, .content { padding-inline: 16px; }
   .overview-lead { grid-template-columns: minmax(0, 1.85fr) minmax(251px, 1fr); }

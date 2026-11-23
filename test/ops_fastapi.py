@@ -321,14 +321,12 @@ class OpsTests(unittest.TestCase):
             change = {"order_no": "TEST123", "rule": "sample", "action": "resolve"}
             path = "/api/alerts/action"
             self.assertEqual(visitor.request(path, "POST", change, {"origin": HUB})[0], 403)
-            self.assertEqual(visitor.request(path, "POST", change, {"origin": SITE})[0], 422)
-            change["handler_name"] = "测试处理人"
             status, _, result = visitor.request(path, "POST", change, {"origin": SITE, "cookie": "fd_session=old"})
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(result)["status"], "resolved")
             with core.ops() as db:
                 action = db.execute("SELECT status, updated_by, handler_name FROM alert_state").fetchone()
-                self.assertEqual(tuple(action), ("resolved", "open-test", "测试处理人"))
+                self.assertEqual(tuple(action), ("resolved", "open-test", "开放测试"))
 
     def test_alert_lifecycle_persists_closed_incidents_and_reopens_recurrence(self):
         with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):
@@ -339,7 +337,7 @@ class OpsTests(unittest.TestCase):
             path = "/api/alerts/action"
             def post(order, action):
                 return self.browser.request(path, "POST", {"order_no": order, "rule": "sample",
-                    "action": action, "handler_name": "物流测试", "first_seen_at": "2026-11-15"}, {"origin": SITE})[0]
+                    "action": action, "first_seen_at": "2026-11-15"}, {"origin": SITE})[0]
             def listing(suffix=""):
                 status, _, result = self.browser.request("/api/alerts" + suffix)
                 self.assertEqual(status, 200, result)
@@ -350,20 +348,65 @@ class OpsTests(unittest.TestCase):
             self.assertEqual(post("B", "archive"), 409)
             self.assertEqual([row["order_no"] for row in listing()], ["C"])
             self.assertEqual([(r["order_no"], r["handled_by"]) for r in listing("?view=archive")],
-                             [("A", "物流测试")])
+                             [("A", "开放测试")])
             with core.ops() as db:
                 db.execute("CREATE TEMP TABLE next_alerts AS SELECT * FROM alerts WHERE 0")
                 alert_history.carry_history(db, "2026-11-23")
                 db.execute("DELETE FROM alerts")
                 history = alert_history.resolved_for_orders(db, ["A", "B", "C"])
                 self.assertNotIn("A", history)
-                self.assertEqual((history["B"]["state"], history["B"]["handled_by"]), ("resolved", "物流测试"))
+                self.assertEqual((history["B"]["state"], history["B"]["handled_by"]), ("resolved", "开放测试"))
                 self.assertEqual((history["C"]["state"], history["C"]["handled_by"]), ("recovered", None))
                 db.execute("""INSERT INTO alerts(order_no,rule,rule_cn,first_seen_at) VALUES
                               ('A','sample','测试预警','2026-11-24')""")
             self.assertEqual([r["order_no"] for r in listing()], ["A"])
             self.assertEqual([r["order_no"] for r in listing("?view=archive")], ["A"])
             self.assertEqual(post("A", "resolve"), 409)
+
+    def test_alert_undo_restores_active_and_preserves_cleared_history(self):
+        with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):
+            with core.ops() as db:
+                db.executemany("""INSERT INTO alerts(order_no,rule,first_seen_at,evidence)
+                                  VALUES (?,'sample','2026-11-15','原始证据')""", [("A",), ("B",)])
+            def post(order, action, **details):
+                status, _, result = self.browser.request("/api/alerts/action", "POST", {
+                    "order_no": order, "rule": "sample", "action": action, "first_seen_at": "2026-11-15",
+                    **details,
+                }, {"origin": SITE})
+                return status, json.loads(result)
+
+            status, archive = post("A", "archive")
+            self.assertEqual((status, archive["handled_by"]), (200, "开放测试"))
+            self.assertEqual(post("A", "undo_archive", handle_at=archive["handle_at"])[1]["restored"], 1)
+            self.assertEqual(post("A", "undo_archive", handle_at=archive["handle_at"])[0], 409)
+            self.assertEqual(post("B", "resolve")[0], 200)
+            with core.ops() as db:
+                db.execute("CREATE TEMP TABLE next_alerts AS SELECT * FROM alerts WHERE order_no='A'")
+                alert_history.carry_history(db, "2026-11-23")
+                db.execute("DELETE FROM alerts WHERE order_no='B'")
+                old = db.execute("SELECT rowid,handle_at FROM alert_history WHERE order_no='B'").fetchone()
+                db.execute("""INSERT INTO alerts(order_no,rule,first_seen_at)
+                              VALUES ('B','sample','2026-11-24')""")
+            self.assertEqual(post("B", "undo_resolve", history_id=old[0], handle_at=old[1])[1]["restored"], 0)
+            with core.ops() as db:
+                self.assertEqual(tuple(db.execute("SELECT state,evidence FROM alert_history").fetchone()),
+                                 ("recovered", "原始证据"))
+                self.assertEqual(db.execute("SELECT count(*) FROM alert_state").fetchone()[0], 0)
+                self.assertEqual(db.execute("SELECT count(*) FROM audit_log WHERE action LIKE 'alert_undo_%'").fetchone()[0], 2)
+
+    def test_channel_groups_keep_a_single_membership_and_reject_stale_writes(self):
+        with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):
+            path = "/api/overview/channel-groups"
+            self.assertEqual(json.loads(self.browser.request(path)[2])["revision"], 0)
+            group = {"name": "特快", "channels": ["A", "B"]}
+            def save(groups, revision):
+                return self.browser.request(path, "PUT", {"revision": revision, "groups": groups},
+                                            {"origin": SITE})[0]
+
+            self.assertEqual(save([group, {"name": "其他", "channels": ["B"]}], 0), 422)
+            self.assertEqual(save([group], 0), 200)
+            self.assertEqual(save([], 0), 409)
+            self.assertEqual(json.loads(self.browser.request(path)[2]), {"revision": 1, "groups": [group]})
 
     def test_alerts_show_newest_dispatch_and_suspend_postnet(self):
         with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):

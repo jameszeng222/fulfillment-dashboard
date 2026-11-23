@@ -45,9 +45,14 @@ def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="
             w.append(f'{column} IN ({",".join("?" * len(vals))})')
             a.extend(vals)
 
-    timestamp_column = f"{alias}.签出时间" if date_basis == "shipped" else f"{alias}.创建时间"
-    date_column = f"CAST({timestamp_column} AS DATE)" if date_basis == "shipped" else f"{alias}.创建日期"
-    month_column = f"strftime({date_column}, '%Y-%m')" if date_basis == "shipped" else f"{alias}.创建月份"
+    if date_basis in ("shipped", "paid"):
+        field = "签出时间" if date_basis == "shipped" else "支付时间"
+        timestamp_column = f"{alias}.{field}"
+        date_column = f"CAST({timestamp_column} AS DATE)"
+        month_column = f"strftime({date_column}, '%Y-%m')"
+        w.append(f"{timestamp_column} IS NOT NULL")
+    else:
+        timestamp_column, date_column, month_column = (f"{alias}.{field}" for field in ("创建时间", "创建日期", "创建月份"))
     inl(month_column, month)
     week_sql, week_args = week_filter(date_column, core.filter_values(week))
     if week_sql:
@@ -142,16 +147,89 @@ def _order_split_mix(con, active_orders, filtered):
     return dict(zip((column[0] for column in result.description), result.fetchone()))
 
 
+class OverviewChannelGroup(BaseModel):
+    name: str = Field(max_length=80)
+    channels: list[str] = Field(min_length=1, max_length=500)
+
+
+class OverviewChannelGroups(BaseModel):
+    revision: int = Field(ge=0)
+    groups: list[OverviewChannelGroup] = Field(max_length=100)
+
+
+def get_channel_groups(db):
+    if db.execute("SELECT 1 FROM sqlite_master WHERE name='fulfillment_settings'").fetchone():
+        row = db.execute("""SELECT payload FROM fulfillment_settings
+                            WHERE kind='channel_group' AND name='overview'""").fetchone()
+        if row:
+            return json.loads(row[0])
+    return {"revision": 0, "groups": [
+        {"name": "7日达", "channels": ["WYT-WF7日达_Zonal_TK", "WYT-WF7日达Zonal",
+                                      "WYT-WF7日达_Zonal", "WYT-WF7日达_Zonal_WCTK"]},
+        {"name": "LUVME EXPRESS 3PE", "channels": ["Luvmexpress_3pe_XC01", "Luvmexpress_3pe_JY01",
+                                                  "Luvme Express 3pe网红"]},
+    ]}
+
+
+@router.get("/overview/channel-groups")
+def overview_channel_groups(request: Request):
+    core.require_reader(request)
+    with core.ops() as db:
+        return get_channel_groups(db)
+
+
+@router.put("/overview/channel-groups")
+def update_overview_channel_groups(body: OverviewChannelGroups, request: Request):
+    user = core.require_editor(request)
+    groups, group_names, channel_names = [], set(), set()
+    for item in body.groups:
+        name = item.name.strip()
+        channels = [value.strip() for value in item.channels]
+        if not name or name == "未归组" or name.casefold() in group_names:
+            raise HTTPException(status_code=422, detail="组名必填，须唯一，且不能使用「未归组」")
+        if any(not value or len(value) > 200 for value in channels):
+            raise HTTPException(status_code=422, detail="请选择有效的当前渠道")
+        if channel_names.intersection(channels) or len(set(channels)) != len(channels):
+            raise HTTPException(status_code=422, detail="同一个当前渠道只能归入一组")
+        group_names.add(name.casefold())
+        channel_names.update(channels)
+        groups.append({"name": name, "channels": channels})
+    with core.ops() as db:
+        db.execute("BEGIN IMMEDIATE")
+        if get_channel_groups(db)["revision"] != body.revision:
+            raise HTTPException(status_code=409, detail="渠道分组已更新，请重新打开配置后再保存")
+        result = {"revision": body.revision + 1, "groups": groups}
+        rules.save_setting(db, "channel_group", "overview", result)
+        core.audit(user["username"], "overview_channel_groups", "overview", {"groups": groups}, connection=db)
+    return result
+
+
 @router.get("/overview")
 def overview(request: Request, month: str = "", wh: str = "", pf: str = "", cr: str = "",
-             cn: str = "", start: str = "", end: str = "", lastmile: str = "", channel: str = "", week: str = ""):
+             cn: str = "", start: str = "", end: str = "", lastmile: str = "", channel: str = "", week: str = "",
+             date_basis: Literal["", "created", "shipped"] = "created"):
     core.require_reader(request)
-    return _overview(core.snapshot_key(), month, wh, pf, cr, cn, start, end, lastmile, channel, week)
+    result = _overview(core.snapshot_key(), month, wh, pf, cr, cn, start, end, lastmile, channel, week,
+                       date_basis or "created")
+    with core.ops() as db:
+        groups = get_channel_groups(db)["groups"]
+    counts = {row["k"]: row["n"] for row in result["_currentChannels"]}
+    grouped = [{"k": item["name"], "n": sum(counts.get(key, 0) for key in item["channels"]),
+                "filter": item["channels"]} for item in groups]
+    unmapped = result["kpi"]["orders"] - sum(row["n"] for row in grouped)
+    distribution = sorted((row for row in grouped if row["n"]), key=lambda row: (-row["n"], row["k"]))
+    if unmapped:
+        distribution.append({"k": "未归组", "n": unmapped, "filter": False})
+    return {**{key: value for key, value in result.items() if key != "_currentChannels"},
+            "byChannelGroup": distribution}
 
 
 @lru_cache(maxsize=32)
-def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, week):
-    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel, week=week)
+def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, week, date_basis):
+    def filters(basis):
+        return _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel,
+                     week=week, date_basis=basis)
+    cond, args = filters(date_basis)
 
     con = core.duck()
     try:
@@ -189,18 +267,19 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
                 FROM overview_timing o GROUP BY 1 ORDER BY n DESC, k NULLS LAST LIMIT {limit}
             """).df().to_dict("records")
 
+        month_column = "strftime(o.签出时间, '%Y-%m')" if date_basis == "shipped" else "o.创建月份"
         monthly = con.execute(f"""
-            SELECT o.创建月份 m, count(*) n, count(o.{DELIVERED_BJ}) s,
+            SELECT {month_column} m, count(*) n, count(o.{DELIVERED_BJ}) s,
                    avg(o.物流分钟) FILTER (WHERE o.物流分钟 > 0)/1440.0 d
             FROM overview_timing o GROUP BY 1 ORDER BY 1
         """).df().to_dict("records")
+        create_cond, create_args = filters("created")
         daily = con.execute(f"""
             SELECT o.创建日期::VARCHAR AS day, count(*) AS n
-            FROM {order_facts} o WHERE o.创建日期 IS NOT NULL{cond}
+            FROM {active_orders} o WHERE o.创建日期 IS NOT NULL{create_cond}
             GROUP BY 1 ORDER BY 1
-        """, args).fetchall()
-        ship_cond, ship_args = _cond(month, wh, pf, cr, cn, start=start, end=end,
-                                    lastmile=lastmile, channel=channel, date_basis="shipped", week=week)
+        """, create_args).fetchall()
+        ship_cond, ship_args = filters("shipped")
         daily_shipped = con.execute(f"""
             SELECT CAST(o.签出时间 AS DATE)::VARCHAR AS day, count(*) AS n
             FROM {active_orders} o WHERE o.签出时间 IS NOT NULL{ship_cond}
@@ -215,7 +294,8 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
             FROM {all_orders} o WHERE 1=1{cond} GROUP BY 1 ORDER BY n DESC,k
         """, args).df().to_dict("records")
         by_last_mile = by("C端承运商", 16)
-        by_current_channel = by("当前渠道", 10)
+        current_channels = con.execute("""SELECT 当前渠道 k, count(*) n FROM overview_timing
+                                          GROUP BY 1 ORDER BY n DESC, k NULLS LAST""").df().to_dict("records")
         track_states = con.execute(f"""
             SELECT {TRACK_STATUS_LABEL} k, count(*) n
             FROM {order_facts} o
@@ -252,7 +332,8 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
         "daily": [{"day": day, "n": count} for day, count in daily],
         "dailyShipped": [{"day": day, "n": count} for day, count in daily_shipped],
         "byCountry": by_country, "byStatus": by_status,
-        "byLastMile": by_last_mile, "byCurrentChannel": by_current_channel, "byTrackingStatus": track_states,
+        "byLastMile": by_last_mile, "byCurrentChannel": current_channels[:10], "_currentChannels": current_channels,
+        "byTrackingStatus": track_states, "dateBasis": date_basis,
     })
 
 
@@ -266,7 +347,7 @@ def track(request: Request,
           sort: str = "停滞天数", order: str = "desc",
           start: str = "", end: str = "", lastmile: str = "",
           sub: str = "", coverage: str = "", channel: str = "", week: str = "",
-          date_basis: Literal["", "created", "shipped"] = "created",
+          date_basis: Literal["", "created", "paid", "shipped"] = "created",
           part: Literal["all", "rows", "summary"] = "all"):
     if core.require_reader(request)["preview"]:
         return public_preview.search(q, page, size)
@@ -453,7 +534,7 @@ def track(request: Request,
 def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
              cn: str = "", min_n: int = Query(100, ge=1), cr: str = "", lastmile: str = "",
              start: str = "", end: str = "", channel: str = "", week: str = "",
-             basis: TimingBasis = "shipped"):
+             basis: TimingBasis = "shipped", date_basis: Literal["", "paid", "shipped"] = "paid"):
     core.require_reader(request)
     if basis == "created":
         basis = "paid"  # Value used by earlier clients for 下单到签收.
@@ -462,18 +543,23 @@ def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
     archive = transport_archive_version() if basis == "online" or any(
         item.get("basis") == "online" for item in saved.values()
     ) else None
-    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel, week=week)
-    report = _channel_report(core.snapshot_key(), archive, json.dumps(saved, sort_keys=True), basis, cond, tuple(args))
-    return {**report, "rows": [row for row in report["rows"] if row["orders"] >= min_n]}
+    date_basis = date_basis or "paid"
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel, week=week,
+                       date_basis=date_basis)
+    report = _channel_report(core.snapshot_key(), archive, json.dumps(saved, sort_keys=True), basis, cond, tuple(args),
+                             date_basis)
+    return {**report, "dateBasis": date_basis, "rows": [row for row in report["rows"] if row["orders"] >= min_n]}
 
 
 @lru_cache(maxsize=32)
-def _channel_report(_snapshot, _archive, saved, basis, cond, args):
+def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis):
     con = core.duck()
     try:
         raw_facts = core.active_facts(core.order_facts(con))
         facts = reporting_facts(con, delivery_facts(con, raw_facts))
         asof = con.execute(f"SELECT max(创建日期) FROM {raw_facts}").fetchone()[0]
+        field = "签出时间" if date_basis == "shipped" else "支付时间"
+        date_asof = con.execute(f"SELECT CAST(max({field}) AS DATE) FROM {raw_facts}").fetchone()[0]
         slas = rules.current_channel_slas(con, raw_facts, json.loads(saved))
         sla_sql, sla_values = rules.sla_table(slas)
         sla_scans = any(config["basis"] == "online" for config in slas.values())
@@ -541,7 +627,7 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args):
         row["slaRate"] = pct(row.pop("within_sla"), row["sla_samples"])
         row["overRate"] = pct(row["overdue"], row["slaInTransit"])
         records.append(row)
-    return core.clean({"asof": str(asof), "basis": basis, "rows": records, "byCountry": by_country})
+    return core.clean({"asof": str(asof), "dateAsof": date_asof, "basis": basis, "rows": records, "byCountry": by_country})
 
 
 # ---------------------------------------------------------------- 规则与 SLA

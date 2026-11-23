@@ -149,7 +149,7 @@ export async function readSnapshot(bucket, url, fallback = false) {
   const order = path.match(/^\/api\/orders\/([^/]+)$/);
   if (!(order || ["/api/track", "/api/meta", "/api/overview", "/api/channels"].includes(path))) return null;
   const filtered = ["/api/overview", "/api/channels"].includes(path) &&
-    dimensions.some(key => url.searchParams.get(key));
+    (dimensions.some(key => url.searchParams.get(key)) || url.searchParams.get("date_basis") === "shipped");
   if (filtered && !fallback) return null;
   const record = await active(bucket);
   if (!record?.current) return null;

@@ -42,12 +42,13 @@ def alert_fields(alias):
 def current_rows():
     return f"""SELECT {alert_fields('a')}, coalesce(s.status,'open') AS state, {HANDLER} AS handled_by,
                       s.updated_at AS handle_at, s.note AS handle_note, NULL AS cleared_at,
-                      1 AS is_current
+                      1 AS is_current, NULL AS history_id
                FROM alerts a LEFT JOIN alert_state s USING (order_no, rule)"""
 
 
 def all_rows():
-    return f"{current_rows()} UNION ALL SELECT {alert_fields('h')}, {HISTORY_METADATA}, 0 AS is_current FROM alert_history h"
+    return f"""{current_rows()} UNION ALL
+               SELECT {alert_fields('h')}, {HISTORY_METADATA}, 0, h.rowid FROM alert_history h"""
 
 
 def resolved_for_orders(db, order_numbers):

@@ -1,6 +1,7 @@
 """REST API：订单查询、预警处理、统计。"""
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from typing import Any, Literal, Optional
@@ -113,6 +114,21 @@ def meta(request: Request):
                 "v": code, "t": f"{code} · {start:%m/%d}–{end:%m/%d}", "n": week_counts.get(index, 0),
                 "start": start.isoformat(), "end": end.isoformat(),
             })
+        date_options = {}
+        for basis, column in (("paid", "支付时间"), ("shipped", "签出时间")):
+            days = con.execute(f"""
+                SELECT CAST({column} AS DATE), count(*) FROM {facts} WHERE {column} IS NOT NULL GROUP BY 1
+            """).fetchall()
+            months, weeks = Counter(), Counter()
+            for day, count in days:
+                months[day.strftime("%Y-%m")] += count
+                if week_start <= day < week_end:
+                    weeks[(day - week_start).days // 7] += count
+            date_options[basis] = {
+                "month": [{"v": period, "t": period, "n": count} for period, count in sorted(months.items())],
+                "week": [{**week, "n": weeks[index]} for index, week in enumerate(dimension_counts["week"])],
+                "total": sum(months.values()),
+            }
         missing_last_mile = con.execute(
             f"SELECT count(*) FROM {facts} WHERE coalesce(C端承运商,'')=''"
         ).fetchone()[0]
@@ -161,7 +177,7 @@ def meta(request: Request):
         "warehouses": whs, "platforms": pfs, "carriers": crs, "countries": cns,
         "months": months, "orderStatuses": sts,
         "lastMileCarriers": last_mile, "countryItems": countries, "trackStatuses": tracking_statuses,
-        "filterOptions": dimension_counts, "platformNames": platform_names,
+        "filterOptions": dimension_counts, "dateOptions": date_options, "platformNames": platform_names,
         "rules": rules, "alertStates": states, "alertChannels": alert_channels,
         "ruleOptions": [] if preview else [{"v": rule["key"], "t": rule["name"]} for rule in BUSINESS_RULES],
         "range": {"start": str(b[0]), "end": str(b[1]), "orders": b[2]},
@@ -489,41 +505,74 @@ class AlertTarget(BaseModel):
     order_no: str
     rule: str
     first_seen_at: str | None = None
+    history_id: int | None = None
+    handle_at: str | None = None
 
 
 class ActionIn(AlertTarget):
     action: str
     note: str = Field(default="", max_length=2000)
-    handler_name: str = Field(default="", max_length=64)
 
 
 class BatchActionIn(BaseModel):
     action: str
     items: list[AlertTarget] = Field(min_length=1, max_length=100)
-    handler_name: str = Field(default="", max_length=64)
 
 
-def apply_alert_action(user, action, items, note="", handler_name=""):
-    states = {"resolve": "resolved", "archive": "archived"}
+def undo_alert(o, item, state):
+    if item.history_id is None and item.handle_at is None:
+        raise HTTPException(status_code=422, detail="请刷新列表后再撤销")
+    row = o.execute(f"""
+        SELECT * FROM ({alert_history.all_rows()})
+        WHERE order_no=? AND rule=? AND state=? AND handle_at IS ? AND {visible_alerts()}
+          AND ((? IS NOT NULL AND history_id=?)
+             OR (? IS NULL AND first_seen_at IS ?))
+        ORDER BY is_current DESC LIMIT 1
+    """, (item.order_no, item.rule, state, item.handle_at,
+          item.history_id, item.history_id, item.history_id, item.first_seen_at)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=409, detail="这条预警的处理记录已变化，请刷新后重试")
+    if row["is_current"]:
+        o.execute("DELETE FROM alert_state WHERE order_no=? AND rule=?", (item.order_no, item.rule))
+    else:
+        o.execute("""UPDATE alert_history SET state='recovered', handled_by=NULL, handle_at=NULL, handle_note=NULL
+                     WHERE rowid=?""", (row["history_id"],))
+    return row
+
+
+def apply_alert_action(user, action, items, note=""):
+    states = {"resolve": "resolved", "archive": "archived",
+              "undo_resolve": "resolved", "undo_archive": "archived"}
     if action not in states:
         raise HTTPException(status_code=400, detail="不支持的预警动作")
-    if action == "archive" and user["role"] not in ("admin", "logistics"):
+    if states[action] == "archived" and user["role"] not in ("admin", "logistics"):
         raise HTTPException(status_code=403, detail="归档需要物流或管理员权限")
     target_status = states[action]
-    handler = handler_name.strip() if user["username"] == "open-test" else user["display_name"] or user["username"]
-    if not handler:
-        raise HTTPException(status_code=422, detail="请填写处理人姓名")
-    targets = {(item.order_no, item.rule): item.first_seen_at for item in items}
+    handler = user["display_name"] or user["username"]
+    handle_at = datetime.now().astimezone().isoformat(timespec="microseconds")
+    targets = {(item.order_no, item.rule, item.history_id): item for item in items}
+    undo = action.startswith("undo_")
 
     with core.ops() as o:
         o.execute("BEGIN IMMEDIATE")
+        if undo:
+            restored = 0
+            for item in targets.values():
+                previous = undo_alert(o, item, target_status)
+                restored += previous["is_current"]
+                core.audit(user["username"], f"alert_{action}", f"{item.order_no}/{item.rule}",
+                           {"handled_by": handler, "previous_handler": previous["handled_by"],
+                            "previous_handle_at": previous["handle_at"], "previous_note": previous["handle_note"],
+                            "first_seen_at": previous["first_seen_at"]}, connection=o)
+            return {"ok": True, "updated": len(targets), "restored": restored}
         if not all(o.execute(f"""
             SELECT 1 FROM ({alert_history.current_rows()})
             WHERE order_no=? AND rule=? AND {visible_alerts()} AND state IN {alert_history.PENDING_STATES}
               AND (? IS NULL OR first_seen_at=?)
-        """, (*target, seen, seen)).fetchone() for target, seen in targets.items()):
+        """, (item.order_no, item.rule, item.first_seen_at, item.first_seen_at)).fetchone()
+                   for item in targets.values()):
             raise HTTPException(status_code=409, detail="至少一条预警已结束，请刷新列表后重试")
-        for order_no, rule in targets:
+        for item in targets.values():
             o.execute("""
                 INSERT INTO alert_state (order_no,rule,status,note,updated_at,updated_by,handler_name)
                 VALUES (?,?,?,?,?,?,?)
@@ -531,20 +580,21 @@ def apply_alert_action(user, action, items, note="", handler_name=""):
                   status = excluded.status,
                   note = coalesce(nullif(excluded.note,''), alert_state.note),
                   updated_at = excluded.updated_at, updated_by = excluded.updated_by, handler_name = excluded.handler_name
-            """, (order_no, rule, target_status, note, core.now_iso(), user["username"], handler))
-            core.audit(user["username"], f"alert_{action}", f"{order_no}/{rule}",
+            """, (item.order_no, item.rule, target_status, note, handle_at, user["username"], handler))
+            core.audit(user["username"], f"alert_{action}", f"{item.order_no}/{item.rule}",
                        {"note": note, "handled_by": handler}, connection=o)
-    return {"ok": True, "status": target_status, "handled_by": handler, "updated": len(targets)}
+    return {"ok": True, "status": target_status, "handled_by": handler,
+            "handle_at": handle_at, "updated": len(targets)}
 
 
 @router.post("/alerts/action")
 def alert_action(body: ActionIn, request: Request):
-    return apply_alert_action(core.require_editor(request), body.action, [body], body.note, body.handler_name)
+    return apply_alert_action(core.require_editor(request), body.action, [body], body.note)
 
 
 @router.post("/alerts/batch")
 def batch_alert_action(body: BatchActionIn, request: Request):
-    return apply_alert_action(core.require_editor(request), body.action, body.items, handler_name=body.handler_name)
+    return apply_alert_action(core.require_editor(request), body.action, body.items)
 
 
 @router.post("/orders/{order_no}/notes")
