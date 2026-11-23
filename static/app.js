@@ -2,6 +2,8 @@
 const $ = s => document.querySelector(s);
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const icon = name => `<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#i-${name}"></use></svg>`;
+const sectionIcon = (name, tone) => `<span class="section-icon tone-${tone}">${icon(name)}</span>`;
 const fmt = n => (n == null || isNaN(n)) ? '—' : Math.round(n).toLocaleString('zh-CN');
 const fmt1 = n => (n == null || isNaN(n)) ? '—' : (Math.round(n * 10) / 10).toFixed(1);
 const dt = s => s ? String(s).replace('T', ' ').slice(0, 16) : '—';
@@ -36,9 +38,9 @@ let readGeneration = 0;
 let resizeFrame = 0;
 let toastTimer;
 const chartTheme = {
-  ink: '#081f5c', paper: '#ffffff', text: '#243657', muted: '#536782',
-  grid: '#e1e7f0',
-  series: ['#adc4e0', '#7096d1', '#334eac', '#081f5c'],
+  ink: '#101d34', paper: '#ffffff', text: '#243657', muted: '#536782',
+  grid: '#dce4f0',
+  series: ['#b9c9ed', '#728bd3', '#345bd1', '#101d34'],
 };
 const chartMotion = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const chartTip = { backgroundColor: chartTheme.ink, borderWidth: 0, confine: true,
@@ -47,8 +49,17 @@ const compactCount = value => value >= 10000 ? `${Number((value / 10000).toFixed
 
 function setTopMeta(createdThrough) {
   const parts = [createdThrough ? `建单截止 ${createdThrough}` : '履约数据'];
-  if (lastImportAt) parts.push(`最近导入 ${dt(lastImportAt)}`);
-  if (snapshotAt) parts.push(`云端快照 ${new Date(snapshotAt).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai', hour12: false})}`);
+  const imported = lastImportAt ? `最近导入 ${dt(lastImportAt)}` : '';
+  const snapshot = snapshotAt ? new Date(snapshotAt).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai', hour12: false}) : '';
+  const banner = $('#dashboardSource');
+  banner.hidden = !imported && !snapshot;
+  banner.classList.toggle('is-snapshot', Boolean(snapshot));
+  $('#dashboardSourceLabel').textContent = snapshot ? '云端快照' : 'ERP / WMS 履约数据';
+  $('#dashboardSourceTime').textContent = snapshot ? `${snapshot}（北京时间）` : imported;
+  if (VIEW !== 'dash') {
+    if (imported) parts.push(imported);
+    if (snapshot) parts.push(`云端快照 ${snapshot}`);
+  }
   $('#topMeta').textContent = parts.join(' · ');
 }
 
@@ -180,6 +191,7 @@ function showView(v) {
     else b.removeAttribute('aria-current');
   });
   $('#crumb').textContent = VIEW_META[v];
+  setTopMeta(META?.range.end);
   history.replaceState(null, '', '#' + (v === 'track' && trackMode === 'alerts' ? 'alerts' : v));
   window.scrollTo({ top: 0 });
   resizeVisibleCharts();
@@ -452,15 +464,15 @@ async function loadDash() {
 
   const k = d.kpi;
   const defs = [
-    ['履约单数', fmt(k.orders), '筛选范围'],
-    ['总件数', fmt(k.items), `单均 ${k.orders ? fmt1(k.items / k.orders) : '—'} 件`],
-    ['妥投覆盖率', measure(k.signRate, '%'), `含 WMS 补算 ${fmt(k.fallbackSigned)} 单`],
-    ['仓内处理', measure(k.inboundHours, ' 小时'), '履约单创建 → 出库'],
-    ['物流运输', measure(k.transitDays, ' 天'), `出库 → 妥投 · ${fmt(k.transitSamples)} 单`],
-    ['6 天达成率', measure(k.rate6, '%'), '有效时效样本中 ≤6 天'],
+    ['履约单数', fmt(k.orders), '筛选范围', 'box', 'blue'],
+    ['总件数', fmt(k.items), `单均 ${k.orders ? fmt1(k.items / k.orders) : '—'} 件`, 'layers', 'blue'],
+    ['妥投覆盖率', measure(k.signRate, '%'), `含 WMS 补算 ${fmt(k.fallbackSigned)} 单`, 'check', 'green'],
+    ['仓内处理', k.inboundHours == null ? '—' : `${fmt1(k.inboundHours)} <small>小时</small>`, '履约单创建 → 出库', 'warehouse', 'violet'],
+    ['物流运输', k.transitDays == null ? '—' : `${fmt1(k.transitDays)} <small>天</small>`, `出库 → 妥投 · ${fmt(k.transitSamples)} 单`, 'truck', 'cyan'],
+    ['6 天达成率', measure(k.rate6, '%'), '有效时效样本中 ≤6 天', 'clock', 'green'],
   ];
-  $('#dashKpi').innerHTML = defs.map(([l, v, s]) =>
-    `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="fl">${s}</div></div>`).join('');
+  $('#dashKpi').innerHTML = defs.map(([label, value, detail, name, tone]) =>
+    `<div class="kpi"><div class="kpi-label"><span class="lbl">${label}</span>${sectionIcon(name, tone)}</div><div class="val">${value}</div><div class="fl">${detail}</div></div>`).join('');
 
   drawOverviewMixes(d);
 
@@ -514,7 +526,7 @@ function drawOverviewMixes(data) {
       [
         ['海外仓', shipping.overseas, 'primary'], ['国内仓', shipping.domestic, 'secondary'],
         ...(shipping.unknown ? [['仓库未归类', shipping.unknown, 'unknown']] : []),
-      ], shipping.total);
+      ], shipping.total, { donut: true });
   } else {
     $('#warehouseShippingMix').textContent = '等待快照同步';
   }
@@ -522,25 +534,43 @@ function drawOverviewMixes(data) {
     drawMix('orderSplitMix', orders.split, orders.total,
       `${fmt(orders.split)} / ${fmt(orders.total)} 个订单拆单`,
       [
-        ['同仓拆单', orders.same, 'primary'], ['异仓拆单', orders.cross, 'secondary'],
+        ['同仓拆单', orders.same, 'teal'], ['异仓拆单', orders.cross, 'primary'],
         ...(orders.unknown ? [['仓库待确认', orders.unknown, 'unknown']] : []),
-      ], orders.split, '拆单构成按拆单订单数计算。' +
-      (orders.missingFulfillments ? `另有 ${fmt(orders.missingFulfillments)} 个履约单缺少订单号。` : ''));
+      ], orders.split, { note: '拆单构成按拆单订单数计算。' +
+        (orders.missingFulfillments ? `另有 ${fmt(orders.missingFulfillments)} 个履约单缺少订单号。` : '') });
   } else {
     $('#orderSplitMix').textContent = '等待快照同步';
   }
 }
 
-function drawMix(id, numerator, denominator, summary, rows, groupTotal, note = '') {
+function drawMix(id, numerator, denominator, summary, rows, groupTotal, {donut = false, note = ''} = {}) {
   const percentage = (n, total) => measure(total ? 100 * n / total : null, '%');
-  const bar = rows.filter(([, n]) => n > 0).map(([name, n, tone]) =>
+  const segments = rows.filter(([, n]) => n > 0);
+  const rate = percentage(numerator, denominator);
+  const list = `<ul class="mix-list">${rows.map(([name, n, tone]) => `<li>
+      <span class="mix-key mix-${tone}" aria-hidden="true"></span><span>${esc(name)}</span><strong>${fmt(n)} 单</strong>
+      <span class="mix-percentage">${percentage(n, groupTotal)}</span></li>`).join('')}</ul>`;
+  if (donut) {
+    let start = 0;
+    const stops = groupTotal ? segments.map(([, n, tone]) => {
+      const end = start + 100 * n / groupTotal;
+      const stop = `var(--mix-${tone}) ${start}% ${end}%`;
+      start = end;
+      return stop;
+    }) : [];
+    const fill = stops.length ? `conic-gradient(${stops.join(', ')})` : 'var(--line)';
+    $(`#${id}`).innerHTML = `<div class="mix-donut-layout">
+      <div class="mix-donut" style="--mix-fill:${fill}" role="img" aria-label="海外仓发货占比 ${rate}"><strong>${rate}</strong></div>
+      <div class="mix-details">${list}<p class="tip mix-note">${esc(summary)}</p></div>
+    </div>`;
+    return;
+  }
+  const bar = segments.map(([name, n, tone]) =>
     `<span class="mix-${tone}" style="flex:${n} 0 0" title="${esc(name)} ${percentage(n, groupTotal)}"></span>`).join('');
   $(`#${id}`).innerHTML = `
-    <div class="mix-summary"><strong>${percentage(numerator, denominator)}</strong><span class="tip">${esc(summary)}</span></div>
+    <div class="mix-summary"><strong>${rate}</strong><span class="tip">${esc(summary)}</span></div>
     <div class="mix-track" aria-hidden="true">${bar}</div>
-    <ul class="mix-list">${rows.map(([name, n, tone]) => `<li>
-      <span class="mix-key mix-${tone}" aria-hidden="true"></span><span>${esc(name)}</span><strong>${fmt(n)} 单</strong>
-      <span class="mix-percentage">${percentage(n, groupTotal)}</span></li>`).join('')}</ul>
+    ${list}
     ${note ? `<p class="tip mix-note">${esc(note)}</p>` : ''}`;
 }
 
@@ -558,7 +588,6 @@ function drawDispatchStatus(rows) {
   toggle.onclick = () => show(toggle.getAttribute('aria-expanded') !== 'true');
 }
 
-// Lieflat Charts F3 Hairline Area: one baseline stem per day and a thin contour.
 function drawDailyVolume() {
   const clock = day => Date.parse(day + 'T00:00:00Z');
   const dayMs = 86_400_000;
@@ -583,12 +612,6 @@ function drawDailyVolume() {
   const mean = days.reduce((sum, row) => sum + row.n, 0) / days.length;
   $('#dailyFocus').innerHTML = `有单日均 <b>${fmt(mean)}</b> 单 · 峰值 <b>${fmt(peak.n)}</b> 单`;
   const values = days.map(row => [clock(row.day), row.n]);
-  const contour = [];
-  for (const point of values) {
-    const before = contour.at(-1);
-    if (before && point[0] - before[0] > dayMs) contour.push([before[0] + dayMs, null]);
-    contour.push(point);
-  }
   chart.setOption({
     useUTC: true, animation: chartMotion, animationDuration: 230, animationDurationUpdate: 140,
     animationEasing: 'quarticOut',
@@ -606,10 +629,10 @@ function drawDailyVolume() {
       splitNumber: 4, splitLine: { lineStyle: { color: chartTheme.grid } },
       axisLabel: { color: chartTheme.muted, formatter: compactCount } },
     series: [
-      { type: 'bar', name: '日单量', data: values, barWidth: days.length > 90 ? 1.4 : 2.1,
-        itemStyle: { color: chartTheme.series[0] }, emphasis: { itemStyle: { color: chartTheme.series[1] } } },
-      { type: 'line', data: contour, showSymbol: false, lineStyle: { color: chartTheme.series[2], width: 1.9 },
-        itemStyle: { color: chartTheme.series[2] },
+      { type: 'bar', name: '日单量', data: values, barWidth: days.length > 90 ? 2 : '62%', barMaxWidth: 28,
+        itemStyle: { borderRadius: [3, 3, 0, 0],
+          color: point => point.value[0] === clock(peak.day) ? chartTheme.series[2] : chartTheme.series[0] },
+        emphasis: { itemStyle: { color: chartTheme.series[1] } },
         markPoint: {
           symbol: 'circle', symbolSize: 8, silent: true,
           itemStyle: { color: chartTheme.ink, borderColor: chartTheme.paper, borderWidth: 1.5 },
@@ -667,8 +690,15 @@ const ruleOptions = () => META.ruleOptions || META.rules.map(row => ({ v: row.ru
 const blankRow = (cols, message) => `<tr><td colspan="${cols}" class="empty">${message}</td></tr>`;
 const orderButton = (no, tracking) => `<button type="button" class="order-link mono" data-order="${esc(no)}" aria-haspopup="dialog" aria-controls="drawer">${esc(no)}</button>
   <small class="cell-sub mono">${esc(tracking || '—')}</small>`;
+const trackStyles = {
+  Delivered: ['green', 'check'], InTransit: ['cyan', 'truck'], OutForDelivery: ['blue', 'pin'],
+  AvailableForPickup: ['cyan', 'box'], DeliveryFailure: ['danger', 'alert'], Exception: ['warn', 'alert'],
+  Expired: ['danger', 'clock'], InfoReceived: ['violet', 'scan'], NotFound: ['blue', 'scan'],
+};
+const statusPill = (label, [tone, name]) =>
+  `<span class="status-pill tone-${tone}">${icon(name)}${esc(label)}</span>`;
 const trackBadge = (status, label, sub, missing, fallback = '其他履约单 · 无本地结果') => status
-  ? `<span class="badge ${status === 'Delivered' ? 'ok' : status === 'Exception' ? 'h' : 'blue'}">${esc(label || status)}</span>
+  ? `${statusPill(label || status, Object.hasOwn(trackStyles, status) ? trackStyles[status] : ['blue', 'route'])}
      ${sub ? `<small class="cell-sub mono">${esc(sub)}</small>` : ''}`
   : `<span class="badge gray">${missing ? 'API 账号登记未匹配' : esc(fallback)}</span>`;
 const coverageOptions = [
@@ -930,6 +960,15 @@ function refreshSelection() {
   $('#applyBatch').disabled = !ME.can_edit || !selected.length || !$('#batchAction').value;
 }
 
+const alertStyles = {
+  signout_timeout: ['violet', 'warehouse'], not_online: ['warn', 'scan'],
+  transport_timeout: ['danger', 'clock'], no_update: ['violet', 'history'],
+  stagnation: ['warn', 'history'], customs_hold: ['violet', 'globe'],
+  delivery_failure: ['danger', 'pin'], returning: ['danger', 'return'],
+  carrier_exception: ['warn', 'alert'],
+};
+const alertStyle = rule => Object.hasOwn(alertStyles, rule) ? alertStyles[rule] : ['blue', 'alert'];
+
 async function loadAlerts(page = 1) {
   await loadMeta();
   prepareAlerts();
@@ -939,13 +978,22 @@ async function loadAlerts(page = 1) {
   alertRows = d.rows;
   alertPage = d.page;
   AF._info.textContent = `共 ${fmt(d.total)} 条命中`;
-  $('#alertChips').innerHTML = d.summary.slice(0, 7).map(r =>
-    `<button type="button" class="chipstat" data-alert-rule="${esc(r.rule)}">${esc(r.rule_cn)} <b>${fmt(r.n)}</b></button>`).join('');
+  const categories = $('#alertChips');
+  const restoreFocus = categories.contains(document.activeElement) ? document.activeElement.dataset.alertRule : '';
+  categories.innerHTML = d.summary.slice(0, 7).map(r => {
+    const [tone, name] = alertStyle(r.rule);
+    return `<button type="button" class="chipstat alert-category tone-${tone}" data-alert-rule="${esc(r.rule)}" aria-pressed="${AF.rule.value === r.rule}">
+      ${sectionIcon(name, tone)}<span>${esc(r.rule_cn)}<b>${fmt(r.n)}</b></span></button>`;
+  }).join('');
+  if (restoreFocus) {
+    const button = [...categories.querySelectorAll('button')].find(item => item.dataset.alertRule === restoreFocus);
+    (button || AF.rule).focus({preventScroll: true});
+  }
   $('#alertBody').innerHTML = d.rows.length ? d.rows.map((r, index) => `
     <tr><td class="check"><input type="checkbox" data-alert-index="${index}" aria-label="选择这条预警" ${ME.can_edit ? '' : 'disabled'}></td>
       <td>${orderButton(r.order_no, r.tracking_no)}</td>
       <td class="mono">${esc(r.shipped_at || r.shipped_date || '—')}</td>
-      <td><span class="badge ${levelTone(r.level)}">${esc(r.level)}</span> ${esc(r.rule_cn)}<small class="cell-sub">${r.is_main ? '主预警' : '次预警'} · ${esc(r.category || '—')}</small></td>
+      <td><span class="badge ${levelTone(r.level)}">${esc(r.level)}</span> ${statusPill(r.rule_cn, alertStyle(r.rule))}<small class="cell-sub">${r.is_main ? '主预警' : '次预警'} · ${esc(r.category || '—')}</small></td>
       <td>${esc(r.current_channel || '—')}</td>
       <td>${esc(r.carrier || '—')}<small class="cell-sub">${esc(r.country || '—')}</small></td>
       <td>${trackBadge(r.track_status, trackingGroups().find(row => row.v === r.track_status)?.t, r.track_sub)}</td>
@@ -1255,7 +1303,7 @@ function refreshSyncStatus() {
 
 function updateActivity(pending, importedAt, through) {
   $('#alertTabCount').textContent = fmt(pending);
-  $('#openPending').textContent = `待跟进预警 · ${fmt(pending)} 单`;
+  $('#pendingCount').textContent = `${fmt(pending)} 单`;
   lastImportAt = importedAt;
   setTopMeta(through);
 }
@@ -1425,14 +1473,14 @@ async function reloadRules() {
 let drawerTrigger = null;
 
 const carrierEventLabels = {
-  delivered: ['妥投', 'delivered'],
-  dispatch: ['外出派送', ''],
-  pickup: ['承运商已提取', ''],
-  collection: ['待自提', ''],
-  customsHold: ['疑似卡关', 'attention'],
-  customsOpen: ['清关中', 'customs'],
-  customsReleased: ['清关放行', 'customs'],
-  failure: ['派送失败', 'attention'],
+  delivered: ['妥投', 'delivered', 'check'],
+  dispatch: ['外出派送', 'dispatch', 'pin'],
+  pickup: ['承运商已提取', 'pickup', 'box'],
+  collection: ['待自提', 'pickup', 'pin'],
+  customsHold: ['疑似卡关', 'attention', 'alert'],
+  customsOpen: ['清关中', 'customs', 'globe'],
+  customsReleased: ['清关放行', 'customs', 'globe'],
+  failure: ['派送失败', 'attention', 'alert'],
 };
 
 function carrierEventLabel(stage, sub, description) {
@@ -1467,7 +1515,7 @@ function carrierEventLabel(stage, sub, description) {
 
 function carrierEventText(stage, sub, description) {
   const label = carrierEventLabel(stage, sub || '', description || '');
-  const badge = label ? `<span class="event-label ${label[1]}">${label[0]}</span>` : '';
+  const badge = label ? `<span class="event-label ${label[1]}">${icon(label[2])}${label[0]}</span>` : '';
   const text = description || (label ? '' : '承运商未提供事件描述');
   return `<div class="d carrier-event-text">${badge}${text === label?.[0] ? '' : esc(text)}</div>`;
 }
@@ -1525,7 +1573,7 @@ function showOrderSummary(no, trigger) {
     ...(!ME.preview && order?.订单号 ? [['订单号', order.订单号]] : []),
   ].filter(([, value]) => value);
   const recent = order?.最新描述 ? `<section class="timeline-panel carrier-timeline" aria-label="最新物流轨迹">
-    <h4>最新物流轨迹 · 当地时间</h4>
+    <h4>${icon('route')}最新物流轨迹 · 当地时间</h4>
     <div class="t">${esc(trackTime(order.最新事件当地时间, order.最新事件时间))}</div>
     ${carrierEventText(order.轨迹状态, order.轨迹子状态, order.最新描述)}
   </section>` : '';
@@ -1604,7 +1652,7 @@ async function loadOrderDetail(no, path, refresh = false) {
   const alerts = (d.alerts || []).map(a => `
     <div class="note">
       <div class="alert-detail">
-        <span class="badge ${levelTone(a.level)}">${esc(a.level)}</span><b>${esc(a.rule_cn)}</b>
+        <span class="badge ${levelTone(a.level)}">${esc(a.level)}</span>${statusPill(a.rule_cn, alertStyle(a.rule))}
         <small>${a.is_main ? '主预警' : '次预警'} · ${measure(a.days, ' 天')}</small>
         ${stateBadge(a.state)}
       </div>
@@ -1649,10 +1697,10 @@ async function loadOrderDetail(no, path, refresh = false) {
       ${o.单号归一 ? `<a href="https://t.17track.net/zh-cn#nums=${encodeURIComponent(o.单号归一)}" target="_blank" rel="noopener noreferrer">在 17TRACK 查看 ↗</a>` : ''}
     </div>
     ${fulfillmentTimeline ? `<section class="timeline-panel fulfillment-timeline" aria-label="履约节点">
-      <h4>履约节点 · 北京时间</h4><ol>${fulfillmentTimeline}</ol>
+      <h4>${icon('warehouse')}履约节点 · 北京时间</h4><ol>${fulfillmentTimeline}</ol>
     </section>` : ''}
     <section class="timeline-panel carrier-timeline" aria-label="承运商轨迹">
-      <h4>${timelineLabel}</h4>
+      <h4>${icon('truck')}${timelineLabel}</h4>
       ${!events.length && o.最新描述 ? `<div class="note"><b>最新轨迹</b> · ${esc(trackTime(o.最新事件当地时间, o.最新事件时间))}
         ${carrierEventText(o.轨迹状态, o.轨迹子状态, o.最新描述)}${o.地点 ? `<div class="cell-sub">${esc(o.地点)}</div>` : ''}</div>` : ''}
       ${timeline ? `<div class="tl">${timeline}</div>` : ''}
@@ -1763,7 +1811,7 @@ run(async function boot() {
   $('#alertChips').onclick = event => {
     const target = event.target.closest('[data-alert-rule]');
     if (target) {
-      AF.rule.value = target.dataset.alertRule;
+      AF.rule.value = AF.rule.value === target.dataset.alertRule ? '' : target.dataset.alertRule;
       run(loadAlerts);
     }
   };

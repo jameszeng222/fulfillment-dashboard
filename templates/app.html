@@ -4,21 +4,43 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261123-minute-filters">
+<link rel="stylesheet" href="/static/app.css?v=20261123-navy-ui">
 </head>
 <body>
+<svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+  <symbol id="i-route" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M9 6h8a3 3 0 0 1 0 6H7a3 3 0 0 0 0 6h8"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 3v17h17M8 16v-4m5 4V7m5 9v-6"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 7h6m4 0h6M4 17h11m4 0h1"/><circle cx="12" cy="7" r="2"/><circle cx="17" cy="17" r="2"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M9 19a3 3 0 0 0 6 0M18 9a6 6 0 0 0-12 0c0 5-2 5-2 7h16c0-2-2-2-2-7Z"/></symbol>
+  <symbol id="i-box" viewBox="0 0 24 24"><path d="m3 7 9-4 9 4v10l-9 4-9-4Zm0 0 9 4 9-4m-9 4v10m-4-16 9 4"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m3 8 9-5 9 5-9 5Zm0 4 9 5 9-5M3 16l9 5 9-5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
+  <symbol id="i-warehouse" viewBox="0 0 24 24"><path d="M3 21V8l9-5 9 5v13ZM7 21V11h10v10M7 15h10M7 18h10"/></symbol>
+  <symbol id="i-truck" viewBox="0 0 24 24"><path d="M3 17V6h11v11m0-8h4l3 4v4h-2m-8 0h4M3 17h4"/><circle cx="9" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a16 16 0 0 1 0 18m0-18a16 16 0 0 0 0 18"/></symbol>
+  <symbol id="i-split" viewBox="0 0 24 24"><path d="M12 21v-5a5 5 0 0 0-1.5-3.5L5 7m7 11v-3a4 4 0 0 1 1.2-2.8L19 6M5 11V6h5m4 0h5v5"/></symbol>
+  <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5.5 8a7 7 0 0 1 11.3-2L20 9M4 15l3.2 3a7 7 0 0 0 11.3-2"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.1M3 12h.1M3 18h.1"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.5 4.8a1.7 1.7 0 0 1 3 0l7.3 12.7a1.7 1.7 0 0 1-1.5 2.5H4.7a1.7 1.7 0 0 1-1.5-2.5ZM12 9v4m0 3h.1"/></symbol>
+  <symbol id="i-scan" viewBox="0 0 24 24"><path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4M7 12h10"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M4 11a8 8 0 1 1 2 6m-2-6V5m0 6h6m2-4v5l3 2"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M19 10c0 5-7 11-7 11s-7-6-7-11a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.2"/></symbol>
+  <symbol id="i-return" viewBox="0 0 24 24"><path d="m9 5-5 5 5 5m-5-5h11a5 5 0 0 1 0 10h-3"/></symbol>
+</svg>
 <div class="app">
 
   <header class="masthead">
     <div class="brand">
-      <span class="logo radar-mark" aria-hidden="true"></span>
+      <span class="logo" aria-hidden="true"><svg class="ui-icon"><use href="#i-route"/></svg></span>
       <b>履约监控系统</b>
     </div>
     <nav class="nav" id="nav" aria-label="主导航">
-      <button type="button" data-v="dash" class="on">数据总览</button>
-      <button type="button" data-v="track">轨迹监控</button>
-      <button type="button" data-v="channels">渠道时效</button>
-      <button type="button" data-v="rules">数据与规则</button>
+      <button type="button" data-v="dash" class="on" aria-current="page"><svg class="ui-icon" aria-hidden="true"><use href="#i-grid"/></svg>数据总览</button>
+      <button type="button" data-v="track"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>轨迹监控</button>
+      <button type="button" data-v="channels"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg>渠道时效</button>
+      <button type="button" data-v="rules"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg>数据与规则</button>
     </nav>
     <div class="sidefoot">
       <div class="who" id="who">—</div>
@@ -40,14 +62,28 @@
       <section class="view on" id="v-dash">
         <div class="page-head">
           <h1>数据总览</h1>
-          <button class="btn" id="openPending" type="button">查看待处理预警</button>
+          <button class="btn" id="openPending" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-bell"/></svg>待跟进预警<span id="pendingCount" class="action-count"></span></button>
         </div>
         <div class="filters" id="dashFilters"></div>
         <div class="kpis" id="dashKpi"></div>
+        <div class="dashboard-source" id="dashboardSource" hidden>
+          <span class="source-label"><svg class="ui-icon" aria-hidden="true"><use href="#i-sync"/></svg><b id="dashboardSourceLabel"></b></span>
+          <span class="tip" id="dashboardSourceTime"></span>
+        </div>
+        <div class="grid overview-mixes">
+          <section class="card plot-card mix-card tone-blue" aria-labelledby="warehouseShareTitle">
+            <div class="ct"><div><h2 id="warehouseShareTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span>海外仓发货占比</h2><p class="tip icon-caption">按已出库履约单统计 · 跟随总览筛选</p></div></div>
+            <div id="warehouseShippingMix"></div>
+          </section>
+          <section class="card plot-card mix-card tone-violet" aria-labelledby="splitShareTitle">
+            <div class="ct"><div><h2 id="splitShareTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-split"/></svg></span>订单拆单率</h2><p class="tip icon-caption">订单被拆为多个履约单 · 按该订单的全部有效履约单判定类型</p></div></div>
+            <div id="orderSplitMix"></div>
+          </section>
+        </div>
         <div class="grid overview-lead">
           <section class="card plot-card daily-card" aria-labelledby="dailyTitle">
             <div class="ct">
-              <div><h2 id="dailyTitle">日单量</h2><p class="tip" id="dailyRange">按履约单创建日期</p></div>
+              <div><h2 id="dailyTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>日单量</h2><p class="tip icon-caption" id="dailyRange">按履约单创建日期</p></div>
               <div class="daily-controls">
                 <div class="tabs period-tabs" id="dailyBasis" role="group" aria-label="日单量日期口径">
                   <button type="button" data-date-basis="created" aria-pressed="true">按建单</button>
@@ -62,25 +98,17 @@
             <div class="chart" id="cDaily" role="img" aria-label="每日履约单量趋势"></div>
             <div class="daily-footer"><p class="tip" id="dailyFocus"></p><p class="tip" id="dailyNote" hidden>点击查看当天履约单</p></div>
           </section>
+          <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg></span>C 端承运商单量</h2><p class="tip icon-caption">客户看到的末端承运商 · 单量前 10</p></div></div><div id="cLastMile"></div></section>
+        </div>
+        <div class="grid overview-breakdown">
+          <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip">单量按创建月份统计 · 物流时效为出库到妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
           <section class="card plot-card status-card" aria-labelledby="statusTitle">
-            <div class="ct"><div><h2 id="statusTitle">出库单状态</h2><p class="tip">全部出库单状态，含已取消</p></div></div>
+            <div class="ct"><div><h2 id="statusTitle"><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>出库单状态</h2><p class="tip icon-caption">全部出库单状态，含已取消</p></div></div>
             <div id="cStatus"></div>
             <button type="button" class="btn ghost sm status-more" id="statusMore" aria-expanded="false" aria-controls="cStatus" hidden>查看全部状态</button>
           </section>
-        </div>
-        <div class="grid overview-breakdown">
-          <section class="card plot-card" aria-labelledby="warehouseShareTitle">
-            <div class="ct"><div><h2 id="warehouseShareTitle">海外仓发货占比</h2><p class="tip">按已出库履约单统计 · 跟随总览筛选</p></div></div>
-            <div id="warehouseShippingMix"></div>
-          </section>
-          <section class="card plot-card" aria-labelledby="splitShareTitle">
-            <div class="ct"><div><h2 id="splitShareTitle">订单拆单率</h2><p class="tip">订单被拆为多个履约单 · 按该订单的全部有效履约单判定类型</p></div></div>
-            <div id="orderSplitMix"></div>
-          </section>
-          <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip">单量按创建月份统计 · 物流时效为出库到妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
-          <section class="card plot-card"><div class="ct"><div><h2>后台物流商单量</h2><p class="tip">单量前 10</p></div></div><div id="cCarrier"></div></section>
-          <section class="card plot-card"><div class="ct"><div><h2>C 端承运商单量</h2><p class="tip">客户看到的末端承运商 · 单量前 10</p></div></div><div id="cLastMile"></div></section>
           <section class="card plot-card"><div class="ct"><div><h2>17TRACK 轨迹覆盖与状态</h2><p class="tip">按履约单数统计 · 单量前 10</p></div></div><div id="cTrackingStatus"></div></section>
+          <section class="card plot-card"><div class="ct"><div><h2>后台物流商单量</h2><p class="tip">单量前 10</p></div></div><div id="cCarrier"></div></section>
           <section class="card plot-card"><div class="ct"><div><h2>发货仓分布</h2><p class="tip">单量前 10</p></div></div><div id="cWarehouse"></div></section>
           <section class="card plot-card"><div class="ct"><div><h2>目的国家分布</h2><p class="tip">单量前 15</p></div></div><div id="cCountry"></div></section>
           <section class="card plot-card" aria-labelledby="currentChannelTitle">
@@ -94,14 +122,14 @@
       <section class="view" id="v-track">
         <div class="page-head"><div><h1>轨迹监控</h1><p id="trackIntro">查看 17TRACK 主子状态、履约节点与预警处理进度。</p></div></div>
         <div class="tabs" id="trackTabs" aria-label="轨迹监控分类">
-          <button type="button" data-mode="tracking" aria-pressed="true">运单轨迹</button>
-          <button type="button" data-mode="alerts" aria-pressed="false">预警处理 <span class="nav-count" id="alertTabCount"></span></button>
+          <button type="button" data-mode="tracking" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>运单轨迹</button>
+          <button type="button" data-mode="alerts" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg>预警处理 <span class="nav-count" id="alertTabCount"></span></button>
         </div>
         <div class="workspace-stack" id="trackingPane">
         <div class="filters" id="trackFilters"></div>
         <div class="chips" id="trackChips"></div>
         <div class="card table-card">
-          <div class="ct table-head"><h2>履约单列表</h2><div class="toolbar">
+          <div class="ct table-head"><h2><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>履约单列表</h2><div class="toolbar">
             <span class="tip" id="trackListStatus" role="status"></span>
             <button type="button" class="btn ghost sm" id="retryTrack" hidden>重试列表</button>
             <button type="button" class="btn ghost sm" id="showDetailed">有逐条轨迹</button>
@@ -124,7 +152,7 @@
           <div class="chips" id="alertChips"></div>
           <div class="card table-card">
             <div class="ct table-head">
-              <div><h2>预警处理清单</h2><p class="tip">按出库时间从近到远 · Postnet 预警暂缓显示</p></div>
+              <div><h2><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>预警处理清单</h2><p class="tip icon-caption">按出库时间从近到远 · Postnet 预警暂缓显示</p></div>
               <div class="toolbar">
                 <span id="selectedAlerts" class="tip"></span>
                 <select id="batchAction" aria-label="批量处理动作"><option value="">批量操作</option></select>
@@ -165,11 +193,11 @@
         <p class="card" id="channelChartLoading" role="status" hidden></p>
         <div class="grid channel-charts" id="channelCharts" hidden>
           <div class="card">
-            <div class="ct"><div><h2>平均时效与 P90</h2><p class="tip" id="channelChartScope"></p></div></div>
+            <div class="ct"><div><h2><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span>平均时效与 P90</h2><p class="tip icon-caption" id="channelChartScope"></p></div></div>
             <div class="chart" id="channelDurationChart" role="img" aria-label="按渠道比较平均时效及 P90 天数"></div>
           </div>
           <div class="card">
-            <div class="ct"><div><h2>3、5、6、7 天内签收比例</h2><p class="tip">时效样本须有可用妥投时间和有效起点</p></div></div>
+            <div class="ct"><div><h2><span class="section-icon tone-green"><svg class="ui-icon" aria-hidden="true"><use href="#i-check"/></svg></span>3、5、6、7 天内签收比例</h2><p class="tip icon-caption">时效样本须有可用妥投时间和有效起点</p></div></div>
             <div class="chart" id="channelRateChart" role="img" aria-label="按渠道比较 3、5、6、7 天内签收比例"></div>
           </div>
         </div>
@@ -234,7 +262,7 @@
         </div>
         <div class="workspace-stack" id="rules-data">
           <div class="kpis" id="dataKpi"></div>
-          <div class="card"><div class="ct"><h2>数据来源</h2></div><dl class="source-list" id="sourceHealth"></dl></div>
+          <div class="card"><div class="ct"><h2><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>数据来源</h2></div><dl class="source-list" id="sourceHealth"></dl></div>
           <div class="card table-card">
             <div class="ct table-head"><h2>最近 ERP 导入记录</h2></div>
             <div class="tblwrap"><table class="tbl"><thead><tr><th>文件</th><th>导入时间</th></tr></thead><tbody id="importBody"></tbody></table></div>
@@ -300,7 +328,7 @@
         </div>
         <div class="workspace-stack" id="rules-business" hidden>
         <div class="card">
-          <div class="ct"><h2>业务预警规则</h2><div class="tip" id="ruleAsof">—</div></div>
+          <div class="ct"><h2><span class="section-icon tone-warn"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg></span>业务预警规则</h2><div class="tip" id="ruleAsof">—</div></div>
           <div id="ruleList"></div>
         </div>
         <div class="card">
@@ -309,7 +337,7 @@
         </div>
         </div>
         <div class="card table-card" id="rules-sla" hidden>
-          <div class="ct table-head"><div><h2>渠道 SLA 规则</h2><p class="tip">按履约单的「当前渠道」配置起点和承诺天数。妥投优先用 17TRACK，缺失时由 WMS 补算。</p></div>
+          <div class="ct table-head"><div><h2><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg></span>渠道 SLA 规则</h2><p class="tip icon-caption">按履约单的「当前渠道」配置起点和承诺天数。妥投优先用 17TRACK，缺失时由 WMS 补算。</p></div>
             <input type="search" id="slaSearch" class="inline-search" placeholder="搜索当前渠道…" aria-label="搜索当前渠道">
           </div>
           <div class="tblwrap"><table class="tbl">
@@ -330,7 +358,7 @@
 <div class="mask" id="mask"></div>
 <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dTitle" inert>
   <header>
-    <div><h3 id="dTitle">履约单详情</h3><div style="font-size:11.5px;color:#8b98ab;margin-top:3px" id="dSub">—</div></div>
+    <div class="drawer-heading"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-box"/></svg></span><div><h3 id="dTitle">履约单详情</h3><div class="tip" id="dSub">—</div></div></div>
     <button class="x" id="dClose" aria-label="关闭详情">✕</button>
   </header>
   <div class="body" id="dBody"></div>
@@ -345,6 +373,6 @@
   </form>
 </dialog>
 
-<script src="/static/app.js?v=20261123-minute-filters" defer></script>
+<script src="/static/app.js?v=20261123-navy-ui" defer></script>
 </body>
 </html>
