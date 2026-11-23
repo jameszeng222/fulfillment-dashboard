@@ -123,6 +123,8 @@ test("a visitor can open Pages and look up a complete reference without the tunn
   assert.equal(paidDates.snapshotFiltersSkipped, true);
   const weekly = await (await get("/api/overview?week=W47")).json();
   assert.equal(weekly.snapshotFiltersSkipped, true);
+  const grouped = await (await get("/api/overview?channel_group=test-group")).json();
+  assert.equal(grouped.snapshotFiltersSkipped, true);
   assert.equal((await (await get("/api/channels")).json()).rows.length, 1);
   assert.equal((await (await get("/api/track")).json()).rows.length, 0);
   const query = "?q=" + number;
@@ -131,6 +133,8 @@ test("a visitor can open Pages and look up a complete reference without the tunn
   assert.equal(found.snapshotAt, now);
   const weeklyLookup = await (await get("/api/track" + query + "&week=W47")).json();
   assert.equal(weeklyLookup.snapshotFiltersSkipped, true);
+  const groupedLookup = await (await get("/api/track" + query + "&channel_group=test-group")).json();
+  assert.equal(groupedLookup.snapshotFiltersSkipped, true);
   const detail = await (await get("/api/orders/" + id + query)).json();
   assert.equal(detail.events[0].描述, "已揽收");
   assert.equal((await get("/api/orders/" + id)).status, 404);

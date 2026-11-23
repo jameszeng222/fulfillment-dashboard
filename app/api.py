@@ -10,7 +10,7 @@ from unicodedata import normalize
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from . import alert_history, cloud_login, core, ops_auth, ops_assistant, public_preview
+from . import alert_history, channel_groups, cloud_login, core, ops_auth, ops_assistant, public_preview
 from .carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts, transport_minutes
 from .filter_time import DATE_BASIS_FIELDS, DEFAULT_DATE_BASIS, REPORTING_WEEKS, DateBasis, time_bounds, week_filter
 from .order_time import delivery_facts
@@ -156,8 +156,11 @@ def meta(request: Request):
         con.close()
 
     rules, states, alert_channels = [], [], []
-    if not preview:
-        with core.ops() as o:
+    with core.ops() as o:
+        dimension_counts["channel_group"] = channel_groups.distribution(
+            channel_groups.load(o)["groups"],
+            ((row["v"], row["n"]) for row in dimension_counts["channel"]), b[2])
+        if not preview:
             rules = [dict(r) for r in o.execute(
                 f"SELECT rule, rule_cn, category, level, count(*) n FROM alerts WHERE {visible_alerts()} "
                 "GROUP BY 1,2,3,4 ORDER BY n DESC").fetchall()]
@@ -413,6 +416,7 @@ def list_alerts(request: Request,
                 q: str = "", wh: str = "", pf: str = "", cr: str = "", cn: str = "",
                 month: str = "", sort: str = "shipped", start: str = "", end: str = "",
                 main_only: bool = False, channel: str = "", lastmile: str = "", week: str = "",
+                channel_group: str = "",
                 tstat: str = "", sub: str = "",
                 date_basis: DateBasis = DEFAULT_DATE_BASIS,
                 view: Literal["pending", "archive"] = "pending"):
@@ -449,6 +453,12 @@ def list_alerts(request: Request,
         has_timestamp = "shipped_at" in columns
         has_channel = "current_channel" in columns
         inlist(ALERT_CHANNEL_VALUE if has_channel else "'__empty__'", _multi(channel))
+        if channel_group:
+            selection = channel_groups.filter_values(channel_group, channel_groups.load(o)["groups"])
+            group_sql, group_args = channel_groups.predicate("a.current_channel", selection, sqlite=True)
+            if group_sql:
+                w.append(group_sql)
+                a.extend(group_args)
         inlist("a.platform_code" if "platform_code" in columns else "NULL", _multi(pf))
         carrier = f"coalesce(nullif({core.last_mile_sql('a.last_mile')},''),'__empty__')" if "last_mile" in columns else "'__empty__'"
         inlist(carrier, core.last_mile_filter_values(lastmile))

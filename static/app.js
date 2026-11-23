@@ -110,6 +110,9 @@ function loadMeta() {
   if (!metaFetch) metaFetch = api('/api/meta', {signal: AbortSignal.timeout(12_000)}).then(data => {
     META = data;
     setTopMeta(META.range.end);
+    for (const filter of [DF?.channel_group, TF?.channel_group, AF?.channel_group, CF?.channel_group, slaGroupFilter]) {
+      filter?.setOptions(META.filterOptions.channel_group || [], META.range.orders, false);
+    }
     return META;
   }).catch(error => {
     metaFetch = null;
@@ -239,6 +242,7 @@ function resizeVisibleCharts() {
 /* ---------------- 筛选条 ---------------- */
 function multiFilter(def, onChange) {
   const root = el('details', 'multi-filter');
+  root.dataset.filter = def.key;
   const trigger = el('summary', 'multi-trigger');
   const name = el('span');
   name.textContent = def.label;
@@ -310,12 +314,14 @@ function multiFilter(def, onChange) {
   renderOptions();
   return {
     root,
-    setOptions(options, count) {
+    setOptions(options, count, keepMissing = true) {
       if (optionsSource === options) return;
       optionsSource = options;
       const seen = new Set(options.map(option => option.v));
-      def.options = [...options, ...def.options.filter(option => selected.has(option.v) && !seen.has(option.v))
-        .map(option => ({...option, n: 0}))].sort((a, b) => ['month', 'week'].includes(def.key)
+      const missing = def.options.filter(option => selected.has(option.v) && !seen.has(option.v));
+      if (!keepMissing) missing.forEach(option => selected.delete(option.v));
+      def.options = [...options, ...(keepMissing ? missing.map(option => ({...option, n: 0})) : [])]
+        .sort((a, b) => ['month', 'week'].includes(def.key)
         ? a.v.localeCompare(b.v, undefined, {numeric: true}) : 0);
       total.textContent = fmt(count);
       update();
@@ -506,15 +512,25 @@ const channelGroupPath = '/api/overview/channel-groups';
 let channelGroups;
 let chosenChannels = new Set();
 
-async function openChannelGroups() {
-  const button = $('#openChannelGroups');
+async function loadChannelGroups() {
+  const host = $('#channelGroupRulesBody');
+  const data = await latest('channelGroups', channelGroupPath);
+  if (!data) return;
+  host.innerHTML = data.groups.map(group => `<tr><td><b>${esc(group.name)}</b></td>
+    <td><ul class="channel-group-members">${group.channels.map(channel => `<li>${esc(channel)}</li>`).join('')}</ul></td>
+    ${ME.can_edit ? `<td><button type="button" class="btn ghost sm" data-edit-group="${esc(group.name)}">编辑</button></td>` : ''}</tr>`)
+    .join('') || blankRow(ME.can_edit ? 3 : 2, '暂无自定义渠道分组');
+}
+
+async function openChannelGroups(button, name = '') {
   button.disabled = true;
   try {
     const [settings] = await Promise.all([api(channelGroupPath), loadMeta()]);
     channelGroups = settings;
     const choice = $('#channelGroupChoice');
     choice.replaceChildren(new Option('新增分组', ''), ...settings.groups.map(group => new Option(group.name, group.name)));
-    choice.value = settings.groups[0]?.name || '';
+    choice.value = name;
+    if (choice.selectedIndex < 0) choice.value = '';
     editChannelGroup();
     $('#channelGroupsDialog').showModal();
   } finally {
@@ -586,8 +602,9 @@ async function saveChannelGroup(remove) {
   }
   $('#channelGroupsDialog').close();
   invalidatePages();
+  metaFetch = null;
   toast(remove ? '已删除分组' : '已保存渠道分组');
-  if (VIEW === 'dash') await loadDash();
+  await Promise.all([loadMeta(), loadChannelGroups()]);
 }
 function drawWeekCalendar() {
   const body = $('#weekCalendarBody');
@@ -623,7 +640,7 @@ function commonDateFilters() {
     dateBasisFilter(),
     { type: 'time-range' },
     ...Object.entries({ month: '月份', week: '周次', wh: '仓库', pf: '平台', cr: '后台物流商',
-      channel: '当前渠道', lastmile: 'C 端渠道', cn: '国家' }).map(([key, label]) =>
+      channel: '当前渠道', channel_group: '自定义渠道', lastmile: 'C 端渠道', cn: '国家' }).map(([key, label]) =>
       ({ type: 'multi', key, label, options: META.filterOptions[key] || [] })),
   ];
 }
@@ -701,10 +718,8 @@ async function loadDash() {
   drawRank('cCountry', d.byCountry, 15, k.orders);
   drawRank('cCurrentChannel', d.byCurrentChannel || [], 10, k.orders,
     ME.preview ? null : value => openTracking({ ...f, channel: value }));
-  drawRank('cChannelGroup', d.byChannelGroup || [], Number.POSITIVE_INFINITY, k.orders, ME.preview ? null : channels => {
-    const active = f.channel?.length ? channels.filter(channel => f.channel.includes(channel)) : channels;
-    openTracking({...f, channel: active});
-  });
+  drawRank('cChannelGroup', (d.byChannelGroup || []).map(row => ({...row, filter: row.group || false})),
+    Number.POSITIVE_INFINITY, k.orders, ME.preview ? null : group => openTracking({...f, channel_group: group}));
   drawDispatchStatus(d.byStatus);
 }
 
@@ -1089,11 +1104,13 @@ async function loadTrack(page = 1, fromSearch = false) {
       d = await fetchRows(f, page);
     }
     if (!d || VIEW !== 'track' || trackMode !== 'tracking') return;
-    if (fromSearch && query && !d.total && Object.keys(scope).length) {
+    if (fromSearch && query && !d.total && !scope.channel_group?.length &&
+        Object.keys(scope).some(key => key !== 'date_basis')) {
       const broad = await fetchRows({q, sort}, 1);
       if (!broad || VIEW !== 'track' || trackMode !== 'tracking') return;
       if (broad.total) {
-        for (const key of Object.keys(scope)) TF[key].value = '';
+        for (const key of Object.keys(scope)) TF[key].value = key === 'date_basis' ? DEFAULT_DATE_BASIS : '';
+        updateDateOptions(TF, DEFAULT_DATE_BASIS);
         updateSubstates(TF);
         clearedFilters = true;
         f = {q, sort};
@@ -1459,6 +1476,7 @@ async function loadChannels() {
 
 /* ================= 数据与规则 ================= */
 let activeConfiguration = null;
+let slaGroupFilter;
 
 const syncRunStates = {
   running: ['blue', '同步中'], ok: ['ok', '同步成功'], idle: ['m', '无待查运单'],
@@ -1607,12 +1625,22 @@ async function loadRules() {
   }
   if (!$('#rules-data').hidden) return loadHealth();
   if (!$('#rules-sync').hidden) return refreshSyncStatus();
+  if (!$('#rules-channel-groups').hidden) return loadChannelGroups();
   if (!$('#rules-dictionary').hidden) {
     await loadMeta();
     $('#dictionaryBody').innerHTML = META.trackStatuses.map(row =>
       `<tr><td>${esc(row.label)}</td><td class="mono">${esc(row.status)}</td><td>${esc(row.sub_label)}</td>
         <td class="mono">${esc(row.sub)}</td></tr>`).join('') || blankRow(4, '暂无状态字典');
     return;
+  }
+  if (!$('#rules-sla').hidden && !slaGroupFilter) {
+    await loadMeta();
+    if (!slaGroupFilter) {
+      slaGroupFilter = multiFilter({
+        key: 'channel_group', label: '自定义渠道', options: META.filterOptions.channel_group || [],
+      }, renderSLATable);
+      $('#slaGroupFilter').append(slaGroupFilter.root);
+    }
   }
   const d = await latest('rules', '/api/rules');
   if (!d || RULES === d) return;
@@ -1647,7 +1675,9 @@ async function loadRules() {
 
 function renderSLATable() {
   const query = $('#slaSearch').value.trim().toLocaleLowerCase();
-  $('#slaBody').innerHTML = (RULES?.channels || []).filter(row => row.ch.toLocaleLowerCase().includes(query))
+  const groups = slaGroupFilter?.value || [];
+  $('#slaBody').innerHTML = (RULES?.channels || []).filter(row =>
+    row.ch.toLocaleLowerCase().includes(query) && (!groups.length || groups.includes(row.channelGroup)))
     .map(r => `<tr>
       <td><b>${esc(r.ch)}</b></td><td>${fmt(r.n)}</td>
       <td>${TIMING_BASIS[r.basis].label}</td><td>${r.target} 天</td><td>${fmt(r.samples)} / ${fmt(r.signed)}</td>
@@ -2042,6 +2072,7 @@ run(async function boot() {
   setTopMeta(null);
   $('#opsAssistant').hidden = !ME.opsAssistant;
   $('#openChannelGroups').hidden = !ME.can_edit;
+  $('#channelGroupAction').hidden = !ME.can_edit;
   $('#cloudSharing').hidden = !ME.cloudSharing;
   $('#logout').hidden = ME.preview || ME.openTest;
   if (!ME.preview) $('#currentChannelTip').textContent += ' · 点击渠道查看履约单';
@@ -2146,7 +2177,14 @@ run(async function boot() {
     if (config) openConfiguration('sla', config.dataset.configSla);
   };
   $('#settingsForm').onsubmit = saveConfiguration;
-  $('#openChannelGroups').onclick = () => run(openChannelGroups);
+  $('#openChannelGroups').onclick = event => {
+    const button = event.currentTarget;
+    run(() => openChannelGroups(button));
+  };
+  $('#channelGroupRulesBody').onclick = event => {
+    const button = event.target.closest('[data-edit-group]');
+    if (button) run(() => openChannelGroups(button, button.dataset.editGroup));
+  };
   $('#channelGroupsClose').onclick = () => $('#channelGroupsDialog').close();
   $('#channelGroupChoice').onchange = editChannelGroup;
   $('#channelGroupSearch').oninput = renderChannelGroupOptions;

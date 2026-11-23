@@ -405,8 +405,27 @@ class OpsTests(unittest.TestCase):
 
             self.assertEqual(save([group, {"name": "其他", "channels": ["B"]}], 0), 422)
             self.assertEqual(save([group], 0), 200)
+            self.assertEqual(save([{"name": "__ungrouped__", "channels": ["A"]}], 1), 422)
             self.assertEqual(save([], 0), 409)
             self.assertEqual(json.loads(self.browser.request(path)[2]), {"revision": 1, "groups": [group]})
+
+            with core.ops() as db:
+                db.executemany("INSERT INTO alerts(order_no,rule,current_channel) VALUES (?,'sample',?)",
+                               [("A", "A"), ("B", " B "), ("C", None), ("D", "D"), ("E", "B")])
+                db.execute("""INSERT INTO alert_state(order_no,rule,status,updated_at)
+                              VALUES ('E','sample','archived','2026-11-23')""")
+            def orders(*names, **extra):
+                status, _, result = self.browser.request("/api/alerts?" + urlencode({
+                    "channel_group": json.dumps(names), **extra,
+                }))
+                self.assertEqual(status, 200, result)
+                return {row["order_no"] for row in json.loads(result)["rows"]}
+            self.assertEqual(orders("特快"), {"A", "B"})
+            self.assertEqual(orders("__ungrouped__"), {"C", "D"})
+            self.assertEqual(orders("特快", "__ungrouped__"), {"A", "B", "C", "D"})
+            self.assertEqual(orders("特快", channel="D"), set())
+            self.assertEqual(orders("特快", view="archive"), {"E"})
+            self.assertEqual(orders("已删除分组"), set())
 
     def test_alerts_show_newest_dispatch_and_suspend_postnet(self):
         with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):

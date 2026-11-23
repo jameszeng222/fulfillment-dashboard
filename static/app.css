@@ -579,6 +579,9 @@ button.rank-row:hover { background: #f4f7fc; }
 .settings-error { color: #a33232; padding: 0 17px 10px; }
 .settings-error:empty { display: none; }
 #channelGroupsDialog { width: min(550px, calc(100vw - 28px)); }
+.channel-group-members { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.channel-group-members li { padding: 3px 8px; border-radius: 5px; background: var(--bg);
+  color: var(--ink2); white-space: normal; overflow-wrap: anywhere; }
 .channel-group-picker { grid-column: 1 / -1; display: grid; gap: 8px; }
 #channelGroupOptions { max-height: min(280px, 36vh); overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
 #channelGroupOptions .multi-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; padding: 7px 10px; }

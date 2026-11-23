@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 import pandas as pd
 
-from . import alert_history, core, public_preview, rules
+from . import alert_history, channel_groups, core, public_preview, rules
 from .carrier_delivery import (
     DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts, transport_minutes,
 )
@@ -35,7 +35,8 @@ TRACK_STATUS_LABEL = """coalesce(t.状态中文, CASE
 # ---------------------------------------------------------------- 公共
 
 def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="",
-          alias="o", lastmile="", channel="", date_basis=DEFAULT_DATE_BASIS, week="", require_time=False):
+          alias="o", lastmile="", channel="", date_basis=DEFAULT_DATE_BASIS, week="", require_time=False,
+          group_selection=(None, None)):
     """返回 (sql, args)，sql 形如 " AND ..."，可直接拼在 WHERE 1=1 之后。"""
     w, a = [], []
 
@@ -60,6 +61,10 @@ def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="
                           ("目的国", cn), ("状态", status), ("当前渠道", channel)):
         inl(f'{alias}."{column}"', value)
     inl(f"coalesce(nullif({alias}.C端承运商,''),'__empty__')", lastmile, core.last_mile_filter_values)
+    group_sql, group_args = channel_groups.predicate(f"{alias}.当前渠道", group_selection)
+    if group_sql:
+        w.append(group_sql)
+        a.extend(group_args)
     for operator, bound in zip((">=", "<"), time_bounds(start, end)):
         if bound is not None:
             column = timestamp_column if isinstance(bound, datetime) else date_column
@@ -155,25 +160,11 @@ class OverviewChannelGroups(BaseModel):
     groups: list[OverviewChannelGroup] = Field(max_length=100)
 
 
-def get_channel_groups(db):
-    if db.execute("SELECT 1 FROM sqlite_master WHERE name='fulfillment_settings'").fetchone():
-        row = db.execute("""SELECT payload FROM fulfillment_settings
-                            WHERE kind='channel_group' AND name='overview'""").fetchone()
-        if row:
-            return json.loads(row[0])
-    return {"revision": 0, "groups": [
-        {"name": "7日达", "channels": ["WYT-WF7日达_Zonal_TK", "WYT-WF7日达Zonal",
-                                      "WYT-WF7日达_Zonal", "WYT-WF7日达_Zonal_WCTK"]},
-        {"name": "LUVME EXPRESS 3PE", "channels": ["Luvmexpress_3pe_XC01", "Luvmexpress_3pe_JY01",
-                                                  "Luvme Express 3pe网红"]},
-    ]}
-
-
 @router.get("/overview/channel-groups")
 def overview_channel_groups(request: Request):
     core.require_reader(request)
     with core.ops() as db:
-        return get_channel_groups(db)
+        return channel_groups.load(db)
 
 
 @router.put("/overview/channel-groups")
@@ -183,7 +174,8 @@ def update_overview_channel_groups(body: OverviewChannelGroups, request: Request
     for item in body.groups:
         name = item.name.strip()
         channels = [value.strip() for value in item.channels]
-        if not name or name == "未归组" or name.casefold() in group_names:
+        if (not name or name.casefold() in group_names
+                or name.casefold() in (channel_groups.UNGROUPED, channel_groups.UNGROUPED_LABEL)):
             raise HTTPException(status_code=422, detail="组名必填，须唯一，且不能使用「未归组」")
         if any(not value or len(value) > 200 for value in channels):
             raise HTTPException(status_code=422, detail="请选择有效的当前渠道")
@@ -194,7 +186,7 @@ def update_overview_channel_groups(body: OverviewChannelGroups, request: Request
         groups.append({"name": name, "channels": channels})
     with core.ops() as db:
         db.execute("BEGIN IMMEDIATE")
-        if get_channel_groups(db)["revision"] != body.revision:
+        if channel_groups.load(db)["revision"] != body.revision:
             raise HTTPException(status_code=409, detail="渠道分组已更新，请重新打开配置后再保存")
         result = {"revision": body.revision + 1, "groups": groups}
         rules.save_setting(db, "channel_group", "overview", result)
@@ -205,28 +197,25 @@ def update_overview_channel_groups(body: OverviewChannelGroups, request: Request
 @router.get("/overview")
 def overview(request: Request, month: str = "", wh: str = "", pf: str = "", cr: str = "",
              cn: str = "", start: str = "", end: str = "", lastmile: str = "", channel: str = "", week: str = "",
-             date_basis: DateBasis = DEFAULT_DATE_BASIS):
+             date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = ""):
     core.require_reader(request)
-    result = _overview(core.snapshot_key(), month, wh, pf, cr, cn, start, end, lastmile, channel, week,
-                       date_basis or DEFAULT_DATE_BASIS)
     with core.ops() as db:
-        groups = get_channel_groups(db)["groups"]
-    counts = {row["k"]: row["n"] for row in result["_currentChannels"]}
-    grouped = [{"k": item["name"], "n": sum(counts.get(key, 0) for key in item["channels"]),
-                "filter": item["channels"]} for item in groups]
-    unmapped = result["kpi"]["orders"] - sum(row["n"] for row in grouped)
-    distribution = sorted((row for row in grouped if row["n"]), key=lambda row: (-row["n"], row["k"]))
-    if unmapped:
-        distribution.append({"k": "未归组", "n": unmapped, "filter": False})
+        groups = channel_groups.load(db)["groups"]
+    selection = channel_groups.filter_values(channel_group, groups)
+    result = _overview(core.snapshot_key(), month, wh, pf, cr, cn, start, end, lastmile, channel, week,
+                       date_basis or DEFAULT_DATE_BASIS, selection)
+    distribution = channel_groups.distribution(
+        groups, ((row["k"], row["n"]) for row in result["_currentChannels"]), result["kpi"]["orders"])
     return {**{key: value for key, value in result.items() if key != "_currentChannels"},
-            "byChannelGroup": distribution}
+            "byChannelGroup": [{"k": row["t"], "n": row["n"], "group": row["v"]}
+                               for row in distribution if row["n"]]}
 
 
 @lru_cache(maxsize=32)
-def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, week, date_basis):
+def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, week, date_basis, group_selection):
     def filters(basis, *, require_time=False):
         return _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel,
-                     week=week, date_basis=basis, require_time=require_time)
+                     week=week, date_basis=basis, require_time=require_time, group_selection=group_selection)
     cond, args = filters(date_basis, require_time=True)
 
     con = core.duck()
@@ -344,12 +333,16 @@ def track(request: Request,
           sort: str = "停滞天数", order: str = "desc",
           start: str = "", end: str = "", lastmile: str = "",
           sub: str = "", coverage: str = "", channel: str = "", week: str = "",
-          date_basis: DateBasis = DEFAULT_DATE_BASIS,
+          date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = "",
           part: Literal["all", "rows", "summary"] = "all"):
     if core.require_reader(request)["preview"]:
         return public_preview.search(q, page, size)
+    selection = (None, None)
+    if channel_group:
+        with core.ops() as db:
+            selection = channel_groups.filter_values(channel_group, channel_groups.load(db)["groups"])
     cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q=q, lastmile=lastmile, channel=channel,
-                       date_basis=date_basis, week=week)
+                       date_basis=date_basis, week=week, group_selection=selection)
 
     for column, value in (("t.状态", tstat), ("t.子状态", sub), ("a.主预警规则", rule)):
         vals = core.filter_values(value)
@@ -531,18 +524,20 @@ def track(request: Request,
 def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
              cn: str = "", min_n: int = Query(100, ge=1), cr: str = "", lastmile: str = "",
              start: str = "", end: str = "", channel: str = "", week: str = "",
-             basis: TimingBasis = "shipped", date_basis: DateBasis = DEFAULT_DATE_BASIS):
+             basis: TimingBasis = "shipped", date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = ""):
     core.require_reader(request)
     if basis == "created":
         basis = "paid"  # Value used by earlier clients for 下单到签收.
     with core.ops() as ops:
         _, saved = rules.load_settings(ops)
+        selection = (channel_groups.filter_values(channel_group, channel_groups.load(ops)["groups"])
+                     if channel_group else (None, None))
     archive = transport_archive_version() if basis == "online" or any(
         item.get("basis") == "online" for item in saved.values()
     ) else None
     date_basis = date_basis or DEFAULT_DATE_BASIS
     cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel, week=week,
-                       date_basis=date_basis, require_time=True)
+                       date_basis=date_basis, require_time=True, group_selection=selection)
     report = _channel_report(core.snapshot_key(), archive, json.dumps(saved, sort_keys=True), basis, cond, tuple(args),
                              date_basis)
     return {**report, "dateBasis": date_basis, "rows": [row for row in report["rows"] if row["orders"] >= min_n]}
@@ -634,6 +629,8 @@ def rules_api(request: Request):
     core.require_user(request)
     with core.ops() as ops:
         rule_overrides, sla_overrides = rules.load_settings(ops)
+        membership = {channel: group["name"] for group in channel_groups.load(ops)["groups"]
+                      for channel in group["channels"]}
         hits = dict(ops.execute(
             f"SELECT rule,count(*) FROM alerts WHERE is_main AND {rules.visible_alerts()} GROUP BY rule"
         ).fetchall())
@@ -669,7 +666,8 @@ def rules_api(request: Request):
     for row in perf:
         config = slas[row["ch"]]
         row.update(target=config["days"], targets=config["targets"], basis=config["basis"],
-                   customized=row["ch"] in sla_overrides)
+                   customized=row["ch"] in sla_overrides,
+                   channelGroup=membership.get(row["ch"].strip(), channel_groups.UNGROUPED))
         for day in (3, 5, 6):
             count = row.pop(f"d{day}")
             row[f"rate{day}"] = round(100 * count / row["samples"], 1) if row["samples"] else None

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261123-date-basis">
+<link rel="stylesheet" href="/static/app.css?v=20261123-channel-groups">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -120,7 +120,6 @@
           <section class="card plot-card" aria-labelledby="customChannelTitle">
             <div class="ct">
               <div><h2 id="customChannelTitle">自定义渠道分布</h2><p class="tip">按「当前渠道」归组 · 占筛选范围内有效履约单</p></div>
-              <button type="button" class="btn ghost sm" id="openChannelGroups" hidden>配置渠道分组</button>
             </div>
             <div id="cChannelGroup"></div>
           </section>
@@ -250,6 +249,7 @@
           <button type="button" data-rule-pane="definitions" aria-pressed="false">数据口径</button>
           <button type="button" data-rule-pane="sync" aria-pressed="false">17TRACK 同步</button>
           <button type="button" data-rule-pane="business" aria-pressed="false">业务预警规则</button>
+          <button type="button" data-rule-pane="channel-groups" aria-pressed="false">自定义渠道</button>
           <button type="button" data-rule-pane="sla" aria-pressed="false">渠道 SLA</button>
           <button type="button" data-rule-pane="dictionary" aria-pressed="false">17TRACK 字典</button>
         </div>
@@ -324,7 +324,7 @@
                 <tr><th scope="row">近 45 天与有单日均</th><td>近 45 天从当前口径下最后一个有单日倒推。日均用范围内单量除以有单的天数，峰值取其中单量最高的一天。</td></tr>
                 <tr><th scope="row">周次与日期范围</th><td>各业务列表和报表可按支付时间、创建时间或出库时间筛选，默认选出库时间。周次、月份和日期范围使用所选时间字段并取交集。下拉数字是该时间口径下的全量有效履约单数。只选日期时默认从 00:00 到 23:59，包含最后一分钟的记录。</td></tr>
                 <tr><th scope="row">分布占比</th><td>分组单量 ÷ 筛选范围内的履约单总量。出库单状态的分母包含取消单。只显示排名靠前的分组时，仍以全部筛选结果为分母。</td></tr>
-                <tr><th scope="row">自定义渠道分组</th><td>使用履约单的「当前渠道」，每个渠道可归入一组，剩余单量计入「未归组」。分组用于总览统计。</td></tr>
+                <tr><th scope="row">自定义渠道分组</th><td>按履约单的「当前渠道」归组，在「数据与规则 → 自定义渠道」维护。各业务页面可多选分组，也可筛选「未归组」。同时选择当前渠道时，取两项条件的交集。</td></tr>
                 <tr><th scope="row">渠道与物流商</th><td>「后台物流商」是 ERP 物流服务商，「当前渠道」用于配置 SLA，「C 端渠道」是客户可见的承运商名称。三个字段分别筛选。</td></tr>
                 <tr><th scope="row">取消单</th><td>只纳入「出库单状态」统计。总览单量、日单量、时效、轨迹清单及业务预警均按有效履约单统计。</td></tr>
               </tbody>
@@ -367,9 +367,22 @@
           <div id="notImpl"></div>
         </div>
         </div>
+        <section class="card table-card" id="rules-channel-groups" aria-labelledby="channelGroupRulesTitle" hidden>
+          <div class="ct table-head">
+            <div><h2 id="channelGroupRulesTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>自定义渠道分组</h2>
+              <p class="tip icon-caption">每个履约单的「当前渠道」只能归入一组。分组保存后可在各业务页面筛选。</p></div>
+            <button type="button" class="btn ghost sm" id="openChannelGroups" hidden>新增分组</button>
+          </div>
+          <div class="tblwrap"><table class="tbl">
+            <thead><tr><th scope="col">分组名称</th><th scope="col">包含的当前渠道</th><th scope="col" id="channelGroupAction" hidden>操作</th></tr></thead>
+            <tbody id="channelGroupRulesBody"></tbody>
+          </table></div>
+        </section>
         <div class="card table-card" id="rules-sla" hidden>
           <div class="ct table-head"><div><h2><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg></span>渠道 SLA 规则</h2><p class="tip icon-caption">按履约单的「当前渠道」配置起点和承诺天数。妥投优先用 17TRACK，缺失时由 WMS 补算。</p></div>
-            <input type="search" id="slaSearch" class="inline-search" placeholder="搜索当前渠道…" aria-label="搜索当前渠道">
+            <div class="toolbar" id="slaGroupFilter">
+              <input type="search" id="slaSearch" class="inline-search" placeholder="搜索当前渠道…" aria-label="搜索当前渠道">
+            </div>
           </div>
           <div class="tblwrap"><table class="tbl">
             <thead><tr><th>当前渠道</th><th>单量</th><th>计时口径</th><th>承诺时效</th><th>有效样本 / 有妥投时间</th><th>3 天目标 / 实际</th><th>5 天目标 / 实际</th><th>6 天目标 / 实际</th><th>实际平均</th><th>配置</th></tr></thead>
@@ -431,6 +444,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261123-date-basis" defer></script>
+<script src="/static/app.js?v=20261123-channel-groups" defer></script>
 </body>
 </html>
