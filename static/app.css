@@ -336,6 +336,23 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .daily-controls { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 5px 8px; }
 .daily-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; }
 .daily-footer b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.weekly-header, .weekly-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.weekly-summary {
+  display: grid; grid-template-columns: minmax(0,1.2fr) repeat(2,minmax(0,1fr)); gap: 6px 14px;
+  padding: 9px 12px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 8px; background: #f4f7fc;
+}
+.weekly-period { align-self: center; }
+.weekly-period strong { font-size: 14px; }
+.weekly-metric { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; }
+.weekly-metric strong { font-size: clamp(17px,2vw,23px); font-variant-numeric: tabular-nums; }
+.weekly-chart { height: 242px; }
+.weekly-details summary { width: fit-content; padding: 7px 0; color: var(--brand); font-weight: 600; cursor: pointer; }
+.weekly-details p { margin: 0 0 8px; }
+.weekly-details .tblwrap, .week-calendar.tblwrap { max-height: min(540px,65vh); }
+.weekly-details .tbl th[scope="row"], .week-calendar .tbl th[scope="row"] { position: static; min-width: 0; }
+.week-calendar .tbl :is(th,td) { white-space: nowrap; }
+.week-calendar .tbl .cross-year { background: #f0f2f6; color: var(--ink3); }
+#weekCalendarTitle { scroll-margin-top: 115px; }
 .status-card .rank-row { min-height: 37px; }
 .status-more { margin-top: 13px; }
 .rank-list { padding: 0; list-style: none; }
@@ -555,6 +572,9 @@ button.rank-row:hover { background: #f4f7fc; }
   .top, .content { padding-inline: 11px; }
   .page-head { align-items: flex-start; flex-direction: column; }
   .overview-breakdown, .grid { grid-template-columns: minmax(0,1fr); }
+  .weekly-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .weekly-period { grid-column: 1 / -1; }
+  .weekly-chart { height: 215px; }
   .kpis { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 7px; }
   #dashKpi { grid-template-columns: repeat(2,minmax(0,1fr)); }
   #dashKpi .kpi:nth-child(4) { border-left: 1px solid var(--line); }
