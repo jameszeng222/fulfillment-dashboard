@@ -287,15 +287,57 @@ function multiFilter(def, onChange) {
   };
 }
 
+function makeTimeRange(onChange) {
+  const root = el('div', 'filter-time-range');
+  root.setAttribute('role', 'group');
+  root.setAttribute('aria-label', '时间范围（北京时间）');
+  const fields = {};
+  const inputs = {};
+  const error = el('span', 'filter-time-error');
+  error.setAttribute('role', 'status');
+  error.hidden = true;
+  for (const [key, label, hour] of [['start', '开始时间', '00:00'], ['end', '结束时间', '23:59']]) {
+    const input = el('input');
+    input.type = 'datetime-local';
+    input.step = '60';
+    input.dataset.key = key;
+    input.setAttribute('aria-label', label + '（北京时间）');
+    input.onchange = () => onChange(1);
+    const field = el('label', 'date-filter');
+    field.append(el('span', '', label), input);
+    root.appendChild(field);
+    inputs[key] = input;
+    fields[key] = {
+      get value() { return input.value; },
+      set value(value) {
+        input.value = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T${hour}` : value;
+      },
+    };
+  }
+  root.append(el('span', 'filter-timezone', '北京时间'), error);
+  return {root, fields, validate() {
+    const {start, end} = inputs;
+    const invalidInput = !start.validity.valid || !end.validity.valid;
+    const reversed = Boolean(start.value && end.value && start.value > end.value);
+    error.hidden = !invalidInput && !reversed;
+    error.textContent = invalidInput ? '请填写有效的日期和分钟' : reversed ? '开始时间不能晚于结束时间' : '';
+    return error.hidden;
+  }};
+}
+
 function makeFilters(host, defs, onChange) {
   host.innerHTML = '';
   const refs = {};
+  let timeRange;
+  const change = (...args) => {
+    if (!timeRange || timeRange.validate()) onChange(...args);
+  };
   defs.forEach(d => {
     if (d.type === 'text') {
       const i = el('input'); i.placeholder = d.label; i.dataset.key = d.key; i.style.width = (d.w || 210) + 'px';
       i.setAttribute('aria-label', d.label);
       let timer;
-      const submit = () => { clearTimeout(timer); onChange(1, 'search'); };
+      const submit = () => { clearTimeout(timer); change(1, 'search'); };
       const schedule = () => { clearTimeout(timer); timer = setTimeout(submit, 350); };
       if (d.auto !== false) {
         i.oninput = event => { if (!event.isComposing) schedule(); };
@@ -318,34 +360,31 @@ function makeFilters(host, defs, onChange) {
         host.appendChild(i);
       }
       refs[d.key] = i;
-    } else if (d.type === 'date') {
-      const i = el('input'); i.type = 'date'; i.dataset.key = d.key; i.title = d.label;
-      i.setAttribute('aria-label', d.label);
-      const label = el('label', 'date-filter');
-      label.append(el('span', '', d.label), i);
-      i.onchange = () => onChange(1);
-      host.appendChild(label); refs[d.key] = i;
+    } else if (d.type === 'time-range') {
+      timeRange = makeTimeRange(change);
+      Object.assign(refs, timeRange.fields);
+      host.appendChild(timeRange.root);
     } else if (d.type === 'multi') {
-      const control = multiFilter(d, onChange);
+      const control = multiFilter(d, change);
       host.appendChild(control.root);
       refs[d.key] = control;
     } else {
       const s = el('select'); s.dataset.key = d.key;
       s.setAttribute('aria-label', d.label);
-      s.innerHTML = `<option value="">${d.label}：全部</option>` +
+      s.innerHTML = `<option value="">${d.defaultLabel || d.label + '：全部'}</option>` +
         (d.options || []).filter(o => o != null && o !== '').map(o => {
           const v = (o && typeof o === 'object') ? o.v : o;
           const t = (o && typeof o === 'object') ? (o.t != null ? o.t : o.v) : o;
           return `<option value="${esc(v)}">${esc(t)}</option>`;
         }).join('');
-      s.onchange = () => onChange(1);
+      s.onchange = () => change(1);
       host.appendChild(s); refs[d.key] = s;
     }
   });
   const btn = el('button', 'btn ghost sm', '重置');
   btn.onclick = () => {
     Object.values(refs).forEach(control => { if ('value' in control) control.value = ''; });
-    onChange(1);
+    change(1);
   };
   host.appendChild(btn);
   const sp = el('span', 'grow'); sp.style.flex = '1';
@@ -392,8 +431,7 @@ const trend = { created: [], shipped: [], filters: {}, span: 45, basis: 'created
 
 function dashFilterDefs() {
   return [
-    { type: 'date', label: '开始日期', key: 'start' },
-    { type: 'date', label: '结束日期', key: 'end' },
+    { type: 'time-range' },
     ...Object.entries({ month: '月份', wh: '仓库', pf: '平台', cr: '后台物流商',
       channel: '当前渠道', lastmile: 'C 端渠道', cn: '国家' }).map(([key, label]) =>
       ({ type: 'multi', key, label, options: META.filterOptions[key] })),
@@ -652,36 +690,50 @@ function setTrackMode(mode) {
     btn.setAttribute('aria-pressed', String(btn.dataset.mode === mode)));
 }
 
-function updateSubstates() {
-  const current = TF.sub.value;
-  const entries = META.trackStatuses.filter(row => !TF.tstat.value || TF.tstat.value === row.status);
-  TF.sub.replaceChildren(new Option('子状态：全部', ''),
+function updateSubstates(filters) {
+  const current = filters.sub.value;
+  const entries = META.trackStatuses.filter(row => !filters.tstat.value || filters.tstat.value === row.status);
+  filters.sub.replaceChildren(new Option('子状态：全部', ''),
     ...entries.map(row => new Option(` ${row.sub_label || row.sub} · ${row.sub}`, row.sub)));
-  if (entries.some(row => row.sub === current)) TF.sub.value = current;
+  if (entries.some(row => row.sub === current)) filters.sub.value = current;
+}
+
+const trackingLookup = () => ({type: 'text', label: '履约单号 / 运单号 / 订单号 / 平台订单号',
+  key: 'q', w: 275, submit: true, auto: !ME.preview});
+
+function monitoringFilterDefs(alerts = false) {
+  const common = dashFilterDefs();
+  if (alerts) {
+    const channels = META.alertChannels || [];
+    Object.assign(common.find(def => def.key === 'channel'), {
+      label: '当前物流渠道', options: channels, total: channels.reduce((sum, channel) => sum + channel.n, 0),
+    });
+  }
+  return [
+    trackingLookup(),
+    { type: 'select', label: '时间口径', key: 'date_basis', defaultLabel: '建单时间',
+      options: [{ v: 'shipped', t: '出库时间' }] },
+    ...common,
+    { type: 'select', label: '17TRACK 状态', key: 'tstat', options: trackingGroups() },
+    { type: 'select', label: '子状态', key: 'sub' },
+  ];
 }
 
 function prepareTrack() {
   if (TF) return;
-  const lookup = { type: 'text', label: '履约单号 / 运单号 / 订单号 / 平台订单号',
-    key: 'q', w: 275, submit: true, auto: !ME.preview };
   if (ME.preview) {
-    TF = makeFilters($('#trackFilters'), [lookup], () => run(loadTrack));
+    TF = makeFilters($('#trackFilters'), [trackingLookup()], () => run(loadTrack));
     TF._info.setAttribute('role', 'status');
     return;
   }
   TF = makeFilters($('#trackFilters'), [
-    lookup,
-    { type: 'select', label: '日期口径', key: 'date_basis', options: [{ v: 'shipped', t: '出库日期' }] },
-    ...dashFilterDefs(),
-    { type: 'select', label: '17TRACK 状态', key: 'tstat', options: trackingGroups() },
-    { type: 'select', label: '子状态', key: 'sub' },
+    ...monitoringFilterDefs(),
     { type: 'select', label: '主预警', key: 'rule', options: ruleOptions() },
     { type: 'select', label: '轨迹覆盖', key: 'coverage',
       options: coverageOptions.map(([v, t]) => ({ v, t })) },
     { type: 'select', label: '排序', key: 'sort', options: ['创建时间', '签出时间', '停滞天数', '逐条事件数'] },
-  ], (_, action) => { updateSubstates(); run(() => loadTrack(1, action === 'search')); });
-  TF.date_basis.options[0].textContent = '建单日期';
-  updateSubstates();
+  ], (_, action) => { updateSubstates(TF); run(() => loadTrack(1, action === 'search')); });
+  updateSubstates(TF);
   TF._info.setAttribute('role', 'status');
 }
 
@@ -689,7 +741,7 @@ function openTracking(values = {}) {
   if (!ME.preview && !META) return run(async () => { await loadMeta(); openTracking(values); });
   prepareTrack();
   Object.entries(TF).forEach(([key, control]) => { if (key !== '_info') control.value = values[key] || ''; });
-  if (!ME.preview) updateSubstates();
+  if (!ME.preview) updateSubstates(TF);
   setTrackMode('tracking');
   showView('track');
 }
@@ -793,7 +845,7 @@ async function loadTrack(page = 1, fromSearch = false) {
       if (!broad || VIEW !== 'track' || trackMode !== 'tracking') return;
       if (broad.total) {
         for (const key of Object.keys(scope)) TF[key].value = '';
-        updateSubstates();
+        updateSubstates(TF);
         clearedFilters = true;
         f = {q, sort};
         d = broad;
@@ -856,20 +908,17 @@ async function loadTrack(page = 1, fromSearch = false) {
 
 function prepareAlerts() {
   if (AF) return;
-  const channels = META.alertChannels || [];
   AF = makeFilters($('#alertFilters'), [
-    { type: 'text', label: '履约单号 / 运单号', key: 'q', w: 222 },
-    ...dashFilterDefs().filter(def => !['pf', 'lastmile', 'channel'].includes(def.key)),
-    { type: 'multi', label: '当前物流渠道', key: 'channel', options: channels,
-      total: channels.reduce((sum, channel) => sum + channel.n, 0) },
+    ...monitoringFilterDefs(true),
     { type: 'select', label: '处理状态', key: 'state', options: [
       { v: pendingStates, t: '待跟进（待处理、已认领、处理中）' },
       ...Object.entries(states).map(([v, [, t]]) => ({ v, t }))] },
     { type: 'select', label: '预警规则', key: 'rule', options: ruleOptions() },
     { type: 'select', label: '级别', key: 'level', options: ['紧急', '高', '中'] },
     { type: 'select', label: '命中范围', key: 'main_only', options: [{ v: 'true', t: '仅主预警' }] },
-  ], () => run(loadAlerts));
+  ], () => { updateSubstates(AF); run(loadAlerts); });
   AF.state.value = pendingStates;
+  updateSubstates(AF);
 }
 
 function refreshSelection() {

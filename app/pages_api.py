@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from functools import lru_cache
 from typing import Literal
 from unicodedata import normalize
@@ -14,6 +15,7 @@ import pandas as pd
 from . import core, public_preview, rules
 from .carrier_delivery import DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts
 from .channel_timing import ONLINE_START, TimingBasis, online_scan_join, timing_start, transport_archive_version
+from .filter_time import time_bounds
 from .order_time import delivery_facts
 from .tracking_archive import fill_local_times, sources as tracking_sources
 from .waybill import key_sql, normalized as normalize_waybill
@@ -41,17 +43,19 @@ def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="
             w.append(f'{column} IN ({",".join("?" * len(vals))})')
             a.extend(vals)
 
-    date_column = f"CAST({alias}.签出时间 AS DATE)" if date_basis == "shipped" else f"{alias}.创建日期"
+    timestamp_column = f"{alias}.签出时间" if date_basis == "shipped" else f"{alias}.创建时间"
+    date_column = f"CAST({timestamp_column} AS DATE)" if date_basis == "shipped" else f"{alias}.创建日期"
     month_column = f"strftime({date_column}, '%Y-%m')" if date_basis == "shipped" else f"{alias}.创建月份"
     inl(month_column, month)
     for column, value in (("仓库", wh), ("平台", pf), ("物流商", cr),
                           ("目的国", cn), ("状态", status), ("当前渠道", channel)):
         inl(f'{alias}."{column}"', value)
     inl(f"coalesce(nullif({alias}.C端承运商,''),'__empty__')", lastmile)
-    if start:
-        w.append(f"{date_column} >= ?"); a.append(start)
-    if end:
-        w.append(f"{date_column} <= ?"); a.append(end)
+    for operator, bound in zip((">=", "<"), time_bounds(start, end)):
+        if bound is not None:
+            column = timestamp_column if isinstance(bound, datetime) else date_column
+            w.append(f"{column} {operator} ?")
+            a.append(bound)
     query = normalize("NFKC", q).strip().upper()
     if query:
         columns = ("履约单号", "快递单号", "订单号", "平台订单号")

@@ -245,7 +245,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 #v-dash { gap: 14px; }
 #openPending { padding: 8px 11px; background: #edf2fc; color: #253c86; }
 #dashFilters { column-gap: 6px; }
-#dashFilters .date-filter input { width: 113px; }
 #dashFilters .multi-trigger { padding-inline: 8px; }
 #dashKpi {
   grid-template-columns: 1.22fr repeat(5, minmax(0, 1fr)); gap: 0;
@@ -351,9 +350,12 @@ button.rank-row:hover { background: #f4f7fc; }
 .filter-search { display:flex; align-items:center; gap:6px; min-width:0; }
 .filter-search input { min-width:0; }
 .filters select, .filters input { min-height: 33px; font-size: 12px; }
+.filter-time-range { display:flex; flex-wrap:wrap; align-items:center; gap:5px 8px; min-width:0; }
 .date-filter { display: flex; align-items: center; gap: 5px; }
 .date-filter span { color: var(--ink3); font-size: 11px; white-space: nowrap; }
-.filters .date-filter input { width: 124px; }
+.filters .date-filter input { width: 177px; font-variant-numeric: tabular-nums; }
+.filter-timezone { color:var(--ink3); font-size:11px; white-space:nowrap; }
+.filter-time-error { flex-basis:100%; color:var(--bad, #a82a23); font-size:12px; }
 .chipstat { cursor: pointer; font-weight: 500; }
 .chipstat:hover { border-color: #99b3e5; color: var(--brand); }
 .tbl { font-size: 13px; }

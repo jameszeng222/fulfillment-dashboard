@@ -358,6 +358,34 @@ class OpsTests(unittest.TestCase):
             with core.ops() as db:
                 self.assertEqual(db.execute("SELECT count(*) FROM alerts").fetchone()[0], 5)
 
+    def test_alerts_filter_shared_dimensions_and_inclusive_minutes(self):
+        with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):
+            with core.ops() as db:
+                db.executemany("""
+                    INSERT INTO alerts(order_no,rule,platform_code,platform_order_no,last_mile,track_status,track_sub,
+                                       created_date,created_at,shipped_date,shipped_at)
+                    VALUES (?,'sample',?,'#P-123','GOFO','InTransit','InTransit_Other',
+                            '2026-11-23',?,'2026-11-24',?)
+                """, [
+                    ("A", "S1", "2026-11-23 09:20:59.999", "2026-11-24 12:11:00"),
+                    ("B", "S1", "2026-11-23 09:21:00", "2026-11-24 12:10:00"),
+                    ("C", "S2", "2026-11-23 09:20:00", "2026-11-24 12:10:59"),
+                ])
+
+            def query(**filters):
+                status, _, body = self.browser.request("/api/alerts?" + urlencode(filters))
+                self.assertEqual(status, 200, body)
+                return [row["order_no"] for row in json.loads(body)["rows"]]
+
+            shared = dict(pf="S1", lastmile="GOFO", tstat="InTransit", sub="InTransit_Other", q="#P-123")
+            self.assertEqual(query(**shared, start="2026-11-23T09:20", end="2026-11-23T09:20"), ["A"])
+            self.assertEqual(query(**shared, date_basis="shipped", start="2026-11-24T12:10",
+                                   end="2026-11-24T12:10"), ["B"])
+            self.assertEqual(set(query(start="2026-11-23", end="2026-11-23")), {"A", "B", "C"})
+            status, _, _ = self.browser.request("/api/alerts?" + urlencode({
+                "start": "2026-11-23T11:00", "end": "2026-11-23T10:59"}))
+            self.assertEqual(status, 422)
+
     def test_mcp(self):
         csrf = self.login()
         status, _, body = self.browser.request("/api/mcp/tools")

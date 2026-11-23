@@ -280,8 +280,13 @@ def push_to_ops(dcon):
 
 
 ALERT_ORDER_FIELDS = {
+    "created_at": "o.创建时间::VARCHAR",
     "shipped_at": "o.签出时间::VARCHAR",
     "current_channel": "nullif(trim(o.当前渠道),'')",
+    "platform_code": "o.平台",
+    "customer_order_no": "o.订单号",
+    "platform_order_no": "o.平台订单号",
+    "last_mile": "nullif(o.C端承运商,'')",
 }
 
 
@@ -320,7 +325,7 @@ def update_alert_mirror(dcon, db, *, computed=True):
         SELECT a.履约单号, a.规则, a.规则中文, a.业务分类, a.级别, a.是否主预警, a.证据, a.天数,
                a.出库单状态, a.物流服务商, a.仓库代码, a.目的国, a.快递单号,
                a.轨迹状态, a.轨迹子状态, a.创建日期::VARCHAR, a.签出日期::VARCHAR,
-               {ALERT_ORDER_FIELDS['shipped_at']}, a.评估基准日::VARCHAR, {ALERT_ORDER_FIELDS['current_channel']}
+               a.评估基准日::VARCHAR, {', '.join(ALERT_ORDER_FIELDS.values())}
         FROM {table} a LEFT JOIN {core.order_facts(dcon)} o USING (履约单号)
     """).fetchall()
     now = datetime.now().isoformat(timespec="seconds")
@@ -329,8 +334,8 @@ def update_alert_mirror(dcon, db, *, computed=True):
     db.executemany(
         "INSERT OR REPLACE INTO alerts (order_no,rule,rule_cn,category,level,is_main,evidence,days,"
         "order_status,carrier,warehouse,country,tracking_no,track_status,track_sub,"
-        "created_date,shipped_date,shipped_at,base_date,current_channel,synced_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        f"created_date,shipped_date,base_date,{','.join(ALERT_ORDER_FIELDS)},synced_at) "
+        f"VALUES ({','.join('?' for _ in range(19 + len(ALERT_ORDER_FIELDS)))})",
         [(r[0], r[1], r[2], r[3], r[4], 1 if r[5] else 0, r[6], r[7], r[8], r[9], r[10], r[11], r[12],
           *r[13:], now) for r in rows])
     return len(rows)

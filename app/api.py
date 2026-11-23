@@ -1,19 +1,22 @@
 """REST API：订单查询、预警处理、统计。"""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+from unicodedata import normalize
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from . import cloud_login, core, ops_auth, ops_assistant, public_preview
 from .carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts
+from .filter_time import time_bounds
 from .order_time import delivery_facts
 from . import tracking_archive, tracking_freshness
 from .rules import RULES as BUSINESS_RULES, visible_alerts
 from .tracking_clock import utc_key
+from .waybill import normalized as normalize_waybill
 
 router = APIRouter(prefix="/api")
 ALERT_CHANNEL_VALUE = "coalesce(nullif(a.current_channel,''),'__empty__')"
@@ -355,10 +358,13 @@ def order_detail(order_no: str, request: Request, q: str = ""):
 def list_alerts(request: Request,
                 page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
                 rule: str = "", level: str = "", state: str = "", assignee: str = "",
-                q: str = "", wh: str = "", cr: str = "", cn: str = "",
+                q: str = "", wh: str = "", pf: str = "", cr: str = "", cn: str = "",
                 month: str = "", sort: str = "shipped", start: str = "", end: str = "",
-                main_only: bool = False, channel: str = ""):
+                main_only: bool = False, channel: str = "", lastmile: str = "",
+                tstat: str = "", sub: str = "",
+                date_basis: Literal["", "created", "shipped"] = "created"):
     core.require_user(request)
+    bounds = time_bounds(start, end)
     w, a = [visible_alerts("a.carrier")], []
 
     def inlist(col, vals):
@@ -373,11 +379,8 @@ def list_alerts(request: Request,
     inlist("a.warehouse", _multi(wh))
     inlist("a.carrier", _multi(cr))
     inlist("a.country", _multi(cn))
-    inlist("substr(a.created_date,1,7)", _multi(month))
-    if start:
-        w.append("a.created_date >= ?"); a.append(start)
-    if end:
-        w.append("a.created_date <= ?"); a.append(end)
+    inlist("a.track_status", _multi(tstat))
+    inlist("a.track_sub", _multi(sub))
     if main_only:
         w.append("a.is_main = 1")
     if assignee:
@@ -388,10 +391,6 @@ def list_alerts(request: Request,
         else:
             w.append("coalesce(s.status,'open') IN (%s)" % ",".join("?" * len(_multi(state))))
             a.extend(_multi(state))
-    if q:
-        w.append("(instr(upper(a.order_no), ?) > 0 OR instr(upper(a.tracking_no), ?) > 0)")
-        a.extend([q.strip().upper()] * 2)
-
     off = (page - 1) * size
     base = ("FROM alerts a LEFT JOIN alert_state s "
             "ON s.order_no=a.order_no AND s.rule=a.rule")
@@ -400,6 +399,31 @@ def list_alerts(request: Request,
         has_timestamp = "shipped_at" in columns
         has_channel = "current_channel" in columns
         inlist(ALERT_CHANNEL_VALUE if has_channel else "'__empty__'", _multi(channel))
+        inlist("a.platform_code" if "platform_code" in columns else "NULL", _multi(pf))
+        inlist("coalesce(nullif(a.last_mile,''),'__empty__')" if "last_mile" in columns else "'__empty__'", _multi(lastmile))
+        prefix = "shipped" if date_basis == "shipped" else "created"
+        date_column = f"a.{prefix}_date"
+        stamp = f"{prefix}_at"
+        timestamp_column = f"replace(a.{stamp},'T',' ')" if stamp in columns else "NULL"
+        inlist(f"substr(coalesce({date_column},{timestamp_column}),1,7)", _multi(month))
+        for operator, bound in zip((">=", "<"), bounds):
+            if isinstance(bound, datetime):
+                w.append(f"{timestamp_column} {operator} ?")
+                a.append(bound.isoformat(sep=" ", timespec="seconds"))
+            elif bound is not None:
+                w.append(f"coalesce({date_column},substr({timestamp_column},1,10)) {operator} ?")
+                a.append(bound.isoformat())
+        query = normalize("NFKC", q).strip().upper()
+        if query:
+            search_fields = [f"a.{field}" for field in
+                             ("order_no", "tracking_no", "customer_order_no", "platform_order_no") if field in columns]
+            search = [f"instr(upper({field}), ?) > 0" for field in search_fields]
+            a.extend([query] * len(search_fields))
+            waybill = normalize_waybill(query)
+            if waybill and waybill != query:
+                search.append("instr(upper(a.tracking_no), ?) > 0")
+                a.append(waybill)
+            w.append("(" + " OR ".join(search) + ")")
         where = " WHERE " + " AND ".join(w)
         shipped = "coalesce(a.shipped_at,a.shipped_date)" if has_timestamp else "a.shipped_date"
         ordering = {
