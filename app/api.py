@@ -271,16 +271,20 @@ def order_detail(order_no: str, request: Request, q: str = ""):
         detail = dict(zip(cols, row))
 
         fields = core.columns(con, "履约单明细")
-        address = [
+        detail_fields = [
             f"""any_value(nullif(trim("{column}"),'')) AS "{label}" """
             if column in fields else f'NULL AS "{label}"'
-            for column, label in (("省、州", "目的州省"), ("城市", "目的城市"), ("邮编", "目的邮编"))
+            for column, label in (("省、州", "目的州省"), ("城市", "目的城市"), ("邮编", "目的邮编"),
+                                  ("履约单创建人", "履约单创建人"), ("履约单创建原因", "履约单创建原因"))
         ] if not preview else []
+        if not preview:
+            weight = 'max(try_cast("签出重/g" AS DOUBLE))' if "签出重/g" in fields else "NULL"
+            detail_fields.append(f'{weight} AS "签出重/g"')
         steps = [f"max({column}) AS {label}" if column in fields else f"NULL AS {label}"
                  for column, label in (("分配时间_ts", "分配时间"), ("打包时间_ts", "打包时间"))]
         raw_delivery = "max(try_cast(签收时间 AS TIMESTAMP))" if "签收时间" in fields else "NULL"
         warehouse = con.execute(f"""
-            SELECT {', '.join(address + steps)}, {raw_delivery} AS WMS妥投时间
+            SELECT {', '.join(detail_fields + steps)}, {raw_delivery} AS WMS妥投时间
             FROM 履约单明细 WHERE 履约单号=?
         """, [order_no]).fetchone()
         detail.update(zip((column[0] for column in con.description), warehouse))

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261123-channel-compare">
+<link rel="stylesheet" href="/static/app.css?v=20261123-wms-detail">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -28,6 +28,7 @@
   <symbol id="i-history" viewBox="0 0 24 24"><path d="M4 11a8 8 0 1 1 2 6m-2-6V5m0 6h6m2-4v5l3 2"/></symbol>
   <symbol id="i-pin" viewBox="0 0 24 24"><path d="M19 10c0 5-7 11-7 11s-7-6-7-11a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.2"/></symbol>
   <symbol id="i-return" viewBox="0 0 24 24"><path d="m9 5-5 5 5 5m-5-5h11a5 5 0 0 1 0 10h-3"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6m0-6-9 9m7 0v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></symbol>
 </svg>
 <div class="app">
 
@@ -372,7 +373,15 @@
 <div class="mask" id="mask"></div>
 <aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="dTitle" inert>
   <header>
-    <div class="drawer-heading"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-box"/></svg></span><div><h3 id="dTitle">履约单详情</h3><div class="tip" id="dSub">—</div></div></div>
+    <div class="drawer-heading">
+      <span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-box"/></svg></span>
+      <div>
+        <h3 id="dTitle"><a id="dWmsOrder" class="drawer-order-link" target="_blank" rel="noopener noreferrer">
+          <span id="dOrderNo">履约单详情</span><svg class="ui-icon" aria-hidden="true"><use href="#i-external"/></svg>
+        </a></h3>
+        <div class="tip" id="dSub">—</div>
+      </div>
+    </div>
     <button class="x" id="dClose" aria-label="关闭详情">✕</button>
   </header>
   <div class="body" id="dBody"></div>
@@ -387,6 +396,6 @@
   </form>
 </dialog>
 
-<script src="/static/app.js?v=20261123-channel-compare" defer></script>
+<script src="/static/app.js?v=20261123-wms-detail" defer></script>
 </body>
 </html>

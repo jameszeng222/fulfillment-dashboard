@@ -473,6 +473,9 @@ button.rank-row:hover { background: #f4f7fc; }
 .drawer-heading { display: flex; align-items: flex-start; gap: 9px; }
 .drawer-heading .tip { margin-top: 3px; }
 .drawer header h3 { color: #1b3b72; font-size: 19px; }
+.drawer-order-link { display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.drawer-order-link:hover { text-decoration: underline; }
+.drawer-order-link .ui-icon { width: 14px; height: 14px; }
 .drawer .body { padding: 17px 20px; }
 .kv { gap: 8px; }
 .kv .i { padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: #f7f9fc; }

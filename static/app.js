@@ -1591,6 +1591,14 @@ function orderTrackStatus(order) {
     order.已签收 ? '已签收 · 轨迹未入库' : order.签出时间 ? '已出库 · 待同步轨迹' : '无本地查询结果');
 }
 
+function setDrawerOrderLink(no) {
+  const link = $('#dWmsOrder');
+  link.href = 'https://bit.htwig.com/wms/outboard/#/perform/detail?performOrderNo=' + encodeURIComponent(no);
+  link.setAttribute('aria-label', `在 WMS 查看履约单 ${no}（新标签页）`);
+  link.title = '在 WMS 查看（新标签页）';
+  $('#dOrderNo').textContent = no;
+}
+
 function showOrderSummary(no, trigger) {
   const alert = trackMode === 'alerts' ? alertRows.find(row => row.order_no === no) : null;
   const order = trackMode === 'tracking' ? trackRows.find(row => row.履约单号 === no) : null;
@@ -1600,7 +1608,7 @@ function showOrderSummary(no, trigger) {
   const platform = order && (order.平台名称 || (order.平台 && platformName(order.平台)));
   const officialStatus = order ? orderTrackStatus(order) :
     trackingGroups().find(row => row.v === alert?.track_status)?.t || alert?.track_status;
-  $('#dTitle').textContent = no;
+  setDrawerOrderLink(no);
   $('#dSub').textContent = [platform, order?.仓库 || alert?.warehouse, channel, country].filter(Boolean).join(' · ');
   const fields = [
     ['运单号', order?.快递单号 || alert?.tracking_no], ['当前物流渠道', channel], ['收货国家', country],
@@ -1662,19 +1670,23 @@ async function loadOrderDetail(no, path, refresh = false) {
   }
   const oldScroll = body.scrollTop;
   const o = d.order;
-  $('#dTitle').textContent = o.履约单号;
+  setDrawerOrderLink(o.履约单号);
   $('#dSub').textContent = [o.平台名称 || platformName(o.平台), o.仓库, o.当前渠道 || o.物流商, o.目的国中文 || o.目的国].filter(Boolean).join(' · ');
 
   const kv = [
     ...(!ME.preview ? [['订单号', o.订单号], ['平台订单号', o.平台订单号]] : []),
-    ['运单号', o.快递单号], ['收货国家', o.目的国中文 || o.目的国],
+    ['运单号', o.快递单号],
+    ...(!ME.preview ? [
+      ['履约单创建人', o.履约单创建人], ['履约单创建原因', o.履约单创建原因],
+      ['签出重', o['签出重/g'] == null ? '—' : `${o['签出重/g'].toLocaleString('zh-CN')} g`],
+    ] : []),
+    ['收货国家', o.目的国中文 || o.目的国],
     ...(!ME.preview ? [['州 / 省', o.目的州省], ['城市', o.目的城市], ['邮编', o.目的邮编]] : []),
     ['当前库内节点', o.签出时间 ? '已出库' : o.状态],
     ['ERP 出库单状态', o.状态],
     ...(!ME.preview ? [[`ERP / WMS 妥投（${o.WMS时间口径 || '原始值'}）`, dt(o.WMS妥投时间 || o.签收时间)]] : []),
     ['17TRACK 妥投', o.签收当地时间 || o.承运商签收时间 ?
       trackTime(o.签收当地时间, o.承运商签收时间) : '—'],
-    ['妥投统计来源', o.妥投统计来源 === 'WMS' ? 'WMS 补算' : o.妥投统计来源 || '—'],
     ['C 端承运商', o.C端承运商],
     ['17TRACK 主状态', orderTrackStatus(o)],
     ['17TRACK 子状态', o.轨迹子状态],
