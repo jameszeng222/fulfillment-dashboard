@@ -49,7 +49,7 @@ def candidates(con, limit):
                count(DISTINCT nullif(lower(trim(C端承运商)),'')) OVER (PARTITION BY number)>1 AS conflict
         FROM scope
         WHERE checked_at IS NULL OR checked_at <= now - CASE WHEN outcome='read_error'
-              THEN INTERVAL '6 hours' ELSE INTERVAL '18 hours' END
+              THEN INTERVAL '6 hours' ELSE INTERVAL '12 hours' END
         QUALIFY row_number() OVER (PARTITION BY number ORDER BY shipped_at DESC, order_no)=1
         ORDER BY checked_at NULLS FIRST, shipped_at DESC, number LIMIT ?
     """, [limit]).fetchall()
