@@ -37,8 +37,8 @@ def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="
     """返回 (sql, args)，sql 形如 " AND ..."，可直接拼在 WHERE 1=1 之后。"""
     w, a = [], []
 
-    def inl(column, value):
-        vals = core.filter_values(value)
+    def inl(column, value, parse=core.filter_values):
+        vals = parse(value)
         if vals:
             w.append(f'{column} IN ({",".join("?" * len(vals))})')
             a.extend(vals)
@@ -54,7 +54,7 @@ def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="
     for column, value in (("仓库", wh), ("平台", pf), ("物流商", cr),
                           ("目的国", cn), ("状态", status), ("当前渠道", channel)):
         inl(f'{alias}."{column}"', value)
-    inl(f"coalesce(nullif({alias}.C端承运商,''),'__empty__')", lastmile)
+    inl(f"coalesce(nullif({alias}.C端承运商,''),'__empty__')", lastmile, core.last_mile_filter_values)
     for operator, bound in zip((">=", "<"), time_bounds(start, end)):
         if bound is not None:
             column = timestamp_column if isinstance(bound, datetime) else date_column

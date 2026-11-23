@@ -1070,7 +1070,7 @@ let CF = null;
 let channelRows = [];
 let channelBasis = 'shipped';
 let renderedChannels = null;
-let renderedChannelCharts = null;
+let renderedChannelFilters = {};
 
 async function loadChannelFilters() {
   const host = $('#channelFilters');
@@ -1097,9 +1097,72 @@ function showChannelDataDate(data) {
     `${data.snapshotAt ? '离线快照 · ' : ''}数据截止 ${data.asof}`;
 }
 
+function renderChannelPeriod(data, filters) {
+  const period = [];
+  if (data.snapshotFiltersSkipped) {
+    period.push(`全量离线快照 · 建单截至 ${data.asof} · 实时筛选未应用`);
+  } else {
+    const {week, start, end, month} = filters;
+    if (week?.length) {
+      const options = new Map((META?.filterOptions.week || []).map(option => [option.v, option.t]));
+      const weeks = [...week].sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+      period.push(`周次 ${weeks.map(code => options.get(code) || code).join('、')}`);
+    }
+    if (month?.length) period.push(`月份 ${[...month].sort().join('、')}`);
+    if (start || end) {
+      const show = date => date.replace('T', ' ');
+      const range = start && end ? `${show(start)} 至 ${show(end)}` :
+        start ? `${show(start)} 起` : `截至 ${show(end)}`;
+      period.push(`日期 ${range}（北京时间）`);
+    }
+    if (!period.length) period.push(`全部日期 · 建单截至 ${data.asof}`);
+    if (data.snapshotAt) period.push('离线快照');
+  }
+  for (const id of ['channelComparisonPeriod', 'channelTablePeriod', 'channelCountryPeriod']) {
+    const host = document.getElementById(id);
+    host.classList.toggle('is-snapshot', Boolean(data.snapshotAt));
+    host.replaceChildren(...period.map(value => {
+      const label = el('span');
+      label.textContent = value;
+      return label;
+    }));
+  }
+}
+
+function channelLink(row) {
+  return ME.preview ? esc(row.channel) :
+    `<button type="button" class="order-link" data-channel-track="${esc(row.key)}">${esc(row.channel)}</button>`;
+}
+
+function channelMeasure(label, value, unit, scale, tone) {
+  const width = value == null ? 0 : Math.max(0, Math.min(100, value / scale * 100));
+  return `<div class="compare-metric compare-${tone}">
+    <span class="compare-metric-label">${label}</span><b>${measure(value, unit)}</b>
+    <span class="compare-bar" aria-hidden="true"><i style="width:${width}%"></i></span>
+  </div>`;
+}
+
+function renderChannelComparison(data, rows) {
+  const visible = rows.filter(row => row.samples > 0).slice(0, 8);
+  $('#channelCompareHead').hidden = !visible.length;
+  $('#channelChartEmpty').hidden = Boolean(visible.length);
+  const label = TIMING_BASIS[data.basis].label;
+  $('#channelChartScope').textContent = visible.length ?
+    `${label} · 单量靠前的 ${visible.length} 个有样本渠道 · P90 表示约 90% 的有效样本在该用时内签收` : label;
+  const maxDays = Math.max(1, ...visible.flatMap(row => [row.avgDays || 0, row.p90Days || 0]));
+  $('#channelComparisonRows').innerHTML = visible.map(row => `<li class="compare-grid compare-row">
+    <div class="compare-name">${channelLink(row)}</div>
+    <div class="compare-samples"><span class="compare-metric-label">有效样本 / 单量</span>
+      <b>${fmt(row.samples)}</b><small>/ ${fmt(row.orders)}</small>
+    </div>
+    ${channelMeasure('平均用时', row.avgDays, ' 天', maxDays, 'average')}
+    ${channelMeasure('90% 签收用时', row.p90Days, ' 天', maxDays, 'p90')}
+    ${[3, 5, 6, 7].map(days => channelMeasure(`${days} 天内签收`, row[`rate${days}`], '%', 100, 'rate')).join('')}
+  </li>`).join('');
+}
+
 async function loadChannels() {
   if (!CF) run(loadChannelFilters);
-  const library = loadChartLibrary().catch(() => false);
   const basis = channelBasis;
   const filters = readF(CF || {});
   const loading = $('#channelLoading');
@@ -1131,12 +1194,15 @@ async function loadChannels() {
   results.hidden = false;
   results.inert = false;
   results.setAttribute('aria-busy', 'false');
-  if (renderedChannels === d && renderedChannelCharts === d) return;
+  if (renderedChannels === d) return;
   renderedChannels = d;
+  renderedChannelFilters = d.snapshotFiltersSkipped ? {} : filters;
   showChannelDataDate(d);
+  renderChannelPeriod(d, renderedChannelFilters);
 
   const rows = d.rows || [];
   channelRows = rows;
+  renderChannelComparison(d, rows);
   const totalOrders = rows.reduce((a, r) => a + r.orders, 0);
   const signed = rows.reduce((a, r) => a + r.signed, 0);
   const samples = rows.reduce((a, r) => a + r.samples, 0);
@@ -1152,8 +1218,7 @@ async function loadChannels() {
 
   $('#channelBody').innerHTML = rows.length ? rows.map(r => {
     return `<tr>
-      <td>${ME.preview ? esc(r.channel) :
-        `<button type="button" class="order-link" data-channel-track="${esc(r.key)}">${esc(r.channel)}</button>`}</td>
+      <td>${channelLink(r)}</td>
       <td>${fmt(r.orders)}</td><td>${fmt(r.signed)}</td><td>${fmt(r.samples)}</td>
       <td>${measure(r.avgDays, ' 天')}</td><td>${measure(r.p90Days, ' 天')}</td>
       <td>${measure(r.rate3, '%')}</td><td>${measure(r.rate5, '%')}</td>
@@ -1169,77 +1234,6 @@ async function loadChannels() {
     <td>${measure(r.avgDays, ' 天')}</td><td>${measure(r.rate6, '%')}</td></tr>`).join('')
     || blankRow(6, '当前筛选无达到样本量的渠道组合');
 
-  await renderChannelCharts(d, filters, library);
-}
-
-async function renderChannelCharts(data, filters, library) {
-  const chartRows = data.rows.filter(row => row.samples > 0).slice(0, 8).reverse();
-  const chartsHost = $('#channelCharts');
-  const status = $('#channelChartLoading');
-  chartsHost.hidden = true;
-  status.hidden = true;
-  $('#channelChartEmpty').hidden = Boolean(chartRows.length);
-  if (!chartRows.length) {
-    renderedChannelCharts = data;
-    return;
-  }
-  const current = () => VIEW === 'channels' && renderedChannels === data && !$('#channelResults').inert;
-  if (!window.echarts) {
-    status.hidden = false;
-    status.textContent = '正在加载时效图表…';
-    if (await library === false) {
-      if (!current()) return;
-      status.textContent = '时效图表加载失败。';
-      const retry = el('button', 'btn ghost sm', '重试加载图表');
-      retry.onclick = () => run(() => renderChannelCharts(data, filters, loadChartLibrary().catch(() => false)));
-      status.append(' ', retry);
-      return;
-    }
-    if (!current()) return;
-  }
-  status.hidden = true;
-  chartsHost.hidden = false;
-  const label = TIMING_BASIS[data.basis].label;
-  $('#channelChartScope').textContent = `${label} · 单量靠前且有有效样本的 ${chartRows.length} 个渠道 · P90 为 90% 样本在该天数内签收`;
-  drawChannelBars('channelDurationChart', chartRows, [
-    ['平均时效', 'avgDays', chartTheme.series[1]], ['P90', 'p90Days', chartTheme.ink],
-  ], ' 天', label, filters);
-  drawChannelBars('channelRateChart', chartRows, [
-    ['3 天', 'rate3', chartTheme.series[0]], ['5 天', 'rate5', chartTheme.series[1]],
-    ['6 天', 'rate6', chartTheme.series[2]], ['7 天', 'rate7', chartTheme.series[3]],
-  ], '%', label, filters);
-  renderedChannelCharts = data;
-}
-
-function drawChannelBars(id, rows, metrics, unit, basisLabel, filters) {
-  const chart = initChart(id);
-  resizeVisibleCharts();
-  chart.setOption({
-    animation: chartMotion, animationDuration: 230, animationDurationUpdate: 140, animationEasing: 'quarticOut',
-    grid: { top: 35, left: 4, right: 25, bottom: 8, containLabel: true },
-    legend: { top: 2, itemWidth: 13, itemHeight: 8, textStyle: { color: chartTheme.text } },
-    tooltip: {
-      ...chartTip, trigger: 'axis', axisPointer: { type: 'shadow' },
-      formatter: points => {
-        const row = rows[points[0].dataIndex];
-        return `<b>${esc(row.channel)}</b> · ${basisLabel}<br>` +
-          points.map(point => `${point.marker}${point.seriesName} ${measure(point.value, unit)}`).join('<br>') +
-          `<br>有效样本 ${fmt(row.samples)} / ${fmt(row.signed)} 单`;
-      },
-    },
-    xAxis: { type: 'value', min: 0, max: unit === '%' ? 100 : undefined,
-      splitLine: { lineStyle: { color: chartTheme.grid } },
-      axisLabel: { color: chartTheme.muted, formatter: value => value + unit } },
-    yAxis: { type: 'category', data: rows.map(row => row.channel),
-      axisTick: { show: false }, axisLine: { show: false },
-      axisLabel: { color: chartTheme.text, width: 104, overflow: 'truncate' } },
-    series: metrics.map(([name, key, color]) => ({
-      name, type: 'bar', barMaxWidth: unit === '%' ? 6 : 12,
-      data: rows.map(row => row[key]), itemStyle: { color, borderRadius: [0, 3, 3, 0] },
-    })),
-  });
-  chart.off('click');
-  if (!ME.preview) chart.on('click', point => openTracking({ ...filters, lastmile: rows[point.dataIndex].key }));
 }
 
 /* ================= 数据与规则 ================= */
@@ -1874,9 +1868,9 @@ run(async function boot() {
     $('#alertBody').querySelectorAll('[data-alert-index]').forEach(box => box.checked = event.target.checked);
     refreshSelection();
   };
-  $('#channelBody').onclick = event => {
+  $('#channelResults').onclick = event => {
     const button = event.target.closest('[data-channel-track]');
-    if (button) openTracking({ ...readF(CF), lastmile: button.dataset.channelTrack });
+    if (button) openTracking({ ...renderedChannelFilters, lastmile: button.dataset.channelTrack });
   };
   $('#channelBasis').onclick = event => {
     const button = event.target.closest('button[data-basis]');

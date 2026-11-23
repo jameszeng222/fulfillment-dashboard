@@ -219,7 +219,7 @@ def list_orders(request: Request,
     try:
         tracking, _, _ = tracking_archive.sources(con)
         where, args = _order_filters(month, wh, pf, cr, cn, status, q, signed, tracked, tracking)
-        order_facts = delivery_facts(con, core.active_facts())
+        order_facts = delivery_facts(con, core.active_facts(core.order_facts(con)))
         facts = reporting_facts(con, order_facts)
         total = con.execute(f"SELECT count(*) FROM {order_facts}{where}", args).fetchone()[0]
         rows = con.execute(f"""
@@ -413,7 +413,8 @@ def list_alerts(request: Request,
         has_channel = "current_channel" in columns
         inlist(ALERT_CHANNEL_VALUE if has_channel else "'__empty__'", _multi(channel))
         inlist("a.platform_code" if "platform_code" in columns else "NULL", _multi(pf))
-        inlist("coalesce(nullif(a.last_mile,''),'__empty__')" if "last_mile" in columns else "'__empty__'", _multi(lastmile))
+        carrier = f"coalesce(nullif({core.last_mile_sql('a.last_mile')},''),'__empty__')" if "last_mile" in columns else "'__empty__'"
+        inlist(carrier, core.last_mile_filter_values(lastmile))
         prefix = "shipped" if date_basis == "shipped" else "created"
         date_column = f"a.{prefix}_date"
         stamp = f"{prefix}_at"

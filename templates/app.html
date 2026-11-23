@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261123-week-filter">
+<link rel="stylesheet" href="/static/app.css?v=20261123-channel-compare">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -190,20 +190,22 @@
         <div id="channelLoading" class="card" role="status">正在读取渠道时效…</div>
         <div id="channelResults" class="channel-results" hidden>
         <div class="kpis" id="channelKpi"></div>
-        <p class="card" id="channelChartLoading" role="status" hidden></p>
-        <div class="grid channel-charts" id="channelCharts" hidden>
-          <div class="card">
-            <div class="ct"><div><h2><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span>平均时效与 P90</h2><p class="tip icon-caption" id="channelChartScope"></p></div></div>
-            <div class="chart" id="channelDurationChart" role="img" aria-label="按渠道比较平均时效及 P90 天数"></div>
+        <section class="card channel-comparison" aria-labelledby="channelComparisonTitle">
+          <div class="ct table-head"><div>
+            <h2 id="channelComparisonTitle"><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span>渠道时效对比</h2>
+            <p class="tip icon-caption" id="channelChartScope"></p>
+          </div></div>
+          <div class="channel-period" id="channelComparisonPeriod" aria-label="统计时间范围"></div>
+          <div class="compare-grid compare-head" id="channelCompareHead" aria-hidden="true">
+            <div>C 端渠道</div><div>有效样本 / 单量</div><div>平均用时</div><div>90% 签收用时 <small>P90</small></div>
+            <div>3 天内签收</div><div>5 天内签收</div><div>6 天内签收</div><div>7 天内签收</div>
           </div>
-          <div class="card">
-            <div class="ct"><div><h2><span class="section-icon tone-green"><svg class="ui-icon" aria-hidden="true"><use href="#i-check"/></svg></span>3、5、6、7 天内签收比例</h2><p class="tip icon-caption">时效样本须有可用妥投时间和有效起点</p></div></div>
-            <div class="chart" id="channelRateChart" role="img" aria-label="按渠道比较 3、5、6、7 天内签收比例"></div>
-          </div>
-        </div>
-        <p class="card" id="channelChartEmpty" hidden>当前筛选和口径下没有有效签收样本。</p>
+          <ul class="compare-list" id="channelComparisonRows" aria-label="渠道时效图与数据"></ul>
+          <p class="tip compare-empty" id="channelChartEmpty" hidden>当前筛选和口径下没有有效签收样本。</p>
+        </section>
         <div class="card table-card">
           <div class="ct table-head"><div><h2>C 端渠道表现对比</h2><p class="tip">SLA 达成率和超时在途按每单「当前渠道」配置的起点与承诺天数计算。超时占比仅统计可计时的在途单。</p></div><button type="button" class="btn ghost sm" id="exportChannels">导出结果</button></div>
+          <div class="channel-period" id="channelTablePeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:none">
             <table class="tbl">
               <thead><tr>
@@ -217,6 +219,7 @@
         </div>
         <div class="card" style="padding:0">
           <div class="ct" style="padding:12px 14px 0"><h2>C 端渠道 × 国家</h2><div class="tip">单量 ≥ 200 的组合</div></div>
+          <div class="channel-period" id="channelCountryPeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:460px">
             <table class="tbl">
               <thead><tr><th>C 端渠道</th><th>国家</th><th>单量</th><th>有效样本</th><th>平均时效</th><th>6天达成</th></tr></thead>
@@ -384,6 +387,6 @@
   </form>
 </dialog>
 
-<script src="/static/app.js?v=20261123-week-filter" defer></script>
+<script src="/static/app.js?v=20261123-channel-compare" defer></script>
 </body>
 </html>

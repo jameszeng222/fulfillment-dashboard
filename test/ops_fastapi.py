@@ -412,6 +412,16 @@ class OpsTests(unittest.TestCase):
             status, _, _ = self.browser.request("/api/alerts?week=W54")
             self.assertEqual(status, 422)
 
+    def test_alerts_canonical_3pe_filter_matches_legacy_names(self):
+        with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):
+            with core.ops() as db:
+                db.executemany("INSERT INTO alerts(order_no,rule,last_mile) VALUES (?,'sample',?)",
+                               [("A", "3pe"), ("B", " 3PE express "), ("C", "GOFO")])
+            for value in ("3PE Express", "3pe"):
+                status, _, result = self.browser.request("/api/alerts?" + urlencode({"lastmile": value}))
+                self.assertEqual(status, 200, result)
+                self.assertEqual({row["order_no"] for row in json.loads(result)["rows"]}, {"A", "B"})
+
     def test_mcp(self):
         csrf = self.login()
         status, _, body = self.browser.request("/api/mcp/tools")

@@ -57,12 +57,27 @@ def columns(con, table):
     ).fetchall()}
 
 
+_LAST_MILE_3PE = ("3pe", "3pe express")
+_LAST_MILE_3PE_LABEL = "3PE Express"
+
+
+def last_mile_name(value):
+    return _LAST_MILE_3PE_LABEL if value.strip().lower() in _LAST_MILE_3PE else value
+
+
+def last_mile_sql(column):
+    aliases = ", ".join(f"'{alias}'" for alias in _LAST_MILE_3PE)
+    return f"CASE WHEN lower(trim({column})) IN ({aliases}) THEN '{_LAST_MILE_3PE_LABEL}' ELSE {column} END"
+
+
 def order_facts(con):
-    if "当前渠道" in columns(con, "fct_order"):
-        return "fct_order"
+    fields = columns(con, "fct_order")
+    projection = f"f.* REPLACE ({last_mile_sql('f.C端承运商')} AS C端承运商)" if "C端承运商" in fields else "f.*"
+    if "当前渠道" in fields:
+        return f"(SELECT {projection} FROM fct_order f)"
     if "当前渠道" not in columns(con, "履约单明细"):
-        return "(SELECT *, NULL::VARCHAR AS 当前渠道 FROM fct_order)"
-    return """(SELECT f.*, c.当前渠道 FROM fct_order f LEFT JOIN (
+        return f"(SELECT {projection}, NULL::VARCHAR AS 当前渠道 FROM fct_order f)"
+    return f"""(SELECT {projection}, c.当前渠道 FROM fct_order f LEFT JOIN (
         SELECT 履约单号, max(nullif(trim(当前渠道),'')) AS 当前渠道
         FROM 履约单明细 GROUP BY 履约单号
     ) c USING (履约单号))"""
@@ -87,6 +102,10 @@ def filter_values(value):
         if isinstance(items, list) and all(isinstance(item, str) for item in items):
             return [item for item in items if item]
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def last_mile_filter_values(value):
+    return list(dict.fromkeys(last_mile_name(item) for item in filter_values(value)))
 
 
 @lru_cache(maxsize=1)
