@@ -5,14 +5,15 @@
   DuckDB 履约单.duckdb —— 事实层，管道重建，API 只读
   SQLite ops.db        —— 操作层，API 独占写入，记录"人对这批货做了什么"
 
-预警本身（fct_alert）在 DuckDB 里，每次重算重建；
-但处理状态在 alert_state 里，以 (履约单号, 规则) 为键，重算不会丢。
+DuckDB 保存当前命中的规则。SQLite 保存当前处理状态和结束的预警记录。
 """
 import argparse
 import secrets
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+
+from app.alert_history import HISTORY_SCHEMA
 
 ROOT = Path(__file__).resolve().parent
 OPS_DB = ROOT / "ops.db"
@@ -49,6 +50,7 @@ CREATE TABLE IF NOT EXISTS alert_state (
     note       TEXT,
     updated_at TEXT NOT NULL,
     updated_by TEXT,
+    handler_name TEXT,
     PRIMARY KEY (order_no, rule)
 );
 CREATE INDEX IF NOT EXISTS ix_alert_state_status ON alert_state(status);
@@ -104,6 +106,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     last_mile TEXT,
     base_date   TEXT,
     synced_at   TEXT,
+    first_seen_at TEXT,
     PRIMARY KEY (order_no, rule)
 );
 CREATE INDEX IF NOT EXISTS ix_alerts_rule ON alerts(rule);
@@ -122,7 +125,7 @@ CREATE TABLE IF NOT EXISTS order_notes (
     body     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_order_notes ON order_notes(order_no, ts DESC);
-"""
+""" + ";\n".join(HISTORY_SCHEMA) + ";\n"
 
 SEED_USERS = [
     # username, password, display, role, team

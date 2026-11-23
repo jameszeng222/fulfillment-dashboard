@@ -12,8 +12,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 import pandas as pd
 
-from . import core, public_preview, rules
-from .carrier_delivery import DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts
+from . import alert_history, core, public_preview, rules
+from .carrier_delivery import (
+    DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts, transport_minutes,
+)
 from .channel_timing import ONLINE_START, TimingBasis, online_scan_join, timing_start, transport_archive_version
 from .filter_time import time_bounds, week_filter
 from .order_time import delivery_facts
@@ -331,9 +333,15 @@ def track(request: Request,
             alert_where += f' AND order_no IN ({",".join("?" * len(alert_args))})' if alert_args else " AND FALSE"
         with core.ops() as ops:
             summaries = ops.execute(f"""
-                SELECT order_no, max(rule_cn) FILTER (WHERE is_main), max(rule) FILTER (WHERE is_main),
-                       max(level) FILTER (WHERE is_main), count(*)
-                FROM alerts WHERE {alert_where} GROUP BY order_no
+                WITH ranked AS (
+                    SELECT order_no, rule_cn, rule, level, count(*) OVER by_order AS total,
+                           row_number() OVER (by_order ORDER BY is_main DESC,
+                              CASE level WHEN '紧急' THEN 0 WHEN '高' THEN 1 ELSE 2 END, rule) AS choice
+                    FROM ({alert_history.current_rows()})
+                    WHERE {alert_where} AND state IN {alert_history.PENDING_STATES}
+                    WINDOW by_order AS (PARTITION BY order_no)
+                )
+                SELECT order_no,rule_cn,rule,level,total FROM ranked WHERE choice=1
             """, alert_args).fetchall()
         con.register("live_alerts", pd.DataFrame.from_records(
             summaries, columns=["履约单号", "主预警名称", "主预警规则", "主预警级别", "预警数"]
@@ -419,12 +427,17 @@ def track(request: Request,
             WITH page_rows AS MATERIALIZED ({page_query})
             SELECT p.* EXCLUDE ({', '.join(excluded)}),
                    p.{DELIVERED_UTC} AS 承运商签收时间,
-                   CASE WHEN p.tracked_delivery=p.{DELIVERED_UTC} THEN p.tracked_delivery_local END AS 签收当地时间
+                   CASE WHEN p.tracked_delivery=p.{DELIVERED_UTC} THEN p.tracked_delivery_local END AS 签收当地时间,
+                   {transport_minutes('p', "p.轨迹状态 IS NOT DISTINCT FROM 'Delivered'")} AS 运输分钟
                    {event_projection}
             FROM {measured} p ORDER BY p."{sort_field}" {direction} NULLS LAST, p.履约单号
         """
         rows = con.execute(page_query, args + [size, off]).df().to_dict("records")
         fill_local_times(con, rows)
+        with core.ops() as ops:
+            resolved = alert_history.resolved_for_orders(ops, [row["履约单号"] for row in rows])
+        for row in rows:
+            row["历史预警"] = resolved.get(row["履约单号"])
 
     finally:
         con.close()

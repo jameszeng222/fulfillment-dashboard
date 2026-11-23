@@ -577,6 +577,8 @@ button.rank-row:hover { background: #f4f7fc; }
 .settings-hint { grid-column: 1 / -1; font-size: 12px; line-height: 1.5; }
 .settings-error { color: #a33232; padding: 0 17px 10px; }
 .settings-error:empty { display: none; }
+#alertHandlerDialog { width: min(370px, calc(100vw - 28px)); }
+#alertHandlerDialog .settings-fields { grid-template-columns: 1fr; }
 @media (max-width: 1060px) {
   .top, .content { padding-inline: 16px; }
   .overview-lead { grid-template-columns: minmax(0, 1.85fr) minmax(251px, 1fr); }

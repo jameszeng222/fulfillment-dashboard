@@ -9,8 +9,8 @@ from unicodedata import normalize
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from . import cloud_login, core, ops_auth, ops_assistant, public_preview
-from .carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts
+from . import alert_history, cloud_login, core, ops_auth, ops_assistant, public_preview
+from .carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts, transport_minutes
 from .filter_time import REPORTING_WEEKS, time_bounds, week_filter
 from .order_time import delivery_facts
 from . import tracking_archive, tracking_freshness
@@ -358,9 +358,9 @@ def order_detail(order_no: str, request: Request, q: str = ""):
             "SELECT ts, actor, body FROM order_notes WHERE order_no=? ORDER BY ts DESC",
             (order_no,)).fetchall()]
         alerts = [dict(r) for r in o.execute(
-            "SELECT a.*, coalesce(s.status,'open') state, s.assignee, s.note AS handle_note, "
-            "s.updated_at FROM alerts a LEFT JOIN alert_state s "
-            f"ON s.order_no=a.order_no AND s.rule=a.rule WHERE a.order_no=? AND {visible_alerts('a.carrier')}",
+            f"""SELECT a.* FROM ({alert_history.all_rows()}) a
+                WHERE a.order_no=? AND {visible_alerts('a.carrier')}
+                ORDER BY coalesce(a.handle_at, a.cleared_at, a.synced_at) DESC NULLS LAST, a.rule""",
             (order_no,)).fetchall()]
 
     return core.clean({"order": detail, "skus": skus, "milestones": milestones, "events": events,
@@ -371,6 +371,24 @@ def order_detail(order_no: str, request: Request, q: str = ""):
 
 # ---------------------------------------------------------------- 预警
 
+def _with_transport_times(rows):
+    order_numbers = list({row["order_no"] for row in rows if row.get("shipped_at") or row.get("shipped_date")})
+    if not order_numbers:
+        return
+    with core.duck() as con:
+        facts = delivery_facts(con, core.active_facts(core.order_facts(con)))
+        measured = reporting_facts(con, "selected_orders", page_only=True)
+        delivered = "EXISTS (SELECT 1 FROM trk_status t WHERE t.单号=p.单号归一 AND t.状态='Delivered')"
+        times = dict(con.execute(f"""
+            WITH selected_orders AS MATERIALIZED (
+                SELECT o.* FROM {facts} o WHERE o.履约单号 IN (SELECT unnest(?::VARCHAR[]))
+            )
+            SELECT p.履约单号, {transport_minutes('p', delivered)} FROM {measured} p
+        """, [order_numbers]).fetchall())
+    for row in rows:
+        row["transport_minutes"] = times.get(row["order_no"])
+
+
 @router.get("/alerts")
 def list_alerts(request: Request,
                 page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
@@ -379,10 +397,13 @@ def list_alerts(request: Request,
                 month: str = "", sort: str = "shipped", start: str = "", end: str = "",
                 main_only: bool = False, channel: str = "", lastmile: str = "", week: str = "",
                 tstat: str = "", sub: str = "",
-                date_basis: Literal["", "created", "shipped"] = "created"):
+                date_basis: Literal["", "created", "shipped"] = "created",
+                view: Literal["pending", "archive"] = "pending"):
     core.require_user(request)
     bounds = time_bounds(start, end)
-    w, a = [visible_alerts("a.carrier")], []
+    pending = view == "pending"
+    mode_filter = f"a.state IN {alert_history.PENDING_STATES}" if pending else "a.state='archived'"
+    w, a = [visible_alerts("a.carrier"), mode_filter], []
 
     def inlist(col, vals):
         if not vals:
@@ -401,16 +422,11 @@ def list_alerts(request: Request,
     if main_only:
         w.append("a.is_main = 1")
     if assignee:
-        w.append("s.assignee = ?"); a.append(assignee)
-    if state:
-        if state == "open":
-            w.append("coalesce(s.status,'open') = 'open'")
-        else:
-            w.append("coalesce(s.status,'open') IN (%s)" % ",".join("?" * len(_multi(state))))
-            a.extend(_multi(state))
+        w.append("a.handled_by = ?"); a.append(assignee)
+    inlist("a.state", _multi(state))
     off = (page - 1) * size
-    base = ("FROM alerts a LEFT JOIN alert_state s "
-            "ON s.order_no=a.order_no AND s.rule=a.rule")
+    records = alert_history.current_rows() if pending else alert_history.all_rows()
+    base = f"FROM ({records}) a"
     with core.ops() as o:
         columns = {row[1] for row in o.execute("PRAGMA table_info(alerts)")}
         has_timestamp = "shipped_at" in columns
@@ -454,74 +470,81 @@ def list_alerts(request: Request,
             "level": "CASE a.level WHEN '紧急' THEN 0 WHEN '高' THEN 1 ELSE 2 END, a.days DESC",
             "order": "a.order_no",
         }
-        order_by = ordering.get(sort, f"{shipped} DESC NULLS LAST") + ", a.order_no, a.rule"
+        default_sort = f"{shipped} DESC NULLS LAST" if pending else "a.handle_at DESC NULLS LAST"
+        order_by = ordering.get(sort, default_sort) + ", a.order_no, a.rule"
         shipped_column = "" if has_timestamp else ", NULL AS shipped_at"
         channel_column = "" if has_channel else ", NULL AS current_channel"
         total = o.execute(f"SELECT count(*) {base}{where}", a).fetchone()[0]
         rows = [dict(r) for r in o.execute(
-            f"SELECT a.*{shipped_column}{channel_column}, coalesce(s.status,'open') state, s.assignee, s.updated_at handle_at "
+            f"SELECT a.*{shipped_column}{channel_column} "
             f"{base}{where} ORDER BY {order_by} LIMIT ? OFFSET ?", a + [size, off]).fetchall()]
         summ = [dict(r) for r in o.execute(
             f"SELECT a.rule, a.rule_cn, a.level, count(*) n {base}{where} GROUP BY 1,2,3 ORDER BY n DESC",
             a).fetchall()]
+    _with_transport_times(rows)
     return {"total": total, "page": page, "size": size, "rows": rows, "summary": summ}
 
 
 class AlertTarget(BaseModel):
     order_no: str
     rule: str
+    first_seen_at: str | None = None
 
 
 class ActionIn(AlertTarget):
     action: str
     note: str = Field(default="", max_length=2000)
-    assignee: str = ""
+    handler_name: str = Field(default="", max_length=64)
 
 
 class BatchActionIn(BaseModel):
     action: str
     items: list[AlertTarget] = Field(min_length=1, max_length=100)
+    handler_name: str = Field(default="", max_length=64)
 
 
-def apply_alert_action(user, action, items, note="", assignee=""):
-    states = {"claim": "claimed", "resolve": "resolved", "archive": "archived",
-              "reopen": "open", "handling": "handling", "note": None}
+def apply_alert_action(user, action, items, note="", handler_name=""):
+    states = {"resolve": "resolved", "archive": "archived"}
     if action not in states:
         raise HTTPException(status_code=400, detail="不支持的预警动作")
-    if action in ("archive", "reopen") and user["role"] not in ("admin", "logistics"):
-        raise HTTPException(status_code=403, detail="归档和重开需要物流或管理员权限")
+    if action == "archive" and user["role"] not in ("admin", "logistics"):
+        raise HTTPException(status_code=403, detail="归档需要物流或管理员权限")
     target_status = states[action]
-    owner = assignee or (user["username"] if action in ("claim", "handling") else None)
-    targets = list(dict.fromkeys((item.order_no, item.rule) for item in items))
+    handler = handler_name.strip() if user["username"] == "open-test" else user["display_name"] or user["username"]
+    if not handler:
+        raise HTTPException(status_code=422, detail="请填写处理人姓名")
+    targets = {(item.order_no, item.rule): item.first_seen_at for item in items}
 
     with core.ops() as o:
         o.execute("BEGIN IMMEDIATE")
-        if not all(o.execute("SELECT 1 FROM alerts WHERE order_no=? AND rule=?", target).fetchone()
-                   for target in targets):
-            raise HTTPException(status_code=404, detail="至少一条预警已变更，请刷新列表后重试")
+        if not all(o.execute(f"""
+            SELECT 1 FROM ({alert_history.current_rows()})
+            WHERE order_no=? AND rule=? AND {visible_alerts()} AND state IN {alert_history.PENDING_STATES}
+              AND (? IS NULL OR first_seen_at=?)
+        """, (*target, seen, seen)).fetchone() for target, seen in targets.items()):
+            raise HTTPException(status_code=409, detail="至少一条预警已结束，请刷新列表后重试")
         for order_no, rule in targets:
             o.execute("""
-                INSERT INTO alert_state (order_no,rule,status,assignee,note,updated_at,updated_by)
-                VALUES (?,?,coalesce(?, 'open'),?,?,?,?)
+                INSERT INTO alert_state (order_no,rule,status,note,updated_at,updated_by,handler_name)
+                VALUES (?,?,?,?,?,?,?)
                 ON CONFLICT(order_no,rule) DO UPDATE SET
-                  status = coalesce(?, alert_state.status),
-                  assignee = coalesce(excluded.assignee, alert_state.assignee),
+                  status = excluded.status,
                   note = coalesce(nullif(excluded.note,''), alert_state.note),
-                  updated_at = excluded.updated_at, updated_by = excluded.updated_by
-            """, (order_no, rule, target_status, owner, note, core.now_iso(), user["username"], target_status))
+                  updated_at = excluded.updated_at, updated_by = excluded.updated_by, handler_name = excluded.handler_name
+            """, (order_no, rule, target_status, note, core.now_iso(), user["username"], handler))
             core.audit(user["username"], f"alert_{action}", f"{order_no}/{rule}",
-                       {"note": note}, connection=o)
-    return {"ok": True, "status": target_status, "assignee": owner, "updated": len(targets)}
+                       {"note": note, "handled_by": handler}, connection=o)
+    return {"ok": True, "status": target_status, "handled_by": handler, "updated": len(targets)}
 
 
 @router.post("/alerts/action")
 def alert_action(body: ActionIn, request: Request):
-    return apply_alert_action(core.require_editor(request), body.action, [body], body.note, body.assignee)
+    return apply_alert_action(core.require_editor(request), body.action, [body], body.note, body.handler_name)
 
 
 @router.post("/alerts/batch")
 def batch_alert_action(body: BatchActionIn, request: Request):
-    return apply_alert_action(core.require_editor(request), body.action, body.items)
+    return apply_alert_action(core.require_editor(request), body.action, body.items, handler_name=body.handler_name)
 
 
 @router.post("/orders/{order_no}/notes")

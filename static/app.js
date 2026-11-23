@@ -10,13 +10,21 @@ const dt = s => s ? String(s).replace('T', ' ').slice(0, 16) : '—';
 const trackTime = (local, utc) => local ||
   (utc && utc !== 'NaT' ? `${String(utc).replace('T', ' ').slice(0, 19)} UTC` : '时间未提供');
 const measure = (value, unit = '') => value == null ? '—' : fmt1(value) + unit;
+const durationText = value => {
+  if (value == null || !Number.isFinite(value) || value < 0) return '—';
+  const minutes = Math.floor(value);
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours} 小时 ${minutes % 60} 分钟` :
+    `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
+};
 const platformName = code => META?.platformNames?.[code] || code || '—';
 const levelTone = level => level === '紧急' ? 'e' : level === '高' ? 'h' : 'm';
 const states = { open: ['gray', '待处理'], claimed: ['blue', '已认领'], handling: ['purple', '处理中'],
-  resolved: ['ok', '已解决'], archived: ['m', '已归档'] };
-const actions = { claim: '认领', handling: '开始处理', resolve: '标记解决', archive: '归档', reopen: '重开' };
+  resolved: ['ok', '已解决'], recovered: ['ok', '已不再命中'], archived: ['m', '已归档'] };
+const actions = { resolve: '标记解决', archive: '归档' };
 const allowedActions = () => Object.entries(actions).filter(([key]) =>
-  ME.can_edit && (!['archive', 'reopen'].includes(key) || ['admin', 'logistics'].includes(ME.role)));
+  ME.can_edit && (key !== 'archive' || ['admin', 'logistics'].includes(ME.role)));
 const stateBadge = state => {
   const [tone, label] = states[state] || ['gray', state];
   return `<span class="badge ${tone}">${esc(label)}</span>`;
@@ -192,10 +200,10 @@ function showView(v) {
   });
   $('#crumb').textContent = VIEW_META[v];
   setTopMeta(META?.range.end);
-  history.replaceState(null, '', '#' + (v === 'track' && trackMode === 'alerts' ? 'alerts' : v));
+  history.replaceState(null, '', '#' + (v === 'track' && trackMode !== 'tracking' ? trackMode : v));
   window.scrollTo({ top: 0 });
   resizeVisibleCharts();
-  run({ dash: loadDash, track: trackMode === 'alerts' ? loadAlerts : loadTrack,
+  run({ dash: loadDash, track: trackMode === 'tracking' ? loadTrack : loadAlerts,
     channels: loadChannels, rules: loadRules }[v]);
 }
 
@@ -718,10 +726,10 @@ function drawRank(id, rows, limit, onClick) {
 let TF = null;
 let AF = null;
 let trackRows = [];
+let trackPage = 1;
 let renderedTrack = null;
 let alertRows = [];
 let alertPage = 1;
-const pendingStates = 'open,claimed,handling';
 const trackingGroups = () => [...new Map(META.trackStatuses.map(row => [row.status, row.label]))]
   .map(([v, t]) => ({ v, t }));
 const ruleOptions = () => META.ruleOptions || META.rules.map(row => ({ v: row.rule, t: row.rule_cn }));
@@ -751,9 +759,21 @@ const coverageOptions = [
 
 function setTrackMode(mode) {
   if (ME.preview) mode = 'tracking';
+  if (trackMode !== mode && mode !== 'tracking') {
+    $('#alertBody').replaceChildren();
+    $('#alertChips').replaceChildren();
+    $('#alertPager').replaceChildren();
+    alertRows = [];
+  }
   trackMode = mode;
   $('#trackingPane').hidden = mode !== 'tracking';
-  $('#alertsPane').hidden = mode !== 'alerts';
+  $('#alertsPane').hidden = mode === 'tracking';
+  const archived = mode === 'archive';
+  $('#alertListTitle').textContent = archived ? '归档列表' : '预警处理清单';
+  $('#alertListNote').textContent = archived ? '按归档时间从近到远' :
+    '按出库时间从近到远 · Postnet 预警暂缓显示';
+  $('#alertBatch').hidden = $('#alertSelectColumn').hidden = archived;
+  $('#alertHandlerColumn').hidden = !archived;
   document.querySelectorAll('#trackTabs button').forEach(btn =>
     btn.setAttribute('aria-pressed', String(btn.dataset.mode === mode)));
 }
@@ -928,6 +948,7 @@ async function loadTrack(page = 1, fromSearch = false) {
     return;
   }
   trackRows = d.rows;
+  trackPage = d.page;
   lastTrackingQuery = query || '';
   status.textContent = ME.preview && !query ? '' :
     `${d.snapshotFiltersSkipped ? '离线快照暂不可按周次筛选 · ' :
@@ -945,12 +966,12 @@ async function loadTrack(page = 1, fromSearch = false) {
         r.回补状态 === 'empty' ? '已查询 · 未返回轨迹' :
         r.已签收 ? '已签收 · 轨迹未入库' :
         r.签出时间 ? '已出库 · 待同步轨迹' : undefined)}</td>
-      ${ME.preview ? '' : `<td>${r.主预警名称 ? `<span class="badge ${levelTone(r.主预警级别)}">${esc(r.主预警名称)}</span>
-      ${r.预警数 > 1 ? `<small class="cell-sub">另有 ${fmt(r.预警数 - 1)} 条</small>` : ''}` : '—'}</td>`}
+      ${ME.preview ? '' : `<td>${trackingAlerts(r)}</td>`}
       <td class="mono">${dt(r.签出时间)}</td>
+      <td>${durationText(r.运输分钟)}</td>
       <td><span class="cell-truncate" title="${esc(r.最新描述 || '')}">${esc(r.最新描述 || '—')}</span>
         <small class="cell-sub mono">${r.最新事件当地时间 || r.最新事件时间 ? esc(trackTime(r.最新事件当地时间, r.最新事件时间)) : '—'}${r.逐条事件数 ? ` · ${fmt(r.逐条事件数)} 条事件` : ''}</small></td></tr>`).join('') :
-    blankRow(ME.preview ? 6 : 7, ME.preview && !query ? '输入完整单号查询物流轨迹' : '没有匹配的履约单');
+    blankRow(ME.preview ? 7 : 8, ME.preview && !query ? '输入完整单号查询物流轨迹' : '没有匹配的履约单');
   $('#trackBody').closest('.tblwrap').scrollTop = 0;
   if (d.rows.length && (query ? d.total === 1 : d.page === 1)) {
     const selection = pendingRequests.get('track');
@@ -979,14 +1000,10 @@ function prepareAlerts() {
   if (AF) return;
   AF = makeFilters($('#alertFilters'), [
     ...monitoringFilterDefs(true),
-    { type: 'select', label: '处理状态', key: 'state', options: [
-      { v: pendingStates, t: '待跟进（待处理、已认领、处理中）' },
-      ...Object.entries(states).map(([v, [, t]]) => ({ v, t }))] },
     { type: 'select', label: '预警规则', key: 'rule', options: ruleOptions() },
     { type: 'select', label: '级别', key: 'level', options: ['紧急', '高', '中'] },
     { type: 'select', label: '命中范围', key: 'main_only', options: [{ v: 'true', t: '仅主预警' }] },
   ], () => { updateSubstates(AF); run(loadAlerts); });
-  AF.state.value = pendingStates;
   updateSubstates(AF);
 }
 
@@ -1008,15 +1025,28 @@ const alertStyles = {
 };
 const alertStyle = rule => Object.hasOwn(alertStyles, rule) ? alertStyles[rule] : ['blue', 'alert'];
 
+function trackingAlerts(row) {
+  const current = row.主预警名称 ? `<span class="badge ${levelTone(row.主预警级别)}">${esc(row.主预警名称)}</span>
+    ${row.预警数 > 1 ? `<small class="cell-sub">另有 ${fmt(row.预警数 - 1)} 条待处理</small>` : ''}` : '';
+  const past = row.历史预警;
+  const previous = past ? `<small class="cell-sub"><span class="badge ok">${past.state === 'resolved' ? '已解决' : '已不再命中'}</span>
+    ${esc(past.rule_cn || past.rule)}${past.total > 1 ? ` · 共 ${fmt(past.total)} 条` : ''}
+    ${past.handled_by ? ` · ${esc(past.handled_by)}` : ''}</small>` : '';
+  return current + previous || '—';
+}
+
 async function loadAlerts(page = 1) {
+  const mode = trackMode;
+  const archived = mode === 'archive';
   await loadMeta();
+  if (VIEW !== 'track' || trackMode !== mode) return;
   prepareAlerts();
-  const d = await latest('alerts', '/api/alerts?' + qs(readF(AF), page, 40));
-  if (!d) return;
+  const d = await latest('alerts', '/api/alerts?' + qs({ ...readF(AF), view: archived ? 'archive' : 'pending' }, page, 40));
+  if (!d || VIEW !== 'track' || trackMode !== mode) return;
   if (!d.rows.length && d.total && page > 1) return loadAlerts(Math.ceil(d.total / d.size));
   alertRows = d.rows;
   alertPage = d.page;
-  AF._info.textContent = `共 ${fmt(d.total)} 条命中`;
+  AF._info.textContent = `共 ${fmt(d.total)} 条${archived ? '归档' : '待处理'}`;
   const categories = $('#alertChips');
   const restoreFocus = categories.contains(document.activeElement) ? document.activeElement.dataset.alertRule : '';
   categories.innerHTML = d.summary.slice(0, 7).map(r => {
@@ -1029,15 +1059,17 @@ async function loadAlerts(page = 1) {
     (button || AF.rule).focus({preventScroll: true});
   }
   $('#alertBody').innerHTML = d.rows.length ? d.rows.map((r, index) => `
-    <tr><td class="check"><input type="checkbox" data-alert-index="${index}" aria-label="选择这条预警" ${ME.can_edit ? '' : 'disabled'}></td>
+    <tr>${archived ? '' : `<td class="check"><input type="checkbox" data-alert-index="${index}" aria-label="选择这条预警" ${ME.can_edit ? '' : 'disabled'}></td>`}
       <td>${orderButton(r.order_no, r.tracking_no)}</td>
       <td class="mono">${esc(r.shipped_at || r.shipped_date || '—')}</td>
+      <td>${durationText(r.transport_minutes)}</td>
       <td><span class="badge ${levelTone(r.level)}">${esc(r.level)}</span> ${statusPill(r.rule_cn, alertStyle(r.rule))}<small class="cell-sub">${r.is_main ? '主预警' : '次预警'} · ${esc(r.category || '—')}</small></td>
       <td>${esc(r.current_channel || '—')}</td>
       <td>${esc(r.carrier || '—')}<small class="cell-sub">${esc(r.country || '—')}</small></td>
       <td>${trackBadge(r.track_status, trackingGroups().find(row => row.v === r.track_status)?.t, r.track_sub)}</td>
-      <td>${measure(r.days, ' 天')}</td><td>${stateBadge(r.state)}</td><td>${esc(r.assignee || '—')}</td>
-    </tr>`).join('') : blankRow(10, '没有符合条件的预警');
+      <td>${measure(r.days, ' 天')}</td>
+      ${archived ? `<td>${esc(r.handled_by || '—')}<small class="cell-sub">${esc(syncTime(r.handle_at))}</small></td>` : ''}
+    </tr>`).join('') : blankRow(9, archived ? '没有符合条件的归档记录' : '没有符合条件的待处理预警');
   pager($('#alertPager'), d.total, d.page, d.size, p => run(() => loadAlerts(p)));
   refreshSelection();
 }
@@ -1045,19 +1077,38 @@ async function loadAlerts(page = 1) {
 async function applyBatch() {
   const action = $('#batchAction').value;
   const items = [...$('#alertBody').querySelectorAll('[data-alert-index]:checked')].map(input => {
-    const { order_no, rule } = alertRows[Number(input.dataset.alertIndex)];
-    return { order_no, rule };
+    const { order_no, rule, first_seen_at } = alertRows[Number(input.dataset.alertIndex)];
+    return { order_no, rule, first_seen_at };
   });
   if (!action || !items.length) return;
   $('#applyBatch').disabled = true;
   try {
-    const result = await jsonPost('/api/alerts/batch', { action, items });
-    toast(`已更新 ${result.updated} 条预警 · ${actions[action]}`);
+    const handler = await alertHandler(action);
+    if (handler == null) return;
+    const result = await jsonPost('/api/alerts/batch', { action, items, handler_name: handler });
+    toast(`已${actions[action]} ${result.updated} 条预警`);
     invalidatePages();
     await Promise.all([loadAlerts(alertPage), loadActivity()]);
   } finally {
     refreshSelection();
   }
+}
+
+let recentAlertHandler = '';
+async function alertHandler(action) {
+  if (!ME.openTest) return '';
+  const dialog = $('#alertHandlerDialog');
+  const input = $('#alertHandlerName');
+  $('#alertHandlerTitle').textContent = actions[action];
+  input.value = recentAlertHandler;
+  input.setCustomValidity('');
+  dialog.returnValue = '';
+  const confirmed = new Promise(resolve => dialog.addEventListener('close', () =>
+    resolve(dialog.returnValue === 'confirm' ? input.value.trim() : null), { once: true }));
+  dialog.showModal();
+  const name = await confirmed;
+  if (name) recentAlertHandler = name;
+  return name;
 }
 
 /* ================= 渠道时效 ================= */
@@ -1600,7 +1651,7 @@ function setDrawerOrderLink(no) {
 }
 
 function showOrderSummary(no, trigger) {
-  const alert = trackMode === 'alerts' ? alertRows.find(row => row.order_no === no) : null;
+  const alert = trackMode !== 'tracking' ? alertRows.find(row => row.order_no === no) : null;
   const order = trackMode === 'tracking' ? trackRows.find(row => row.履约单号 === no) : null;
   const channel = order?.当前渠道 || alert?.current_channel || order?.物流商 || alert?.carrier;
   const country = order?.目的国中文 || alert?.country;
@@ -1697,18 +1748,26 @@ async function loadOrderDetail(no, path, refresh = false) {
     ] : [['最近查询', dt(o.查询时间)]]),
   ];
 
-  const alerts = (d.alerts || []).map(a => `
+  const isPending = a => a.is_current && ['open', 'claimed', 'handling'].includes(a.state);
+  const alertCard = (a, pending) => `
     <div class="note">
       <div class="alert-detail">
-        <span class="badge ${levelTone(a.level)}">${esc(a.level)}</span>${statusPill(a.rule_cn, alertStyle(a.rule))}
-        <small>${a.is_main ? '主预警' : '次预警'} · ${measure(a.days, ' 天')}</small>
-        ${stateBadge(a.state)}
+        ${a.level ? `<span class="badge ${levelTone(a.level)}">${esc(a.level)}</span>` : ''}
+        ${statusPill(a.rule_cn || a.rule, alertStyle(a.rule))}
+        <small>${a.is_main == null ? '' : a.is_main ? '主预警' : '次预警'}${a.days == null ? '' : ` · ${measure(a.days, ' 天')}`}</small>
+        ${pending ? '' : stateBadge(a.state)}
       </div>
-      <p>${esc(a.evidence || '暂无附加证据')}${a.assignee ? ` · 负责人 ${esc(a.assignee)}` : ''}</p>
+      ${a.evidence ? `<p>${esc(a.evidence)}</p>` : ''}
+      ${a.handled_by ? `<p>处理人 ${esc(a.handled_by)} · ${esc(syncTime(a.handle_at))}</p>` : ''}
+      ${!pending && a.first_seen_at ? `<p>首次留痕 · ${esc(dt(a.first_seen_at))}</p>` : ''}
+      ${a.cleared_at ? `<p>不再命中 · ${esc(syncTime(a.cleared_at))}</p>` : ''}
       ${a.handle_note ? `<p>${esc(a.handle_note)}</p>` : ''}
-      <div class="actrow">${allowedActions().map(([key, label]) =>
-        `<button type="button" class="btn ghost sm" data-rule="${esc(a.rule)}" data-act="${key}">${label}</button>`).join('')}</div>
-    </div>`).join('') || '<p class="note">该单没有命中预警</p>';
+      ${pending ? `<div class="actrow">${allowedActions().map(([key, label]) =>
+        `<button type="button" class="btn ghost sm" data-rule="${esc(a.rule)}" data-seen="${esc(a.first_seen_at)}" data-act="${key}">${label}</button>`).join('')}</div>
+      ` : ''}
+    </div>`;
+  const activeAlerts = (d.alerts || []).filter(isPending).map(a => alertCard(a, true)).join('');
+  const pastAlerts = (d.alerts || []).filter(a => !isPending(a)).map(a => alertCard(a, false)).join('');
 
   const milestoneLabels = { InfoReceived: '收到运单信息', Departure: '起运', Arrival: '到达',
     Returning: '退运中', Returned: '已退回' };
@@ -1739,7 +1798,8 @@ async function loadOrderDetail(no, path, refresh = false) {
 
   $('#dBody').innerHTML = `
     ${orderFields(kv)}
-    ${ME.preview ? '' : `<div class="sect">业务预警</div>${alerts}`}
+    ${ME.preview ? '' : `<div class="sect">待处理预警</div>${activeAlerts || '<p class="note">当前没有待处理预警</p>'}
+      ${pastAlerts ? `<div class="sect">历史预警</div>${pastAlerts}` : ''}`}
     <div class="sect drawer-section">
       <span>物流时间线</span>
       ${o.单号归一 ? `<a href="https://t.17track.net/zh-cn#nums=${encodeURIComponent(o.单号归一)}" target="_blank" rel="noopener noreferrer">在 17TRACK 查看 ↗</a>` : ''}
@@ -1781,11 +1841,14 @@ async function loadOrderDetail(no, path, refresh = false) {
     b.onclick = () => run(async () => {
       b.disabled = true;
       try {
-        await jsonPost('/api/alerts/action', { order_no: no, rule: b.dataset.rule, action: b.dataset.act });
-        toast(`处理状态已更新 · ${actions[b.dataset.act]}`);
+        const handler = await alertHandler(b.dataset.act);
+        if (handler == null) return;
+        await jsonPost('/api/alerts/action', { order_no: no, rule: b.dataset.rule,
+          first_seen_at: b.dataset.seen || null, action: b.dataset.act, handler_name: handler });
+        toast(`已${actions[b.dataset.act]}`);
         invalidatePages();
         await refreshOrder(no);
-        await Promise.all([loadActivity(), trackMode === 'alerts' ? loadAlerts(alertPage) : null]);
+        await Promise.all([loadActivity(), trackMode === 'tracking' ? loadTrack(trackPage) : loadAlerts(alertPage)]);
       } finally { b.disabled = false; }
     });
   });
@@ -1848,7 +1911,6 @@ run(async function boot() {
   $('#openPending').onclick = () => run(async () => {
     await loadMeta();
     prepareAlerts();
-    AF.state.value = pendingStates;
     setTrackMode('alerts');
     showView('track');
   });
@@ -1902,7 +1964,6 @@ run(async function boot() {
       await loadMeta();
       prepareAlerts();
       AF.rule.value = button.dataset.ruleTrack;
-      AF.state.value = '';
       setTrackMode('alerts');
       showView('track');
     });
@@ -1927,6 +1988,8 @@ run(async function boot() {
   ].map(key => [key, row => row[key]]).concat([
     ['平台名称', row => platformName(row.平台)], ['客户下单（北京时间）', row => row.支付时间],
     ['履约单创建（北京时间）', row => row.创建时间], ['出库（北京时间）', row => row.签出时间],
+    ['运输时间', row => durationText(row.运输分钟)],
+    ['历史预警', row => row.历史预警?.rule_cn], ['处理人', row => row.历史预警?.handled_by],
     ['ERP / WMS 妥投（原始值）', row => row.签收时间], ['WMS 时间口径', row => row.WMS时间口径],
     ['妥投统计来源', row => row.妥投统计来源],
     ['17TRACK 妥投（当地时间或标注 UTC）', row => row.签收当地时间 || row.承运商签收时间 ?
@@ -1934,10 +1997,11 @@ run(async function boot() {
     ['最新轨迹（当地时间或标注 UTC）', row => row.最新事件当地时间 || row.最新事件时间 ?
       trackTime(row.最新事件当地时间, row.最新事件时间) : ''],
   ]), trackRows);
-  $('#exportAlerts').onclick = () => exportCsv('预警处理-本页', [
+  $('#exportAlerts').onclick = () => exportCsv(trackMode === 'archive' ? '归档预警-本页' : '预警处理-本页', [
     ['履约单号', row => row.order_no], ['运单号', row => row.tracking_no], ['预警', row => row.rule_cn],
     ['履约出库时间（北京时间）', row => row.shipped_at || row.shipped_date],
-    ['级别', row => row.level], ['处理状态', row => states[row.state]?.[1]], ['负责人', row => row.assignee],
+    ['级别', row => row.level], ['运输时间', row => durationText(row.transport_minutes)],
+    ...(trackMode === 'archive' ? [['处理人', row => row.handled_by], ['归档时间', row => syncTime(row.handle_at)]] : []),
     ['当前物流渠道', row => row.current_channel], ['后台物流商', row => row.carrier], ['异常持续天数', row => row.days],
   ], alertRows);
   $('#exportChannels').onclick = () => exportCsv('渠道时效-' + TIMING_BASIS[channelBasis].label, [
@@ -1951,8 +2015,18 @@ run(async function boot() {
   ], channelRows);
   $('#dClose').onclick = closeDrawer;
   $('#mask').onclick = closeDrawer;
+  $('#alertHandlerCancel').onclick = () => $('#alertHandlerDialog').close();
+  $('#alertHandlerName').oninput = event => event.target.setCustomValidity('');
+  $('#alertHandlerForm').onsubmit = event => {
+    const input = $('#alertHandlerName');
+    if (!input.value.trim()) {
+      event.preventDefault();
+      input.setCustomValidity('请填写处理人姓名');
+      input.reportValidity();
+    }
+  };
   document.addEventListener('keydown', event => {
-    if (event.key !== 'Escape') return;
+    if (event.key !== 'Escape' || $('#alertHandlerDialog').open) return;
     if ($('#drawer').classList.contains('on')) closeDrawer();
     for (const filter of document.querySelectorAll('.multi-filter[open]')) {
       filter.open = false;
@@ -1966,9 +2040,9 @@ run(async function boot() {
   });
   $('#logout').onclick = () => run(async () => { await api('/api/logout', { method: 'POST' }); location.href = '/login'; });
   const v = (location.hash || '').replace('#', '');
-  if (v === 'alerts') setTrackMode('alerts');
+  if (v === 'alerts' || v === 'archive') setTrackMode(v);
   if (v === 'detailed') openTracking({ coverage: 'detailed', sort: '逐条事件数' });
-  else showView(v === 'alerts' ? 'track' : VIEW_META[v] ? v : 'dash');
+  else showView(v === 'alerts' || v === 'archive' ? 'track' : VIEW_META[v] ? v : 'dash');
   if (!ME.preview && v !== 'rules') run(loadActivity);
   window.addEventListener('resize', resizeVisibleCharts);
 });

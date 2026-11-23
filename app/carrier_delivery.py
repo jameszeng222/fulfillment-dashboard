@@ -16,6 +16,14 @@ def elapsed_minutes(start, end):
                 THEN date_diff('microsecond',{start},{end}) / 60000000.0 END"""
 
 
+def transport_minutes(alias, delivered):
+    end = f"""CASE WHEN {alias}.{DELIVERED_BJ} IS NOT NULL THEN {alias}.{DELIVERED_BJ}
+                    WHEN {alias}.已签收=0 AND {alias}.状态 IS DISTINCT FROM '已完成'
+                         AND NOT ({delivered})
+                    THEN timezone('Asia/Shanghai', current_timestamp) END"""
+    return elapsed_minutes(f"{alias}.签出时间", end)
+
+
 def reporting_facts(con, facts, *, page_only=False):
     where = f"WHERE 单号 IN (SELECT 单号归一 FROM {facts})" if page_only else ""
     statuses = f"(SELECT * FROM trk_status {where})" if where else "trk_status"

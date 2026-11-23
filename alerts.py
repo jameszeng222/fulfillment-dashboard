@@ -38,7 +38,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from app import core, rules
+from app import alert_history, core, rules
 from app.carrier_delivery import DELIVERED_UTC, reporting_facts
 from app.channel_timing import ONLINE_START, online_scan_join, timing_start
 from app.order_time import delivery_facts
@@ -267,7 +267,7 @@ def build(con, asof: str | None):
 
 def push_to_ops(dcon):
     """把 fct_alert 镜像到 SQLite 的 alerts 表，供 API 直接查询。
-    alert_state（处理状态）不受影响 —— 重算预警不会清掉人已经处理过的记录。"""
+    不再命中的预警及其处理结果保留在 alert_history。"""
     ops = ROOT / "ops.db"
     if not ops.exists():
         print("  ops.db 不存在，跳过镜像（先跑 python init_ops.py）")
@@ -275,6 +275,7 @@ def push_to_ops(dcon):
     with closing(sqlite3.connect(ops, timeout=15)) as db:
         db.execute("PRAGMA journal_mode=WAL")
         with db:
+            db.execute("BEGIN IMMEDIATE")
             n = update_alert_mirror(dcon, db, computed=False)
     print(f"  已镜像到 ops.db: {n:,} 条预警")
 
@@ -319,6 +320,27 @@ def migrate_alert_order_fields():
         db.executemany(f"UPDATE alerts SET {assignments} WHERE order_no=?", values)
 
 
+def migrate_alert_history():
+    with core.ops() as db:
+        db.execute("BEGIN IMMEDIATE")
+        alert_history.ensure_schema(db)
+        db.execute("""UPDATE alerts SET first_seen_at=coalesce(synced_at,?)
+                   WHERE first_seen_at IS NULL""", (core.now_iso(),))
+        # Legacy operations can still identify manually handled warnings whose
+        # rule evidence was already overwritten by an older mirror refresh.
+        legacy = db.execute(f"""
+            SELECT s.order_no, s.rule, s.status, {alert_history.HANDLER}, s.updated_at, s.note
+            FROM alert_state s WHERE s.status IN {alert_history.FINAL_STATES}
+              AND NOT EXISTS (SELECT 1 FROM alerts a WHERE a.order_no=s.order_no AND a.rule=s.rule)
+        """).fetchall()
+        db.executemany(f"""
+            INSERT INTO alert_history (order_no,rule,rule_cn,category,{alert_history.HISTORY_METADATA})
+            VALUES (?,?,?,?,?,?,?,?,NULL)
+        """, [(no, rule, RULE_CN.get(rule, rule), RULE_GROUP.get(rule), status, handler, at, note)
+              for no, rule, status, handler, at, note in legacy])
+        db.executemany("DELETE FROM alert_state WHERE order_no=? AND rule=?", [(r[0], r[1]) for r in legacy])
+
+
 def update_alert_mirror(dcon, db, *, computed=True):
     table = "computed_alerts" if computed else "fct_alert"
     rows = dcon.execute(f"""
@@ -328,16 +350,22 @@ def update_alert_mirror(dcon, db, *, computed=True):
                a.评估基准日::VARCHAR, {', '.join(ALERT_ORDER_FIELDS.values())}
         FROM {table} a LEFT JOIN {core.order_facts(dcon)} o USING (履约单号)
     """).fetchall()
-    now = datetime.now().isoformat(timespec="seconds")
-    db.execute("DELETE FROM alerts")
+    now = core.now_iso()
     add_alert_order_fields(db)
+    alert_history.ensure_schema(db)
+    db.execute("CREATE TEMP TABLE next_alerts AS SELECT * FROM alerts WHERE 0")
+    db.execute("CREATE UNIQUE INDEX next_alerts_key ON next_alerts(order_no,rule)")
     db.executemany(
-        "INSERT OR REPLACE INTO alerts (order_no,rule,rule_cn,category,level,is_main,evidence,days,"
+        "INSERT OR REPLACE INTO next_alerts (order_no,rule,rule_cn,category,level,is_main,evidence,days,"
         "order_status,carrier,warehouse,country,tracking_no,track_status,track_sub,"
         f"created_date,shipped_date,base_date,{','.join(ALERT_ORDER_FIELDS)},synced_at) "
         f"VALUES ({','.join('?' for _ in range(19 + len(ALERT_ORDER_FIELDS)))})",
         [(r[0], r[1], r[2], r[3], r[4], 1 if r[5] else 0, r[6], r[7], r[8], r[9], r[10], r[11], r[12],
           *r[13:], now) for r in rows])
+    alert_history.carry_history(db, now)
+    db.execute("DELETE FROM alerts")
+    db.execute("INSERT INTO alerts SELECT * FROM next_alerts")
+    db.execute("DROP TABLE next_alerts")
     return len(rows)
 
 

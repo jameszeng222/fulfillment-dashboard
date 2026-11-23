@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from app import cloud_login, core, ops_auth
+from app import alert_history, cloud_login, core, ops_auth
 from app.main import app
 from init_ops import SCHEMA, hash_pw
 
@@ -80,6 +80,7 @@ class OpsTests(unittest.TestCase):
         self.enterContext(patch.object(core, "OPS_DB", db))
         self.enterContext(patch.dict("os.environ", ENV))
         self.enterContext(patch("app.ops_gateway.opener", self))
+        self.enterContext(patch("app.api._with_transport_times"))
         self.browser = Browser()
         self.token_calls = 0
         self.usage = []
@@ -320,12 +321,49 @@ class OpsTests(unittest.TestCase):
             change = {"order_no": "TEST123", "rule": "sample", "action": "resolve"}
             path = "/api/alerts/action"
             self.assertEqual(visitor.request(path, "POST", change, {"origin": HUB})[0], 403)
+            self.assertEqual(visitor.request(path, "POST", change, {"origin": SITE})[0], 422)
+            change["handler_name"] = "测试处理人"
             status, _, result = visitor.request(path, "POST", change, {"origin": SITE, "cookie": "fd_session=old"})
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(result)["status"], "resolved")
             with core.ops() as db:
-                action = db.execute("SELECT status, updated_by FROM alert_state").fetchone()
-                self.assertEqual(tuple(action), ("resolved", "open-test"))
+                action = db.execute("SELECT status, updated_by, handler_name FROM alert_state").fetchone()
+                self.assertEqual(tuple(action), ("resolved", "open-test", "测试处理人"))
+
+    def test_alert_lifecycle_persists_closed_incidents_and_reopens_recurrence(self):
+        with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):
+            with core.ops() as db:
+                db.executemany("""INSERT INTO alerts(order_no,rule,rule_cn,first_seen_at,synced_at)
+                                  VALUES (?,'sample','测试预警','2026-11-15','2026-11-22')""",
+                               [("A",), ("B",), ("C",)])
+            path = "/api/alerts/action"
+            def post(order, action):
+                return self.browser.request(path, "POST", {"order_no": order, "rule": "sample",
+                    "action": action, "handler_name": "物流测试", "first_seen_at": "2026-11-15"}, {"origin": SITE})[0]
+            def listing(suffix=""):
+                status, _, result = self.browser.request("/api/alerts" + suffix)
+                self.assertEqual(status, 200, result)
+                return json.loads(result)["rows"]
+
+            self.assertEqual(post("A", "archive"), 200)
+            self.assertEqual(post("B", "resolve"), 200)
+            self.assertEqual(post("B", "archive"), 409)
+            self.assertEqual([row["order_no"] for row in listing()], ["C"])
+            self.assertEqual([(r["order_no"], r["handled_by"]) for r in listing("?view=archive")],
+                             [("A", "物流测试")])
+            with core.ops() as db:
+                db.execute("CREATE TEMP TABLE next_alerts AS SELECT * FROM alerts WHERE 0")
+                alert_history.carry_history(db, "2026-11-23")
+                db.execute("DELETE FROM alerts")
+                history = alert_history.resolved_for_orders(db, ["A", "B", "C"])
+                self.assertNotIn("A", history)
+                self.assertEqual((history["B"]["state"], history["B"]["handled_by"]), ("resolved", "物流测试"))
+                self.assertEqual((history["C"]["state"], history["C"]["handled_by"]), ("recovered", None))
+                db.execute("""INSERT INTO alerts(order_no,rule,rule_cn,first_seen_at) VALUES
+                              ('A','sample','测试预警','2026-11-24')""")
+            self.assertEqual([r["order_no"] for r in listing()], ["A"])
+            self.assertEqual([r["order_no"] for r in listing("?view=archive")], ["A"])
+            self.assertEqual(post("A", "resolve"), 409)
 
     def test_alerts_show_newest_dispatch_and_suspend_postnet(self):
         with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):

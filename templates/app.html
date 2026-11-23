@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261123-wms-detail">
+<link rel="stylesheet" href="/static/app.css?v=20261123-alert-history">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -125,6 +125,7 @@
         <div class="tabs" id="trackTabs" aria-label="轨迹监控分类">
           <button type="button" data-mode="tracking" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>运单轨迹</button>
           <button type="button" data-mode="alerts" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg>预警处理 <span class="nav-count" id="alertTabCount"></span></button>
+          <button type="button" data-mode="archive" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg>归档列表</button>
         </div>
         <div class="workspace-stack" id="trackingPane">
         <div class="filters" id="trackFilters"></div>
@@ -140,7 +141,7 @@
             <table class="tbl">
               <thead><tr>
                 <th>履约单号 / 运单号</th><th>当前渠道 / 物流商</th><th>仓库 / 国家 / 平台</th>
-                <th>17TRACK 官方状态</th><th id="trackAlertHeading">业务预警</th><th>出库（北京时间）</th><th>最新轨迹（当地时间）</th>
+                <th>17TRACK 官方状态</th><th id="trackAlertHeading">业务预警</th><th>出库（北京时间）</th><th>运输时间</th><th>最新轨迹（当地时间）</th>
               </tr></thead>
               <tbody id="trackBody"></tbody>
             </table>
@@ -153,20 +154,22 @@
           <div class="chips" id="alertChips"></div>
           <div class="card table-card">
             <div class="ct table-head">
-              <div><h2><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>预警处理清单</h2><p class="tip icon-caption">按出库时间从近到远 · Postnet 预警暂缓显示</p></div>
+              <div><h2><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span><span id="alertListTitle">预警处理清单</span></h2><p class="tip icon-caption" id="alertListNote"></p></div>
               <div class="toolbar">
-                <span id="selectedAlerts" class="tip"></span>
-                <select id="batchAction" aria-label="批量处理动作"><option value="">批量操作</option></select>
-                <button type="button" class="btn sm" id="applyBatch" disabled>应用</button>
+                <div class="toolbar" id="alertBatch">
+                  <span id="selectedAlerts" class="tip"></span>
+                  <select id="batchAction" aria-label="批量处理动作"><option value="">批量操作</option></select>
+                  <button type="button" class="btn sm" id="applyBatch" disabled>应用</button>
+                </div>
                 <button type="button" class="btn ghost sm" id="exportAlerts">导出本页</button>
               </div>
             </div>
             <div class="tblwrap">
               <table class="tbl">
                 <thead><tr>
-                  <th class="check"><input id="selectPage" type="checkbox" aria-label="选择本页预警"></th>
-                  <th>履约单号 / 运单号</th><th aria-sort="descending">履约出库（北京时间）</th><th>业务预警</th><th>当前物流渠道</th><th>后台物流商 / 国家</th>
-                  <th>官方状态</th><th>异常持续</th><th>处理状态</th><th>负责人</th>
+                  <th class="check" id="alertSelectColumn"><input id="selectPage" type="checkbox" aria-label="选择本页预警"></th>
+                  <th>履约单号 / 运单号</th><th>履约出库（北京时间）</th><th>运输时间</th><th>业务预警</th><th>当前物流渠道</th><th>后台物流商 / 国家</th>
+                  <th>官方状态</th><th>异常持续</th><th id="alertHandlerColumn" hidden>处理人 / 归档时间</th>
                 </tr></thead>
                 <tbody id="alertBody"></tbody>
               </table>
@@ -333,7 +336,9 @@
               <tbody>
                 <tr><th scope="row">轨迹覆盖状态</th><td>「已签收 · 轨迹未入库」表示 ERP 有签收记录，本地还没有匹配的承运商轨迹。「已查询 · 未返回轨迹」表示查询已完成且承运商暂无轨迹。「API 账号登记未匹配」表示未在当前 API 账号下匹配到该运单。</td></tr>
                 <tr><th scope="row">物流未上网</th><td>已出库且未妥投，超过配置天数，17TRACK 仍显示「已收到信息」，且关键节点和逐条轨迹均没有有效揽收或运输扫描。「查无此单」和无查询结果归入轨迹覆盖。</td></tr>
-                <tr><th scope="row">主预警与待跟进</th><td>一单可命中多条规则，按规则优先级取主预警。清单按命中记录分页，待跟进数字按待处理、已认领或处理中的履约单去重。Postnet 预警暂停展示，其命中从可见计数中排除。</td></tr>
+                <tr><th scope="row">主预警与待处理</th><td>一单可命中多条规则，按规则优先级展示主预警。待处理数字按仍需处理的履约单去重，Postnet 暂缓显示。</td></tr>
+                <tr><th scope="row">历史预警</th><td>重算后不再命中的预警留在履约单历史中。手动解决记录在运单轨迹显示，归档记录集中在归档列表。两种手动操作都会记录处理人和时间。</td></tr>
+                <tr><th scope="row">运输时间</th><td>从实际出库开始计时，已妥投算到妥投时间，未妥投算到查询时刻。妥投优先 17TRACK，缺失时按仓库时区规则用 ERP / WMS 补算。</td></tr>
                 <tr><th scope="row">时效与预警评估基准</th><td>通常取有效履约单中最新建单日。业务规则中配置为工作日的项目按周一至周五计算，其他项目根据各规则采用小时或自然日。</td></tr>
                 <tr><th scope="row">建单截止与最近导入</th><td>建单截止取有效履约单的最新创建日期。最近导入取 ERP 文件最后一次成功入库的时间。17TRACK 拉取和推送进度在「17TRACK 同步」中查看。</td></tr>
                 <tr><th scope="row">离线快照</th><td>离线时显示最后一次成功同步的总览和已入库轨迹，页面顶部标出快照时间。实时筛选暂不可用时会提示。</td></tr>
@@ -395,7 +400,16 @@
     <footer><button type="button" class="btn ghost" id="settingsCancel">取消</button><button type="submit" class="btn" id="settingsSave">保存并重算</button></footer>
   </form>
 </dialog>
+<dialog class="settings-dialog" id="alertHandlerDialog" aria-labelledby="alertHandlerTitle">
+  <form method="dialog" id="alertHandlerForm">
+    <header><h2 id="alertHandlerTitle"></h2></header>
+    <div class="settings-fields">
+      <label><span>处理人姓名</span><input id="alertHandlerName" maxlength="64" required autofocus></label>
+    </div>
+    <footer><button type="button" class="btn ghost" id="alertHandlerCancel">取消</button><button class="btn" value="confirm">确认</button></footer>
+  </form>
+</dialog>
 
-<script src="/static/app.js?v=20261123-wms-detail" defer></script>
+<script src="/static/app.js?v=20261123-alert-history" defer></script>
 </body>
 </html>
