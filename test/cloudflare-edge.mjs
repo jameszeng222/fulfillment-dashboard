@@ -117,12 +117,16 @@ test("a visitor can open Pages and look up a complete reference without the tunn
   const filtered = await (await get("/api/overview?wh=TEST")).json();
   assert.equal(filtered.kpi.orders, 1);
   assert.equal(filtered.snapshotFiltersSkipped, true);
+  const weekly = await (await get("/api/overview?week=W47")).json();
+  assert.equal(weekly.snapshotFiltersSkipped, true);
   assert.equal((await (await get("/api/channels")).json()).rows.length, 1);
   assert.equal((await (await get("/api/track")).json()).rows.length, 0);
   const query = "?q=" + number;
   const found = await (await get("/api/track" + query)).json();
   assert.equal(found.rows[0].履约单号, id);
   assert.equal(found.snapshotAt, now);
+  const weeklyLookup = await (await get("/api/track" + query + "&week=W47")).json();
+  assert.equal(weeklyLookup.snapshotFiltersSkipped, true);
   const detail = await (await get("/api/orders/" + id + query)).json();
   assert.equal(detail.events[0].描述, "已揽收");
   assert.equal((await get("/api/orders/" + id)).status, 404);

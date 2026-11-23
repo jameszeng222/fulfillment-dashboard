@@ -382,8 +382,34 @@ class OpsTests(unittest.TestCase):
             self.assertEqual(query(**shared, date_basis="shipped", start="2026-11-24T12:10",
                                    end="2026-11-24T12:10"), ["B"])
             self.assertEqual(set(query(start="2026-11-23", end="2026-11-23")), {"A", "B", "C"})
+            self.assertEqual(set(query(week="W48", start="2026-11-23T00:00",
+                                       end="2026-11-23T23:59")), {"A", "B", "C"})
+            self.assertEqual(query(week="W47"), [])
             status, _, _ = self.browser.request("/api/alerts?" + urlencode({
                 "start": "2026-11-23T11:00", "end": "2026-11-23T10:59"}))
+            self.assertEqual(status, 422)
+
+    def test_alerts_business_weeks_use_selected_date_basis(self):
+        with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):
+            with core.ops() as db:
+                db.executemany("""
+                    INSERT INTO alerts(order_no,rule,created_date,created_at,shipped_date)
+                    VALUES (?,'sample',?,?,?)
+                """, [
+                    ("A", "2025-12-28", None, "2026-01-04"),
+                    ("B", None, "2026-01-03T23:59:59", "2026-01-10"),
+                    ("C", "2026-01-04", None, "2026-01-11"),
+                    ("D", "2027-01-02", None, "2027-01-03"),
+                    ("E", "2027-01-03", None, None),
+                ])
+
+            for params, expected in (("week=W1,W53", {"A", "B", "D"}),
+                                     ("week=W2&date_basis=shipped", {"A", "B"}),
+                                     ("week=W1&month=2026-01", {"B"})):
+                status, _, result = self.browser.request("/api/alerts?" + params)
+                self.assertEqual(status, 200, result)
+                self.assertEqual({row["order_no"] for row in json.loads(result)["rows"]}, expected)
+            status, _, _ = self.browser.request("/api/alerts?week=W54")
             self.assertEqual(status, 422)
 
     def test_mcp(self):

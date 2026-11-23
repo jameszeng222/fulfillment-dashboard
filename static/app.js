@@ -304,33 +304,52 @@ function makeTimeRange(onChange) {
   root.setAttribute('role', 'group');
   root.setAttribute('aria-label', '时间范围（北京时间）');
   const fields = {};
-  const inputs = {};
+  const inputs = [];
   const error = el('span', 'filter-time-error');
   error.setAttribute('role', 'status');
   error.hidden = true;
-  for (const [key, label, hour] of [['start', '开始时间', '00:00'], ['end', '结束时间', '23:59']]) {
-    const input = el('input');
-    input.type = 'datetime-local';
-    input.step = '60';
-    input.dataset.key = key;
-    input.setAttribute('aria-label', label + '（北京时间）');
-    input.onchange = () => onChange(1);
-    const field = el('label', 'date-filter');
-    field.append(el('span', '', label), input);
+  for (const [key, label, defaultTime] of [['start', '开始', '00:00'], ['end', '结束', '23:59']]) {
+    const date = el('input');
+    date.type = 'date';
+    date.setAttribute('aria-label', `${label}日期（北京时间）`);
+    const time = el('input');
+    time.type = 'time';
+    time.step = '60';
+    time.disabled = true;
+    time.setAttribute('aria-label', `${label}时分（北京时间）`);
+    time.title = `未填写时默认 ${defaultTime}`;
+    const updateTime = () => {
+      time.disabled = !date.value;
+      time.value = date.value ? time.value || defaultTime : '';
+    };
+    const changed = () => { updateTime(); onChange(1); };
+    date.onchange = changed;
+    time.onchange = changed;
+    const field = el('div', 'date-filter');
+    const dayLabel = el('label', 'date-filter-label');
+    dayLabel.append(el('span', '', label), date);
+    field.append(dayLabel, time);
     root.appendChild(field);
-    inputs[key] = input;
+    inputs.push(date, time);
     fields[key] = {
-      get value() { return input.value; },
+      get value() {
+        if (!date.value || !time.value || time.value === defaultTime) return date.value;
+        return `${date.value}T${time.value}`;
+      },
       set value(value) {
-        input.value = /^\d{4}-\d{2}-\d{2}$/.test(value) ? `${value}T${hour}` : value;
+        const parts = (value || '').split(/[T ]/);
+        date.value = parts[0];
+        time.value = parts[1] || '';
+        updateTime();
       },
     };
   }
   root.append(el('span', 'filter-timezone', '北京时间'), error);
   return {root, fields, validate() {
-    const {start, end} = inputs;
-    const invalidInput = !start.validity.valid || !end.validity.valid;
-    const reversed = Boolean(start.value && end.value && start.value > end.value);
+    const {start, end} = fields;
+    const invalidInput = inputs.some(input => !input.validity.valid);
+    const minute = (value, fallback) => value.length === 10 ? `${value}T${fallback}` : value;
+    const reversed = Boolean(start.value && end.value && minute(start.value, '00:00') > minute(end.value, '23:59'));
     error.hidden = !invalidInput && !reversed;
     error.textContent = invalidInput ? '请填写有效的日期和分钟' : reversed ? '开始时间不能晚于结束时间' : '';
     return error.hidden;
@@ -440,120 +459,27 @@ function pager(host, total, page, size, go) {
 let DF = null;
 let renderedDash = null;
 const trend = { created: [], shipped: [], filters: {}, span: 45, basis: 'created' };
-const weekTrend = { rows: [], span: 12 };
-// 2026 年全年周次表：2025-12-28 为 W1 的周日，2027-01-02 为 W53 的周六。
-const weekYear = '2026';
-const firstWeekSunday = Date.UTC(2025, 11, 28);
-const businessWeeks = Array.from({length: 53}, (_, index) => {
-  const days = Array.from({length: 7}, (_, offset) =>
-    new Date(firstWeekSunday + (index * 7 + offset) * 86_400_000).toISOString().slice(0, 10));
-  return { number: index + 1, label: `W${index + 1}`, start: days[0], end: days[6], days };
-});
-
-function buildWeeklyVolumes(data, filters, dataStart) {
-  const created = new Map(data.daily.map(({day, n}) => [day, n]));
-  const shipped = data.dailyShipped && new Map(data.dailyShipped.map(({day, n}) => [day, n]));
-  const first = [dataStart, data.daily[0]?.day, data.dailyShipped?.[0]?.day]
-    .filter(day => /^\d{4}-\d{2}-\d{2}$/.test(day)).sort()[0];
-  const through = [data.asof, data.daily.at(-1)?.day, data.dailyShipped?.at(-1)?.day]
-    .filter(day => /^\d{4}-\d{2}-\d{2}$/.test(day)).sort().at(-1);
-  if (!first || !through) return [];
-
-  const start = filters.start?.slice(0, 10);
-  const end = filters.end?.slice(0, 10);
-  const months = filters.month || [];
-  const rows = [];
-  for (const week of businessWeeks) {
-    const days = week.days.filter(day => day >= first && day <= through &&
-      (!start || day >= start) && (!end || day <= end) && (!months.length || months.includes(day.slice(0, 7))));
-    if (!days.length) continue;
-    // The source watermark is a date. Its last day may still be importing.
-    const full = days.length === 7 && week.end < through &&
-      !(week.start === start && filters.start.length > 10 && filters.start.slice(11, 16) !== '00:00') &&
-      !(week.end === end && filters.end.length > 10 && filters.end.slice(11, 16) !== '23:59');
-    const sum = source => days.reduce((total, day) => total + (source.get(day) || 0), 0);
-    const row = { ...week, full, coveredDays: days.length, created: sum(created), shipped: shipped ? sum(shipped) : null };
-    const previous = rows.at(-1);
-    if (full && previous?.full && previous.number === row.number - 1) {
-      row.createdChange = weekChange(row.created, previous.created);
-      row.shippedChange = weekChange(row.shipped, previous.shipped);
-    }
-    rows.push(row);
-  }
-  return rows;
-}
-
-function weekChange(current, previous) {
-  return current != null && previous > 0 ? (current - previous) * 100 / previous : null;
-}
-
-function formatWeekChange(change) {
-  return change == null ? '—' : `${change > 0 ? '+' : ''}${fmt1(change)}%`;
-}
-
 function drawWeekCalendar() {
   const body = $('#weekCalendarBody');
   if (body.rows.length) return;
-  body.innerHTML = businessWeeks.map(week => `<tr><th scope="row">${week.label}</th>
-    ${[week.start, week.end, ...week.days].map(day =>
-      `<td class="${day.startsWith(weekYear) ? '' : 'cross-year'}"><time datetime="${day}">${day}</time></td>`).join('')}
-  </tr>`).join('');
-}
-
-function drawWeeklyVolumes() {
-  const last = weekTrend.rows.at(-1);
-  const rows = last && weekTrend.span ?
-    weekTrend.rows.filter(row => row.number > last.number - weekTrend.span) : weekTrend.rows;
-  $('#weeklySummary').hidden = $('#cWeekly').hidden = $('#weeklyDetails').hidden = !last;
-  $('#weeklyEmpty').hidden = Boolean(last);
-  if (!last) {
-    $('#weeklyEmpty').textContent = '当前范围内没有 2026 年业务周数据';
-    return;
-  }
-  $('#weeklyLatest').textContent = `${last.label} · ${last.full ? '完整周' : '部分周'}`;
-  $('#weeklyDates').textContent = `${last.start} 至 ${last.end}` +
-    (last.coveredDays < 7 ? ` · 覆盖 ${last.coveredDays}/7 天` : '');
-  $('#weeklyCreated').textContent = fmt(last.created);
-  $('#weeklyCreatedChange').textContent = `较上周 ${formatWeekChange(last.createdChange)}`;
-  $('#weeklyShipped').textContent = fmt(last.shipped);
-  $('#weeklyShippedChange').textContent = `较上周 ${formatWeekChange(last.shippedChange)}`;
-  $('#weeklyBody').innerHTML = rows.slice().reverse().map(row => `<tr>
-    <th scope="row">${row.label}</th><td>${row.start} 至 ${row.end}</td>
-    <td>${row.full ? '完整周' : '部分周'}</td><td>${fmt(row.created)}</td><td>${formatWeekChange(row.createdChange)}</td>
-    <td>${fmt(row.shipped)}</td><td>${formatWeekChange(row.shippedChange)}</td>
-  </tr>`).join('');
-
-  const chart = initChart('cWeekly');
-  chart.setOption({
-    animation: chartMotion, animationDuration: 230, animationDurationUpdate: 140,
-    grid: { left: 8, right: 12, top: 30, bottom: 6, containLabel: true },
-    legend: { top: 0, right: 0, textStyle: { color: chartTheme.text, fontSize: 11 } },
-    tooltip: { ...chartTip, trigger: 'axis', formatter: points => {
-      const row = rows[points[0]?.dataIndex];
-      if (!row) return '';
-      return `<b>${row.label} · ${row.full ? '完整周' : '部分周'}</b><br>${row.start} 至 ${row.end}<br>` +
-        points.map(point => `${point.marker}${point.seriesName}：${point.value == null ? '—' : fmt(point.value) + ' 单'}`).join('<br>');
-    } },
-    xAxis: { type: 'category', data: rows.map(row => row.label), axisTick: {show: false},
-      axisLine: {lineStyle: {color: chartTheme.grid}}, axisLabel: {color: chartTheme.muted, hideOverlap: true} },
-    yAxis: { type: 'value', splitLine: {lineStyle: {color: chartTheme.grid}},
-      axisLabel: {color: chartTheme.muted, formatter: compactCount} },
-    series: [
-      { name: '建单量', type: 'bar', data: rows.map(row => row.created), barMaxWidth: 25,
-        itemStyle: {color: chartTheme.series[2], borderRadius: [3, 3, 0, 0]} },
-      { name: '出库量', type: 'bar', data: rows.map(row => row.shipped), barMaxWidth: 25,
-        itemStyle: {color: '#319283', borderRadius: [3, 3, 0, 0]} },
-    ],
-  });
-  resizeVisibleCharts();
+  const weeks = META.filterOptions.week || [];
+  body.innerHTML = weeks.map(week => {
+    const sunday = Date.parse(week.start + 'T00:00:00Z');
+    const days = Array.from({length: 7}, (_, offset) =>
+      new Date(sunday + offset * 86_400_000).toISOString().slice(0, 10));
+    return `<tr><th scope="row">${esc(week.v)}</th>
+      ${[week.start, week.end, ...days].map(day =>
+        `<td class="${day.startsWith('2026-') ? '' : 'cross-year'}"><time datetime="${esc(day)}">${esc(day)}</time></td>`).join('')}
+    </tr>`;
+  }).join('') || blankRow(10, '暂时无法读取周次表');
 }
 
 function dashFilterDefs() {
   return [
     { type: 'time-range' },
-    ...Object.entries({ month: '月份', wh: '仓库', pf: '平台', cr: '后台物流商',
+    ...Object.entries({ month: '月份', week: '周次', wh: '仓库', pf: '平台', cr: '后台物流商',
       channel: '当前渠道', lastmile: 'C 端渠道', cn: '国家' }).map(([key, label]) =>
-      ({ type: 'multi', key, label, options: META.filterOptions[key] })),
+      ({ type: 'multi', key, label, options: META.filterOptions[key] || [] })),
   ];
 }
 
@@ -609,8 +535,6 @@ async function loadDash() {
   trend.shipped = d.dailyShipped;
   trend.filters = f;
   drawDailyVolume();
-  weekTrend.rows = buildWeeklyVolumes(d, d.snapshotFiltersSkipped ? {} : f, META.range.start);
-  drawWeeklyVolumes();
 
   drawRank('cCarrier', d.byCarrier, 10,
     ME.preview ? null : value => openTracking({ ...f, cr: value }));
@@ -759,7 +683,12 @@ function drawDailyVolume() {
     if (!chart.containPixel('grid', point)) return;
     const date = chart.convertFromPixel({ xAxisIndex: 0 }, point[0]);
     const row = days.find(day => Math.abs(clock(day.day) - date) <= dayMs / 2);
-    if (row) openTracking({ ...trend.filters, start: row.day, end: row.day, date_basis: shipped ? 'shipped' : '' });
+    if (row) {
+      const {start, end} = trend.filters;
+      openTracking({ ...trend.filters, date_basis: shipped ? 'shipped' : '',
+        start: start?.startsWith(row.day) ? start : row.day,
+        end: end?.startsWith(row.day) ? end : row.day });
+    }
   });
 }
 
@@ -1001,7 +930,8 @@ async function loadTrack(page = 1, fromSearch = false) {
   trackRows = d.rows;
   lastTrackingQuery = query || '';
   status.textContent = ME.preview && !query ? '' :
-    `${clearedFilters ? '已切换至全部履约单搜索 · ' : ''}共 ${fmt(d.total)} 单`;
+    `${d.snapshotFiltersSkipped ? '离线快照暂不可按周次筛选 · ' :
+      clearedFilters ? '已切换至全部履约单搜索 · ' : ''}共 ${fmt(d.total)} 单`;
   if (!ME.preview) run(() => loadTrackSummary(f, (d.page === 1 && !trackRowsOnly(f)) || !d.total ? d : null));
   pager($('#trackPager'), d.total, d.page, d.size, p => run(() => loadTrack(p)));
   if (renderedTrack === d) return;
@@ -1456,7 +1386,10 @@ function setRulePane(pane) {
 }
 
 async function loadRules() {
-  if (!$('#rules-definitions').hidden) return drawWeekCalendar();
+  if (!$('#rules-definitions').hidden) {
+    await loadMeta();
+    return drawWeekCalendar();
+  }
   if (!$('#rules-data').hidden) return loadHealth();
   if (!$('#rules-sync').hidden) return refreshSyncStatus();
   if (!$('#rules-dictionary').hidden) {
@@ -1873,7 +1806,7 @@ run(async function boot() {
   if (!ME.preview) $('#currentChannelTip').textContent += ' · 点击渠道查看履约单';
   if (ME.preview) {
     for (const selector of ['[data-v="rules"]', '#openPending',
-      '#openWeekCalendar', '#trackTabs', '#showDetailed', '#exportTrack', '#trackAlertHeading']) {
+      '#trackTabs', '#showDetailed', '#exportTrack', '#trackAlertHeading']) {
       $(selector).hidden = true;
     }
     $('#trackIntro').textContent = '输入完整的履约单号、运单号、订单号或平台订单号，查看物流状态和时间线。';
@@ -1898,20 +1831,6 @@ run(async function boot() {
     dailyBases.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
     drawDailyVolume();
   });
-  const weeklyPeriods = [...document.querySelectorAll('#weeklyPeriod button')];
-  weeklyPeriods.forEach(button => button.onclick = () => {
-    const span = Number(button.dataset.weeks);
-    if (weekTrend.span === span) return;
-    weekTrend.span = span;
-    weeklyPeriods.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
-    if (renderedDash) drawWeeklyVolumes();
-  });
-  $('#openWeekCalendar').onclick = () => {
-    setRulePane('definitions');
-    showView('rules');
-    $('#weekCalendarTitle').focus({preventScroll: true});
-    $('#weekCalendarTitle').scrollIntoView({block: 'start'});
-  };
   document.querySelectorAll('#trackTabs [data-mode]').forEach(btn => btn.onclick = () => {
     setTrackMode(btn.dataset.mode);
     showView('track');

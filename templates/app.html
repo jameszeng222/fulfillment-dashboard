@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261123-weekly">
+<link rel="stylesheet" href="/static/app.css?v=20261123-week-filter">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -101,34 +101,6 @@
           <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg></span>C 端承运商单量</h2><p class="tip icon-caption">客户看到的末端承运商 · 单量前 10</p></div></div><div id="cLastMile"></div></section>
         </div>
         <div class="grid overview-breakdown">
-          <section class="card plot-card wide" aria-labelledby="weeklyTitle">
-            <div class="ct weekly-header">
-              <div><h2 id="weeklyTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>周度建单与出库</h2>
-                <p class="tip icon-caption">2026 年业务周 · 北京时间 · 周日至周六</p></div>
-              <div class="weekly-controls">
-                <div class="tabs period-tabs" id="weeklyPeriod" role="group" aria-label="周度单量范围">
-                  <button type="button" data-weeks="12" aria-pressed="true">近 12 周</button>
-                  <button type="button" data-weeks="0" aria-pressed="false">全部</button>
-                </div>
-                <button type="button" class="btn ghost sm" id="openWeekCalendar">查看周次表</button>
-              </div>
-            </div>
-            <div class="weekly-summary" id="weeklySummary" hidden>
-              <div class="weekly-period"><strong id="weeklyLatest"></strong><p class="tip" id="weeklyDates"></p></div>
-              <div class="weekly-metric"><span class="tip">建单量</span><strong id="weeklyCreated"></strong><span class="tip" id="weeklyCreatedChange"></span></div>
-              <div class="weekly-metric"><span class="tip">出库量</span><strong id="weeklyShipped"></strong><span class="tip" id="weeklyShippedChange"></span></div>
-            </div>
-            <p class="tip" id="weeklyEmpty" role="status">正在读取周度数据…</p>
-            <div class="chart weekly-chart" id="cWeekly" role="img" aria-label="每周建单量与出库量" hidden></div>
-            <details class="weekly-details" id="weeklyDetails" hidden>
-              <summary>查看周度明细</summary>
-              <p class="tip">相邻两个完整周才计算环比。部分周或上周单量为零时显示「—」。</p>
-              <div class="tblwrap"><table class="tbl">
-                <thead><tr><th scope="col">周次</th><th scope="col">起止日期</th><th scope="col">覆盖</th><th scope="col">建单量</th><th scope="col">建单环比</th><th scope="col">出库量</th><th scope="col">出库环比</th></tr></thead>
-                <tbody id="weeklyBody"></tbody>
-              </table></div>
-            </details>
-          </section>
           <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip">单量按创建月份统计 · 物流时效为出库到妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
           <section class="card plot-card status-card" aria-labelledby="statusTitle">
             <div class="ct"><div><h2 id="statusTitle"><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>出库单状态</h2><p class="tip icon-caption">全部出库单状态，含已取消</p></div></div>
@@ -334,7 +306,7 @@
                 <tr><th scope="row">履约单数与总件数</th><td>按履约单号汇总，一张履约单计一单。总件数来自订单明细的商品数量之和，同一平台订单拆成多个履约单时分别计数。</td></tr>
                 <tr><th scope="row">按建单 / 按出库</th><td>日单量按所选口径的北京时间自然日分组。按出库时仅计有签出时间的单，日期和月份也按签出日筛选。点击图中的日期会打开对应口径的履约单列表。</td></tr>
                 <tr><th scope="row">近 45 天与有单日均</th><td>近 45 天从当前口径下最后一个有单日倒推。日均用范围内单量除以有单的天数，峰值取其中单量最高的一天。</td></tr>
-                <tr><th scope="row">周度建单与出库</th><td>按下方业务周表归组。建单量按创建日期统计，出库量按签出日期统计，筛选分别应用于对应口径。环比 =（本周单量 − 上周单量）÷ 上周单量。仅比较相邻且覆盖整周的两周，上周为零或任一周覆盖不足时显示「—」。</td></tr>
+                <tr><th scope="row">周次与日期范围</th><td>周次可多选，按下方 2026 年业务周表筛选。周次与月份、日期范围取交集。下拉选项中的数字是按建单日期统计的全量有效履约单数。只选日期时，开始默认 00:00，结束默认 23:59，包含该分钟内的记录。</td></tr>
                 <tr><th scope="row">渠道与物流商</th><td>「后台物流商」是 ERP 物流服务商，「当前渠道」用于配置 SLA，「C 端渠道」是客户可见的承运商名称。三个字段分别筛选。</td></tr>
                 <tr><th scope="row">取消单</th><td>只纳入「出库单状态」统计。总览单量、日单量、时效、轨迹清单及业务预警均按有效履约单统计。</td></tr>
               </tbody>
@@ -342,7 +314,7 @@
           </section>
           <section class="card table-card definitions-card" aria-labelledby="weekCalendarTitle">
             <div class="ct table-head"><div>
-              <h2 id="weekCalendarTitle" tabindex="-1"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span>2026 年全年周次表</h2>
+              <h2 id="weekCalendarTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span>2026 年全年周次表</h2>
               <p class="tip icon-caption">每周周日至周六，含 1 月 1 日的周为 W1。跨年日期以灰色显示。</p>
             </div></div>
             <div class="tblwrap week-calendar"><table class="tbl" aria-labelledby="weekCalendarTitle">
@@ -412,6 +384,6 @@
   </form>
 </dialog>
 
-<script src="/static/app.js?v=20261123-weekly" defer></script>
+<script src="/static/app.js?v=20261123-week-filter" defer></script>
 </body>
 </html>

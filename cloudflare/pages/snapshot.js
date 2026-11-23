@@ -8,7 +8,7 @@ const directorySize = groupSize * 8;
 const digestPattern = /^[0-9a-f]{64}$/;
 const enc = new TextEncoder();
 const mem = new WeakMap();
-const dimensions = ["month", "wh", "pf", "cr", "cn", "start", "end", "lastmile", "channel"];
+const dimensions = ["month", "week", "wh", "pf", "cr", "cn", "start", "end", "lastmile", "channel"];
 
 function json(data, status = 200, headers = {}) {
   return Response.json(data, {status, headers: {"Cache-Control": "no-store",
@@ -112,7 +112,8 @@ async function snapshotTrack(bucket, m, params) {
   const records = await readOrders(bucket, m, ids.slice(offset, offset + size));
   const rows = records.map(([order]) => Object.fromEntries(
     Object.entries(order).filter(([field]) => tableFields.has(field))));
-  return json({rows, total: ids.length, page, size, statusSummary: [], ruleSummary: [], snapshotAt: m.at},
+  return json({rows, total: ids.length, page, size, statusSummary: [], ruleSummary: [], snapshotAt: m.at,
+    snapshotFiltersSkipped: Boolean(params.get("week"))},
     200, !ids.length && keys.length ? {"X-Fulfillment-Snapshot-Miss": "1"} : {});
 }
 

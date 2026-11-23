@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from . import cloud_login, core, ops_auth, ops_assistant, public_preview
 from .carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts
-from .filter_time import time_bounds
+from .filter_time import REPORTING_WEEKS, time_bounds, week_filter
 from .order_time import delivery_facts
 from . import tracking_archive, tracking_freshness
 from .rules import RULES as BUSINESS_RULES, visible_alerts
@@ -100,6 +100,19 @@ def meta(request: Request):
             """).fetchall()
             dimension_counts[key] = [{"v": v, "t": platform_names.get(v, label) if key == "pf" else label, "n": n}
                                      for v, label, n in values]
+        week_start = next(iter(REPORTING_WEEKS.values()))[0]
+        week_end = next(reversed(REPORTING_WEEKS.values()))[1]
+        week_counts = dict(con.execute(f"""
+            SELECT date_diff('day', ?, 创建日期) // 7, count(*) FROM {facts} o
+            WHERE 创建日期 >= ? AND 创建日期 < ? GROUP BY 1
+        """, [week_start, week_start, week_end]).fetchall())
+        dimension_counts["week"] = []
+        for index, (code, (start, exclusive_end)) in enumerate(REPORTING_WEEKS.items()):
+            end = exclusive_end - timedelta(days=1)
+            dimension_counts["week"].append({
+                "v": code, "t": f"{code} · {start:%m/%d}–{end:%m/%d}", "n": week_counts.get(index, 0),
+                "start": start.isoformat(), "end": end.isoformat(),
+            })
         missing_last_mile = con.execute(
             f"SELECT count(*) FROM {facts} WHERE coalesce(C端承运商,'')=''"
         ).fetchone()[0]
@@ -360,7 +373,7 @@ def list_alerts(request: Request,
                 rule: str = "", level: str = "", state: str = "", assignee: str = "",
                 q: str = "", wh: str = "", pf: str = "", cr: str = "", cn: str = "",
                 month: str = "", sort: str = "shipped", start: str = "", end: str = "",
-                main_only: bool = False, channel: str = "", lastmile: str = "",
+                main_only: bool = False, channel: str = "", lastmile: str = "", week: str = "",
                 tstat: str = "", sub: str = "",
                 date_basis: Literal["", "created", "shipped"] = "created"):
     core.require_user(request)
@@ -405,13 +418,18 @@ def list_alerts(request: Request,
         date_column = f"a.{prefix}_date"
         stamp = f"{prefix}_at"
         timestamp_column = f"replace(a.{stamp},'T',' ')" if stamp in columns else "NULL"
-        inlist(f"substr(coalesce({date_column},{timestamp_column}),1,7)", _multi(month))
+        calendar_day = f"coalesce({date_column},substr({timestamp_column},1,10))"
+        inlist(f"substr({calendar_day},1,7)", _multi(month))
+        week_sql, week_args = week_filter(calendar_day, _multi(week))
+        if week_sql:
+            w.append(week_sql)
+            a.extend(day.isoformat() for day in week_args)
         for operator, bound in zip((">=", "<"), bounds):
             if isinstance(bound, datetime):
                 w.append(f"{timestamp_column} {operator} ?")
                 a.append(bound.isoformat(sep=" ", timespec="seconds"))
             elif bound is not None:
-                w.append(f"coalesce({date_column},substr({timestamp_column},1,10)) {operator} ?")
+                w.append(f"{calendar_day} {operator} ?")
                 a.append(bound.isoformat())
         query = normalize("NFKC", q).strip().upper()
         if query:

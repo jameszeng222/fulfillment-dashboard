@@ -15,7 +15,7 @@ import pandas as pd
 from . import core, public_preview, rules
 from .carrier_delivery import DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts
 from .channel_timing import ONLINE_START, TimingBasis, online_scan_join, timing_start, transport_archive_version
-from .filter_time import time_bounds
+from .filter_time import time_bounds, week_filter
 from .order_time import delivery_facts
 from .tracking_archive import fill_local_times, sources as tracking_sources
 from .waybill import key_sql, normalized as normalize_waybill
@@ -33,7 +33,7 @@ TRACK_STATUS_LABEL = """coalesce(t.状态中文, CASE
 # ---------------------------------------------------------------- 公共
 
 def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="",
-          alias="o", lastmile="", channel="", date_basis="created"):
+          alias="o", lastmile="", channel="", date_basis="created", week=""):
     """返回 (sql, args)，sql 形如 " AND ..."，可直接拼在 WHERE 1=1 之后。"""
     w, a = [], []
 
@@ -47,6 +47,10 @@ def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="
     date_column = f"CAST({timestamp_column} AS DATE)" if date_basis == "shipped" else f"{alias}.创建日期"
     month_column = f"strftime({date_column}, '%Y-%m')" if date_basis == "shipped" else f"{alias}.创建月份"
     inl(month_column, month)
+    week_sql, week_args = week_filter(date_column, core.filter_values(week))
+    if week_sql:
+        w.append(week_sql)
+        a.extend(week_args)
     for column, value in (("仓库", wh), ("平台", pf), ("物流商", cr),
                           ("目的国", cn), ("状态", status), ("当前渠道", channel)):
         inl(f'{alias}."{column}"', value)
@@ -138,14 +142,14 @@ def _order_split_mix(con, active_orders, filtered):
 
 @router.get("/overview")
 def overview(request: Request, month: str = "", wh: str = "", pf: str = "", cr: str = "",
-             cn: str = "", start: str = "", end: str = "", lastmile: str = "", channel: str = ""):
+             cn: str = "", start: str = "", end: str = "", lastmile: str = "", channel: str = "", week: str = ""):
     core.require_reader(request)
-    return _overview(core.snapshot_key(), month, wh, pf, cr, cn, start, end, lastmile, channel)
+    return _overview(core.snapshot_key(), month, wh, pf, cr, cn, start, end, lastmile, channel, week)
 
 
 @lru_cache(maxsize=32)
-def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel):
-    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel)
+def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, week):
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel, week=week)
 
     con = core.duck()
     try:
@@ -194,7 +198,7 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel):
             GROUP BY 1 ORDER BY 1
         """, args).fetchall()
         ship_cond, ship_args = _cond(month, wh, pf, cr, cn, start=start, end=end,
-                                    lastmile=lastmile, channel=channel, date_basis="shipped")
+                                    lastmile=lastmile, channel=channel, date_basis="shipped", week=week)
         daily_shipped = con.execute(f"""
             SELECT CAST(o.签出时间 AS DATE)::VARCHAR AS day, count(*) AS n
             FROM {active_orders} o WHERE o.签出时间 IS NOT NULL{ship_cond}
@@ -259,13 +263,13 @@ def track(request: Request,
           cn: str = "", tstat: str = "", rule: str = "", signed: str = "",
           sort: str = "停滞天数", order: str = "desc",
           start: str = "", end: str = "", lastmile: str = "",
-          sub: str = "", coverage: str = "", channel: str = "",
+          sub: str = "", coverage: str = "", channel: str = "", week: str = "",
           date_basis: Literal["", "created", "shipped"] = "created",
           part: Literal["all", "rows", "summary"] = "all"):
     if core.require_reader(request)["preview"]:
         return public_preview.search(q, page, size)
     cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q=q, lastmile=lastmile, channel=channel,
-                       date_basis=date_basis)
+                       date_basis=date_basis, week=week)
 
     for column, value in (("t.状态", tstat), ("t.子状态", sub), ("a.主预警规则", rule)):
         vals = core.filter_values(value)
@@ -435,7 +439,7 @@ def track(request: Request,
 @router.get("/channels")
 def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
              cn: str = "", min_n: int = Query(100, ge=1), cr: str = "", lastmile: str = "",
-             start: str = "", end: str = "", channel: str = "",
+             start: str = "", end: str = "", channel: str = "", week: str = "",
              basis: TimingBasis = "shipped"):
     core.require_reader(request)
     if basis == "created":
@@ -445,7 +449,7 @@ def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
     archive = transport_archive_version() if basis == "online" or any(
         item.get("basis") == "online" for item in saved.values()
     ) else None
-    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel)
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel, week=week)
     report = _channel_report(core.snapshot_key(), archive, json.dumps(saved, sort_keys=True), basis, cond, tuple(args))
     return {**report, "rows": [row for row in report["rows"] if row["orders"] >= min_n]}
 
