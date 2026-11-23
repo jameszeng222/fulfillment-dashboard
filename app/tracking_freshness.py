@@ -90,6 +90,7 @@ def coverage(con=None):
         SELECT count(*) AS orders, count(DISTINCT number) AS waybills,
                count(*) FILTER (WHERE older) AS olderOrders,
                count(*) FILTER (WHERE checked_at IS NULL) AS uncheckedOrders,
+               count(*) FILTER (WHERE checked_at IS NULL OR checked_at<now-INTERVAL '24 hours') AS overdueAttempts,
                count(*) FILTER (WHERE verified_at>=now-INTERVAL '24 hours') AS verified24h,
                count(*) FILTER (WHERE older AND checked_at IS NULL) AS olderUnchecked,
                count(*) FILTER (WHERE older AND verified_at>=now-INTERVAL '24 hours') AS olderVerified24h,

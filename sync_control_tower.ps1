@@ -2,7 +2,8 @@
     [string]$PythonPath = (Get-Command python.exe).Source,
     [int]$Port = 8766,
     [ValidateRange(0, 4000)][int]$TrackLimit = 0,
-    [switch]$ImportArchive
+    [switch]$ImportArchive,
+    [switch]$CatchUp
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,6 +11,37 @@ if ($ImportArchive -and $TrackLimit) { throw '历史轨迹导入须和 17TRACK �
 $env:PYTHONUTF8 = '1'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $root = $PSScriptRoot
+if ($CatchUp) {
+    if (-not $TrackLimit) { throw '追赶模式需要指定 17TRACK 批量' }
+    Push-Location -LiteralPath $root
+    try {
+        function Read-OverdueAttempts {
+            $count = & $PythonPath -c "from app.tracking_freshness import coverage; print(coverage()['overdueAttempts'])"
+            if ($LASTEXITCODE -ne 0 -or $count -notmatch '^\d+$') { throw '读取待核对运单失败' }
+            return [int]$count
+        }
+
+        $remaining = Read-OverdueAttempts
+        $stalled = 0
+        for ($batch = 0; $batch -lt 6; $batch++) {
+            & $PSCommandPath -PythonPath $PythonPath -Port $Port -TrackLimit $TrackLimit
+            if (-not $remaining) { break }
+            $next = Read-OverdueAttempts
+            if (-not $next) { break }
+            if ($next -ge $remaining) {
+                $stalled++
+                if ($stalled -ge 2) { break }
+                Start-Sleep -Seconds 10
+            } else {
+                $stalled = 0
+            }
+            $remaining = $next
+        }
+    } finally {
+        Pop-Location
+    }
+    return
+}
 $facts = Join-Path $root '履约单.duckdb'
 $initialData = Join-Path $env:USERPROFILE 'Desktop\履约单和轨迹分析2026'
 $log = Join-Path $root 'rolling-sync.log'
