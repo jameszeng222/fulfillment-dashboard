@@ -10,8 +10,8 @@
     python ingest.py 导出.xlsx --asof 2026-11-16   # 固定「数据日」，用于复现历史导入
 
 合并策略（mode）：
-  upsert（默认）—— 只删除「主键（履约单号+sku+批次码）与本文件相同」的行再插入。
-      部分导出（只导最近几天、或只导某些状态）不会误删同期的其它单。开工单更新状态时也走这条。
+  upsert（默认）—— 按履约单号和归一运单号匹配，同票中仅替换本次导出的 SKU 明细。
+      批次码是明细属性，同一版导出中的多批次明细会保留。
   replace —— 删除整个「创建日期区间」再插入。
       **仅当确认文件是该区间的全量导出时使用**，否则会丢数据。
 
@@ -27,6 +27,8 @@ from pathlib import Path
 
 import duckdb
 import pandas as pd
+
+from app.waybill import key_sql
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "履约单.duckdb"
@@ -101,6 +103,64 @@ def load_input(target: Path, verbose: bool = True) -> pd.DataFrame:
 
 # ---------------------------------------------------------------- 清洗与合并
 
+BATCH_TIME = "try_strptime(regexp_extract({value}, '[0-9]{{4}}(_[0-9]{{2}}){{4}}'), '%Y_%m_%d_%H_%M')"
+
+
+def prepare_upsert(con, batch, keep_newer):
+    """Match a shipment first, then replace its included SKUs as groups."""
+    with_old_number = key_sql('o.快递单号')
+    con.execute(f"""
+        CREATE TEMP TABLE prior_items AS
+        SELECT o.rowid AS item_id, o.履约单号, o.sku, o.快递单号,
+               {with_old_number} AS waybill, {BATCH_TIME.format(value='o.快照批次')} AS exported_at
+        FROM 履约单明细 o SEMI JOIN (SELECT DISTINCT 履约单号 FROM export_rows) e USING (履约单号)
+    """)
+    same_item = """o.履约单号=i.履约单号 AND coalesce(o.sku,'')=coalesce(CAST(i.sku AS VARCHAR),'')
+                   AND (o.waybill=i.waybill OR (o.waybill='' AND i.adopt_blank))"""
+    protect = f"""WHERE NOT EXISTS (
+        SELECT 1 FROM prior_items o WHERE {same_item} AND o.exported_at>{BATCH_TIME.format(value='?')}
+    )""" if keep_newer else ""
+    con.execute(f"""
+        CREATE TEMP TABLE incoming AS
+        WITH offered AS (
+            SELECT e.* REPLACE (CAST(e.快递单号 AS VARCHAR) AS 快递单号),
+                   {key_sql('CAST(e.快递单号 AS VARCHAR)')} AS waybill
+            FROM export_rows e
+        ), offered_numbers AS (
+            SELECT 履约单号, count(DISTINCT nullif(waybill,'')) AS n,
+                   max(快递单号) FILTER (WHERE waybill<>'') AS raw
+            FROM offered GROUP BY 履约单号
+        ), prior_numbers AS (
+            SELECT 履约单号, count(DISTINCT nullif(waybill,'')) AS n,
+                   max(快递单号) FILTER (WHERE waybill<>'') AS raw, max(waybill) AS waybill
+            FROM prior_items GROUP BY 履约单号
+        ), assigned AS (
+            SELECT e.* EXCLUDE (waybill) REPLACE (
+                CASE WHEN e.waybill<>'' THEN e.快递单号
+                     WHEN offered.n=1 THEN offered.raw
+                     WHEN offered.n=0 AND prior.n=1 THEN prior.raw
+                     ELSE e.快递单号 END AS 快递单号),
+                offered.n AS offered_count, coalesce(prior.n,0) AS prior_count,
+                prior.waybill AS prior_waybill
+            FROM offered e JOIN offered_numbers offered ON offered.履约单号 IS NOT DISTINCT FROM e.履约单号
+            LEFT JOIN prior_numbers prior ON prior.履约单号=e.履约单号
+        ), keyed AS (
+            SELECT a.*, {key_sql('a.快递单号')} AS waybill
+            FROM assigned a
+        ), resolved AS (
+            SELECT k.*, waybill<>'' AND offered_count<=1 AND
+                (prior_count=0 OR (prior_count=1 AND waybill=prior_waybill)) AS adopt_blank
+            FROM keyed k
+        )
+        SELECT i.* FROM resolved i {protect}
+    """, [batch] if keep_newer else [])
+    con.execute(f"""
+        CREATE TEMP TABLE replaced_items AS
+        SELECT o.item_id FROM prior_items o
+        SEMI JOIN (SELECT DISTINCT 履约单号,sku,waybill,adopt_blank FROM incoming) i ON {same_item}
+    """)
+
+
 def ingest_df(con, df: pd.DataFrame, batch: str | None = None,
               asof: str | None = None, dry_run: bool = False,
               mode: str = "upsert", keep_newer: bool = False) -> dict:
@@ -108,7 +168,7 @@ def ingest_df(con, df: pd.DataFrame, batch: str | None = None,
     把 DataFrame 合并进库。返回统计信息 dict。
 
     mode:
-      upsert（默认，安全）—— 只删除「主键与本文件相同」的行，再插入。
+      upsert（默认）—— 匹配同一票，仅替换本次导出包含的 SKU 明细。
           部分导出（例如只导最近几天、或只导某些状态）不会误删同期的其它单。
       replace —— 删除整个「创建日期区间」再插入。
           仅在确认文件是该区间的**全量**导出时使用，否则会丢数据。
@@ -175,37 +235,24 @@ def ingest_df(con, df: pd.DataFrame, batch: str | None = None,
     print(f"  履约单 {int(df['履约单号'].nunique()):,} 个")
     print(f"  清洗: 签收越界 {n_out} 行（已置空并打标）")
 
-    # 主键：履约单号 + sku + 批次码（该组合在库里唯一）
-    KEY = "(\"履约单号\" || '|' || coalesce(\"sku\",'') || '|' || coalesce(\"批次码\",''))"
     all_cols = [c for c in existing_ordered if c in df.columns]
-    protected = keep_newer and mode == "upsert"
-    if protected:
+    if mode == "upsert":
         con.register("export_rows", df[all_cols])
         try:
-            con.execute(f"""
-                CREATE TEMP TABLE incoming AS
-                WITH batch_clock AS (
-                    SELECT try_strptime(regexp_extract(?, '[0-9]{{4}}(_[0-9]{{2}}){{4}}'),
-                                        '%Y_%m_%d_%H_%M') AS exported_at
-                ),
-                newer_keys AS (
-                    SELECT {KEY} AS row_key
-                    FROM 履约单明细 CROSS JOIN batch_clock
-                    WHERE try_strptime(regexp_extract(快照批次, '[0-9]{{4}}(_[0-9]{{2}}){{4}}'),
-                                       '%Y_%m_%d_%H_%M') > exported_at
-                )
-                SELECT * FROM export_rows WHERE NOT EXISTS (
-                    SELECT 1 FROM newer_keys WHERE row_key = {KEY}
-                )
-            """, [batch])
+            prepare_upsert(con, batch, keep_newer)
+        except Exception:
+            for table in ("incoming", "prior_items", "replaced_items"):
+                con.execute(f"DROP TABLE IF EXISTS temp.main.{table}")
+            raise
         finally:
             con.unregister("export_rows")
     else:
         con.register("incoming", df[all_cols])
 
     def release_incoming():
-        if protected:
-            con.execute("DROP TABLE incoming")
+        if mode == "upsert":
+            for table in ("incoming", "prior_items", "replaced_items"):
+                con.execute(f"DROP TABLE temp.main.{table}")
         else:
             con.unregister("incoming")
 
@@ -216,12 +263,10 @@ def ingest_df(con, df: pd.DataFrame, batch: str | None = None,
     }
 
     if mode == "upsert":
-        incoming_count = con.execute("SELECT count(*) FROM incoming").fetchone()[0] if protected else len(df)
-        will_del = con.execute(
-            f"SELECT count(*) FROM 履约单明细 WHERE {KEY} IN (SELECT {KEY} FROM incoming)"
-        ).fetchone()[0]
-        print(f"\n合并策略: 按主键 upsert —— 覆盖已有 {will_del:,} 行，"
-              f"新增 {incoming_count - will_del:,} 行")
+        incoming_count = con.execute("SELECT count(*) FROM incoming").fetchone()[0]
+        will_del = con.execute("SELECT count(*) FROM replaced_items").fetchone()[0]
+        print(f"\n合并策略: 同票内更新 SKU 明细 —— 替换旧明细 {will_del:,} 行，"
+              f"写入本次明细 {incoming_count:,} 行（净增 {incoming_count - will_del:+,} 行）")
         if incoming_count != len(df):
             print(f"  保留较新快照 {len(df) - incoming_count:,} 行")
         print(f"  同区间内未出现在本文件里的单**不受影响**")
@@ -241,7 +286,7 @@ def ingest_df(con, df: pd.DataFrame, batch: str | None = None,
     try:
         if mode == "upsert":
             con.execute(
-                f"DELETE FROM 履约单明细 WHERE {KEY} IN (SELECT {KEY} FROM incoming)")
+                "DELETE FROM 履约单明细 WHERE rowid IN (SELECT item_id FROM replaced_items)")
         else:
             con.execute("DELETE FROM 履约单明细 WHERE 创建日期 BETWEEN ? AND ?", [dmin, dmax])
         cols = ", ".join(f'"{c}"' for c in all_cols)
@@ -274,7 +319,7 @@ def main() -> int:
     ap.add_argument("--batch", help="批次名，默认按当前时间生成")
     ap.add_argument("--asof", help="把「数据日」固定为某天（如 2026-11-16），用于复现历史导入")
     ap.add_argument("--mode", choices=["upsert", "replace"], default="upsert",
-                    help="upsert=按主键覆盖（默认，安全）；replace=整段日期替换（仅全量导出时用）")
+                    help="upsert=按履约单号和运单号合并；replace=整段日期替换（仅全量导出时用）")
     args = ap.parse_args()
 
     con = duckdb.connect(args.db)
