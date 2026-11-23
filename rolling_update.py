@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from datetime import datetime
@@ -18,9 +18,9 @@ import alerts
 import build_orders
 import ingest
 import track17
-from app import core, rules, tracking_archive, tracking_sync
+from app import core, rules, tracking_archive, tracking_freshness, tracking_sync
 from app.tracking_clock import ensure_display_columns
-from backfill_tracking import REGISTRY_BATCH, ReadOnlyClient, chunks, fetch_batch
+from backfill_tracking import REGISTRY_BATCH, ReadOnlyClient, RetryableRequestError, chunks, fetch_batch
 
 
 INPUT = Path.home() / "Desktop" / "履约单2026"
@@ -91,76 +91,74 @@ def import_exports(con, exports):
     return imported
 
 
-def track_candidates(con, limit=TRACK_LIMIT):
-    status, _, archive = tracking_archive.sources(con)
-    return con.execute(f"""
-        WITH clock AS (SELECT current_timestamp AT TIME ZONE 'Asia/Shanghai' AS now),
-        eligible AS (
-            SELECT o.单号归一 AS number, o.物流商, o.C端承运商,
-                   t.carrier, t.最新事件时间 AS last_event,
-                   greatest(t.查询时间,h.查询时间,m.末次检查) AS last_check,
-                   coalesce(o.签收时间::DATE,o.签出时间::DATE,o.创建日期) AS activity
-            FROM fct_order o
-            LEFT JOIN {status} t ON t.单号=o.单号归一
-            LEFT JOIN {archive} h ON h.履约单号=o.履约单号 AND h.单号=o.单号归一
-            LEFT JOIN trk_missing m ON m.单号=o.单号归一
-            CROSS JOIN clock
-            WHERE {core.active_order()} AND length(o.单号归一) BETWEEN 8 AND 50
-              AND lower(coalesce(trim(o.物流商),''))<>'postnet'
-              AND lower(coalesce(trim(o.C端承运商),''))<>'postnet'
-              AND (o.已签收=0 AND o.签出时间::DATE>=now::DATE-30
-                   OR coalesce(o.签收时间::DATE,o.签出时间::DATE,o.创建日期)>=now::DATE-7)
-              AND (greatest(t.查询时间,h.查询时间,m.末次检查) IS NULL
-                   OR greatest(t.查询时间,h.查询时间,m.末次检查)<=now-INTERVAL '6 hours')
-              AND (coalesce(t.状态,'')<>'Delivered' OR (
-                   coalesce(h.事件数,0)=0 AND NOT EXISTS (
-                       SELECT 1 FROM trk_event e WHERE e.单号=o.单号归一)))
-            QUALIFY row_number() OVER (PARTITION BY o.单号归一
-                       ORDER BY activity DESC, o.履约单号)=1
-        )
-        SELECT number,物流商,C端承运商,carrier,last_event FROM eligible
-        ORDER BY last_check NULLS FIRST,activity DESC,number LIMIT ?
-    """, [limit]).fetchall()
-
-
 def refresh_tracks(con, candidates, token):
     client = ReadOnlyClient(token, requests_per_second=2.8)
     by_number = {row[0]: row[1:] for row in candidates}
-    checked = accepted = with_events = unmatched = 0
+    totals = Counter()
+
+    def read(numbers):
+        try:
+            return fetch_batch(client, numbers)
+        except RetryableRequestError:
+            return numbers, (), {}, {}, None
+
     with ThreadPoolExecutor(max_workers=4) as workers:
-        for batch in workers.map(lambda group: fetch_batch(client, group), chunks(list(by_number), REGISTRY_BATCH)):
-            numbers, registered, found, _, _ = batch
-            matched = {number for number, _ in registered}
-            answers = defaultdict(list)
-            for (number, _), result in found.items():
-                answers[number].append(result)
-            now = datetime.now()
+        for numbers, registered, found, failed, pending in workers.map(read, chunks(list(by_number), REGISTRY_BATCH)):
+            codes = defaultdict(set)
+            for number, code in registered:
+                codes[number].add(code)
+            checked = datetime.fromisoformat(core.now_iso()).replace(tzinfo=None)
+            checks = []
             for number in numbers:
-                carrier, last_mile, previous, last_event = by_number[number]
-                primary, _ = track17.carrier_lookup(carrier, last_mile, previous, last_event is not None)
-                hits = answers[number]
-                result = next((row for row in hits if int(row["carrier"]) == primary),
-                              hits[0] if len(hits) == 1 else None)
-                if result:
+                carrier, last_mile, previous, last_event, last_status, conflict = by_number[number]
+                primary, alternate = track17.carrier_lookup(carrier, last_mile, previous, last_event is not None)
+                registered_codes = codes[number]
+                chosen = next((code for code in (primary, alternate if last_event is None else None)
+                               if code in registered_codes), None)
+                if not primary and len(registered_codes) == 1:
+                    chosen = next(iter(registered_codes))
+                carrier_code = chosen or primary
+                error = failed.get((number, chosen))
+                result = found.get((number, chosen))
+                if conflict:
+                    outcome = "carrier_conflict"
+                elif pending is None:
+                    outcome = "read_error"
+                elif not registered_codes:
+                    outcome = "unmatched"
+                    if last_event is None:
+                        con.execute("""
+                            INSERT INTO trk_missing (单号,carrier,首次发现,末次检查,检查次数)
+                            VALUES (?,?,?,?,1) ON CONFLICT (单号) DO UPDATE SET
+                                末次检查=excluded.末次检查, 检查次数=trk_missing.检查次数+1
+                        """, [number, primary or 0, checked, checked])
+                elif chosen is None:
+                    outcome = "carrier_conflict"
+                elif result is None:
+                    outcome = "carrier_conflict" if error == -18019910 else "read_error"
+                else:
                     info = result.get("track_info") or {}
-                    latest = track17.tracking_utc(info.get("latest_event") or {})
-                    if last_event is not None and (
-                        latest is None or latest.replace(tzinfo=None) < last_event
-                    ):
-                        continue
-                    track17.save_one(con, result)
-                    accepted += 1
-                    with_events += bool(any(group.get("events") for group in
-                        (info.get("tracking") or {}).get("providers") or []))
-                elif number not in matched and last_event is None:
-                    con.execute("""
-                        INSERT INTO trk_missing (单号,carrier,首次发现,末次检查,检查次数)
-                        VALUES (?,?,?,?,1) ON CONFLICT (单号) DO UPDATE SET
-                            末次检查=excluded.末次检查, 检查次数=trk_missing.检查次数+1
-                    """, [number, primary or 0, now, now])
-                    unmatched += 1
-            checked += len(numbers)
-    return {"queried": checked, "accepted": accepted, "with_events": with_events, "unmatched": unmatched}
+                    event_time = track17.tracking_utc(info.get("latest_event") or {})
+                    latest = event_time.replace(tzinfo=None) if event_time else None
+                    next_status = (info.get("latest_status") or {}).get("status")
+                    has_events = any(group.get("events") for group in (info.get("tracking") or {}).get("providers") or [])
+                    if last_event is not None and (latest is None or latest < last_event or (
+                        latest == last_event and last_status == "Delivered" and next_status != "Delivered"
+                    )):
+                        outcome = "older"
+                    else:
+                        track17.save_one(con, result)
+                        totals["accepted"] += 1
+                        if has_events:
+                            totals["with_events"] += 1
+                        outcome = "verified" if has_events and latest is not None else "empty"
+                totals[outcome] += 1
+                checks.append((number, carrier_code, checked, checked if outcome == "verified" else None, outcome, error))
+            tracking_freshness.save_checks(con, checks)
+
+    return {"queried": len(by_number), **{name: totals[name] for name in (
+        "accepted", "with_events", "verified", "unmatched", "empty", "read_error", "carrier_conflict", "older"
+    )}}
 
 
 def apply_pushes(con, pushes):
@@ -219,7 +217,7 @@ def prepare(stage, folder, track_limit=None, import_archive=False):
     pushes = tracking_sync.ready_pushes() if track_limit is None else []
     with closing(core.duck()) as con:
         exports = new_exports(con, folder) if track_limit is None else []
-        candidates = track_candidates(con, track_limit) if track_limit is not None else []
+        candidates = tracking_freshness.candidates(con, track_limit) if track_limit is not None else []
         if not exports and not candidates and not pushes and not import_archive:
             return 3
         if source.with_suffix(source.suffix + ".wal").exists():

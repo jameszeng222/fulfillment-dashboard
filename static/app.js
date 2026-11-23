@@ -1080,6 +1080,11 @@ const syncReasons = {
   different_carrier: '与已匹配的承运商代码不同', older: '本地已有更新的轨迹',
   notification_only: '通知已记录',
 };
+const verificationStatus = {
+  verified: '已核对逐条轨迹', unmatched: 'API 账号登记未匹配', empty: '接口未返回可核对的逐条轨迹',
+  read_error: '接口读取失败 · 待重试', carrier_conflict: '承运商不匹配 · 待核对',
+  older: '接口结果较旧或缺少事件时间 · 保留已有轨迹',
+};
 const syncBadge = (tone, label) => `<span class="badge ${tone}">${esc(label)}</span>`;
 const syncClock = new Intl.DateTimeFormat('sv-SE', {
   timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short',
@@ -1110,10 +1115,15 @@ async function loadSyncStatus() {
   $('#pollStatus').className = 'badge ' + pollTone;
   $('#pollStatus').textContent = pollLabel;
   $('#pollSummary').innerHTML = sourceRows([
-    ['运行计划', poll.schedule ? '每 2 小时检查近期运单' : '计划任务状态暂不可读'],
+    ['查询范围', '近 3 个月出库，以及更早出库但仍未签收的合规运单'],
+    ['运行计划', poll.schedule ? '每 2 小时检查 · 单批最多 4,000 运单' : '计划任务状态暂不可读'],
+    ...(poll.coverage ? [
+      ['待持续核对范围', `${fmt(poll.coverage.orders)} 单 · 超过三个月 ${fmt(poll.coverage.olderOrders)} 单`],
+      ['逐单核对进度', `近 24 小时成功 ${fmt(poll.coverage.verified24h)} 单 · 待首次核对 ${fmt(poll.coverage.uncheckedOrders)} 单 · 最近一次异常 ${fmt(poll.coverage.exceptionOrders)} 单`],
+    ] : []),
     ['最近成功', syncTime(poll.lastSuccess)],
     ['最近一批', run?.detail?.queried != null ?
-      `查询 ${fmt(run.detail.queried)} 单 · 取回 ${fmt(run.detail.with_events)} 单逐条轨迹` :
+      `查询 ${fmt(run.detail.queried)} 个运单 · 取回 ${fmt(run.detail.with_events)} 个运单的逐条轨迹` :
       syncReasons[run?.detail?.reason] || syncRunStates[run?.status]?.[1] || '—'],
     ['下次计划', syncTime(poll.schedule?.next)],
   ]);
@@ -1492,6 +1502,11 @@ async function loadOrderDetail(no, path, refresh = false) {
     ['C 端承运商', o.C端承运商],
     ['17TRACK 主状态', orderTrackStatus(o)],
     ['17TRACK 子状态', o.轨迹子状态], ['最近查询', dt(o.查询时间)],
+    ...(d.verification ? [
+      ['最近核对（北京时间）', dt(d.verification.lastAttempt)],
+      ['最近成功核对（北京时间）', dt(d.verification.lastVerified)],
+      ['核对结果', verificationStatus[d.verification.outcome] || d.verification.outcome],
+    ] : []),
   ];
 
   const alerts = (d.alerts || []).map(a => `

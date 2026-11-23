@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from . import core
+from . import core, tracking_freshness
 from .waybill import normalized
 
 
@@ -251,5 +251,6 @@ def sync_status(request: Request):
         except ValueError:
             run["detail"] = None
     return {"now": core.now_iso(), "poll": {"schedule": windows_schedule(int(time.monotonic() // 30)),
+                                           "coverage": tracking_freshness.coverage() if core.DUCK_DB.is_file() else None,
                                            "lastSuccess": success[0] if success else None, "runs": runs},
             "webhook": {**totals, "url": public_url(), "ready": bool(webhook_key()), "pushes": pushes}}

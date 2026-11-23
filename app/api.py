@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from . import cloud_login, core, ops_auth, ops_assistant, public_preview
 from .carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts
 from .order_time import delivery_facts
-from . import tracking_archive
+from . import tracking_archive, tracking_freshness
 from .rules import RULES as BUSINESS_RULES, visible_alerts
 from .tracking_clock import utc_key
 
@@ -277,6 +277,7 @@ def order_detail(order_no: str, request: Request, q: str = ""):
         event_source = None
         milestones = []
         tn = detail.get("单号归一")
+        verification = None if preview else tracking_freshness.order_check(con, tn)
         if tn:
             events = tracking_archive.events(con, tn, detail.get("回补运输商代码"))
             tracking_archive.fill_local_times(con, [detail])
@@ -344,6 +345,7 @@ def order_detail(order_no: str, request: Request, q: str = ""):
 
     return core.clean({"order": detail, "skus": skus, "milestones": milestones, "events": events,
                        "eventSource": event_source,
+                       "verification": verification,
                        "notes": notes, "alerts": alerts})
 
 
