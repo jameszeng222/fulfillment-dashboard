@@ -283,6 +283,7 @@ def push_to_ops(dcon):
 ALERT_ORDER_FIELDS = {
     "created_at": "o.创建时间::VARCHAR",
     "shipped_at": "o.签出时间::VARCHAR",
+    "paid_at": "o.支付时间::VARCHAR",
     "current_channel": "nullif(trim(o.当前渠道),'')",
     "platform_code": "o.平台",
     "customer_order_no": "o.订单号",
@@ -302,22 +303,28 @@ def add_alert_order_fields(db):
 def migrate_alert_order_fields():
     """Backfill new fulfillment fields without rebuilding alerts or changing handling state."""
     with core.ops() as db:
-        if ALERT_ORDER_FIELDS.keys() <= {row[1] for row in db.execute("PRAGMA table_info(alerts)")}:
+        history = {row[1] for row in db.execute("PRAGMA table_info(alert_history)")}
+        current = {row[1] for row in db.execute("PRAGMA table_info(alerts)")}
+        if ALERT_ORDER_FIELDS.keys() <= current and (not history or "paid_at" in history):
             return
         db.execute("BEGIN IMMEDIATE")
         added = add_alert_order_fields(db)
-        if not added:
-            return
-        orders = [row[0] for row in db.execute("SELECT DISTINCT order_no FROM alerts")]
-        if not orders:
-            return
-        with core.duck() as con:
-            values = con.execute(f"""
-                SELECT {', '.join(ALERT_ORDER_FIELDS[field] for field in added)}, o.履约单号
-                FROM {core.order_facts(con)} o WHERE o.履约单号 IN (SELECT unnest(?::VARCHAR[]))
-            """, [orders]).fetchall()
-        assignments = ", ".join(f"{field}=?" for field in added)
-        db.executemany(f"UPDATE alerts SET {assignments} WHERE order_no=?", values)
+        tables = {"alerts": added} if added else {}
+        history = {row[1] for row in db.execute("PRAGMA table_info(alert_history)")}
+        if history and "paid_at" not in history:
+            db.execute("ALTER TABLE alert_history ADD COLUMN paid_at TEXT")
+            tables["alert_history"] = ["paid_at"]
+        for table, fields in tables.items():
+            orders = [row[0] for row in db.execute(f"SELECT DISTINCT order_no FROM {table}")]
+            if not orders:
+                continue
+            with core.duck() as con:
+                values = con.execute(f"""
+                    SELECT {', '.join(ALERT_ORDER_FIELDS[field] for field in fields)}, o.履约单号
+                    FROM {core.order_facts(con)} o WHERE o.履约单号 IN (SELECT unnest(?::VARCHAR[]))
+                """, [orders]).fetchall()
+            assignments = ", ".join(f"{field}=?" for field in fields)
+            db.executemany(f"UPDATE {table} SET {assignments} WHERE order_no=?", values)
 
 
 def migrate_alert_history():

@@ -149,7 +149,8 @@ export async function readSnapshot(bucket, url, fallback = false) {
   const order = path.match(/^\/api\/orders\/([^/]+)$/);
   if (!(order || ["/api/track", "/api/meta", "/api/overview", "/api/channels"].includes(path))) return null;
   const filtered = ["/api/overview", "/api/channels"].includes(path) &&
-    (dimensions.some(key => url.searchParams.get(key)) || url.searchParams.get("date_basis") === "shipped");
+    (dimensions.some(key => url.searchParams.get(key)) ||
+      (url.searchParams.get("date_basis") || "shipped") !== "shipped");
   if (filtered && !fallback) return null;
   const record = await active(bucket);
   if (!record?.current) return null;
@@ -167,7 +168,11 @@ async function readVersion(bucket, m, url, order, filtered) {
   if (order) return snapshotOrder(bucket, m, decodeURIComponent(order[1]), url.searchParams);
   const stats = await chunk(bucket, m.stats);
   if (path === "/api/meta") return json({...stats.meta, snapshotAt: m.at});
-  if (path === "/api/overview") return json({...stats.overview, snapshotAt: m.at, snapshotFiltersSkipped: filtered});
+  const dateBasis = url.searchParams.get("date_basis") || "shipped";
+  if (path === "/api/overview") {
+    const report = stats.overview;
+    return json({...report, snapshotAt: m.at, snapshotFiltersSkipped: filtered || dateBasis !== (report.dateBasis || "created")});
+  }
   const timing = url.searchParams.get("basis") || "shipped";
   const basis = timing === "created" ? "paid" : timing;
   const minimum = Number(url.searchParams.get("min_n") || 100);
@@ -176,7 +181,7 @@ async function readVersion(bucket, m, url, order, filtered) {
   }
   const report = stats.channels[basis];
   return json({...report, rows: report.rows.filter(row => row.orders >= minimum), snapshotAt: m.at,
-    snapshotFiltersSkipped: filtered});
+    snapshotFiltersSkipped: filtered || dateBasis !== (report.dateBasis || "created")});
 }
 
 function validManifest(m) {

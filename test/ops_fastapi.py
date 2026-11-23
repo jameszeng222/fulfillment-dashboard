@@ -444,13 +444,13 @@ class OpsTests(unittest.TestCase):
             with core.ops() as db:
                 db.executemany("""
                     INSERT INTO alerts(order_no,rule,platform_code,platform_order_no,last_mile,track_status,track_sub,
-                                       created_date,created_at,shipped_date,shipped_at)
+                                       created_date,created_at,shipped_date,shipped_at,paid_at)
                     VALUES (?,'sample',?,'#P-123','GOFO','InTransit','InTransit_Other',
-                            '2026-11-23',?,'2026-11-24',?)
+                            '2026-11-23',?,'2026-11-24',?,?)
                 """, [
-                    ("A", "S1", "2026-11-23 09:20:59.999", "2026-11-24 12:11:00"),
-                    ("B", "S1", "2026-11-23 09:21:00", "2026-11-24 12:10:00"),
-                    ("C", "S2", "2026-11-23 09:20:00", "2026-11-24 12:10:59"),
+                    ("A", "S1", "2026-11-23 09:20:59.999", "2026-11-24 12:11:00", "2026-11-22T06:02:59"),
+                    ("B", "S1", "2026-11-23 09:21:00", "2026-11-24 12:10:00", "2026-11-22 06:03:00"),
+                    ("C", "S2", "2026-11-23 09:20:00", "2026-11-24 12:10:59", None),
                 ])
 
             def query(**filters):
@@ -459,13 +459,21 @@ class OpsTests(unittest.TestCase):
                 return [row["order_no"] for row in json.loads(body)["rows"]]
 
             shared = dict(pf="S1", lastmile="GOFO", tstat="InTransit", sub="InTransit_Other", q="#P-123")
-            self.assertEqual(query(**shared, start="2026-11-23T09:20", end="2026-11-23T09:20"), ["A"])
-            self.assertEqual(query(**shared, date_basis="shipped", start="2026-11-24T12:10",
-                                   end="2026-11-24T12:10"), ["B"])
-            self.assertEqual(set(query(start="2026-11-23", end="2026-11-23")), {"A", "B", "C"})
-            self.assertEqual(set(query(week="W48", start="2026-11-23T00:00",
+            self.assertEqual(query(**shared, date_basis="created", start="2026-11-23T09:20",
+                                   end="2026-11-23T09:20"), ["A"])
+            self.assertEqual(query(**shared, start="2026-11-24T12:10", end="2026-11-24T12:10"), ["B"])
+            self.assertEqual(query(date_basis="paid", start="2026-11-22T06:02", end="2026-11-22T06:02"), ["A"])
+            self.assertEqual(set(query(start="2026-11-24", end="2026-11-24")), {"A", "B", "C"})
+            self.assertEqual(set(query(week="W48", date_basis="created", start="2026-11-23T00:00",
                                        end="2026-11-23T23:59")), {"A", "B", "C"})
             self.assertEqual(query(week="W47"), [])
+            with core.ops() as db:
+                db.execute("CREATE TEMP TABLE next_alerts AS SELECT * FROM alerts WHERE 0")
+                db.execute("""INSERT INTO alert_state(order_no,rule,status,updated_at)
+                              VALUES ('A','sample','archived','2026-11-24')""")
+                alert_history.carry_history(db, "2026-11-24")
+                db.execute("DELETE FROM alerts")
+            self.assertEqual(query(view="archive", date_basis="paid", month="2026-11"), ["A"])
             status, _, _ = self.browser.request("/api/alerts?" + urlencode({
                 "start": "2026-11-23T11:00", "end": "2026-11-23T10:59"}))
             self.assertEqual(status, 422)
@@ -484,9 +492,10 @@ class OpsTests(unittest.TestCase):
                     ("E", "2027-01-03", None, None),
                 ])
 
-            for params, expected in (("week=W1,W53", {"A", "B", "D"}),
-                                     ("week=W2&date_basis=shipped", {"A", "B"}),
-                                     ("week=W1&month=2026-01", {"B"})):
+            for params, expected in (("week=W1,W53&date_basis=created", {"A", "B", "D"}),
+                                     ("week=W2", {"A", "B"}),
+                                     ("week=W1&month=2026-01&date_basis=created", {"B"}),
+                                     ("", {"A", "B", "C", "D", "E"})):
                 status, _, result = self.browser.request("/api/alerts?" + params)
                 self.assertEqual(status, 200, result)
                 self.assertEqual({row["order_no"] for row in json.loads(result)["rows"]}, expected)

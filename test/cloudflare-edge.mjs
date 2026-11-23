@@ -102,8 +102,8 @@ test("a visitor can open Pages and look up a complete reference without the tunn
   pack("orders", id, [{履约单号: id, 快递单号: number, 单号归一: number, 轨迹状态: "InTransit"}, 12, null]);
   pack("events", number, {n: {12: [["known-event", now, "2026-11-20 00:00:00 -08:00", "Carrier", "已揽收"]]}});
   values.set("preview/v1/blocks/reports", Uint8Array.from(gzipSync(JSON.stringify({
-    meta: {range: {orders: 1}}, overview: {kpi: {orders: 1}},
-    channels: {shipped: {rows: [{orders: 240}, {orders: 9}]}},
+    meta: {range: {orders: 1}}, overview: {kpi: {orders: 1}, dateBasis: "shipped"},
+    channels: {shipped: {dateBasis: "shipped", rows: [{orders: 240}, {orders: 9}]}},
   }))).buffer);
   values.set("preview/v1/active.json", JSON.stringify({current, previous: null}));
   const pages = {
@@ -117,6 +117,10 @@ test("a visitor can open Pages and look up a complete reference without the tunn
   const filtered = await (await get("/api/overview?wh=TEST")).json();
   assert.equal(filtered.kpi.orders, 1);
   assert.equal(filtered.snapshotFiltersSkipped, true);
+  const defaultDates = await (await get("/api/overview?date_basis=shipped")).json();
+  assert.equal(defaultDates.snapshotFiltersSkipped, false);
+  const paidDates = await (await get("/api/channels?date_basis=paid")).json();
+  assert.equal(paidDates.snapshotFiltersSkipped, true);
   const weekly = await (await get("/api/overview?week=W47")).json();
   assert.equal(weekly.snapshotFiltersSkipped, true);
   assert.equal((await (await get("/api/channels")).json()).rows.length, 1);

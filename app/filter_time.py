@@ -1,9 +1,14 @@
 """Inclusive calendar-day or minute inputs as half-open Beijing-time ranges."""
 import re
 from datetime import date, datetime, time, timedelta
+from typing import Literal
 
 from fastapi import HTTPException
 
+
+DateBasis = Literal["", "paid", "created", "shipped"]
+DEFAULT_DATE_BASIS = "shipped"
+DATE_BASIS_FIELDS = {"paid": "支付时间", "created": "创建时间", "shipped": "签出时间"}
 
 REPORTING_WEEK_YEAR = 2026
 _jan_first = date(REPORTING_WEEK_YEAR, 1, 1)

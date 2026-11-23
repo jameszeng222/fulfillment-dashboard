@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261123-overview-groups">
+<link rel="stylesheet" href="/static/app.css?v=20261123-date-basis">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -84,11 +84,12 @@
         <div class="grid overview-lead">
           <section class="card plot-card daily-card" aria-labelledby="dailyTitle">
             <div class="ct">
-              <div><h2 id="dailyTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>日单量</h2><p class="tip icon-caption" id="dailyRange">按履约单创建日期</p></div>
+              <div><h2 id="dailyTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>日单量</h2><p class="tip icon-caption" id="dailyRange">按出库时间统计</p></div>
               <div class="daily-controls">
                 <div class="tabs period-tabs" id="dailyBasis" role="group" aria-label="日单量日期口径">
-                  <button type="button" data-date-basis="created" aria-pressed="true">按建单</button>
-                  <button type="button" data-date-basis="shipped" aria-pressed="false">按出库</button>
+                  <button type="button" data-date-basis="paid" aria-pressed="false">按支付</button>
+                  <button type="button" data-date-basis="created" aria-pressed="false">按创建</button>
+                  <button type="button" data-date-basis="shipped" aria-pressed="true">按出库</button>
                 </div>
                 <div class="tabs period-tabs" id="dailyPeriod" role="group" aria-label="日单量范围">
                   <button type="button" data-days="45" aria-pressed="true">近 45 天</button>
@@ -102,7 +103,7 @@
           <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg></span>C 端承运商单量</h2><p class="tip icon-caption">客户看到的末端承运商 · 单量前 10</p></div></div><div id="cLastMile"></div></section>
         </div>
         <div class="grid overview-breakdown">
-          <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip" id="monthlyScope">按履约单创建时间所属月份统计 · 物流时效为出库到妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
+          <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip" id="monthlyScope">按出库时间所属月份统计 · 物流时效为出库到妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
           <section class="card plot-card status-card" aria-labelledby="statusTitle">
             <div class="ct"><div><h2 id="statusTitle"><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>出库单状态</h2><p class="tip icon-caption">全部出库单状态，含已取消</p></div></div>
             <div id="cStatus"></div>
@@ -188,7 +189,7 @@
 
       <!-- ============ 渠道时效 ============ -->
       <section class="view" id="v-channels">
-        <div class="page-head"><div><h1>渠道时效</h1><p>按 C 端物流渠道对比，可按支付时间或签出时间筛选。妥投优先用 17TRACK，缺失时按仓库时间口径用 WMS 补算。</p></div></div>
+        <div class="page-head"><div><h1>渠道时效</h1><p>按 C 端物流渠道对比。妥投优先用 17TRACK，缺失时按仓库时间口径用 WMS 补算。</p></div></div>
         <div class="filters" id="channelFilters"></div>
         <div class="card channel-basis">
           <div class="tabs" id="channelBasis" role="group" aria-label="时效统计口径">
@@ -289,7 +290,7 @@
               <thead><tr><th scope="col">字段</th><th scope="col">来源</th><th scope="col">取值及显示</th></tr></thead>
               <tbody>
                 <tr><th scope="row">客户下单</th><td>ERP 支付时间</td><td>同一履约单取明细中最早的有效支付时间，按北京时间显示。</td></tr>
-                <tr><th scope="row">创建履约单</th><td>ERP 创建时间</td><td>取同一履约单最早的有效创建时间。月单量和多数页面的默认日期口径为建单日，日单量支持切换到出库日。</td></tr>
+                <tr><th scope="row">创建履约单</th><td>ERP 创建时间</td><td>取同一履约单最早的有效创建时间。</td></tr>
                 <tr><th scope="row">出库</th><td>ERP / WMS 签出时间</td><td>取同一履约单最早的有效签出时间，按北京时间显示。分配和打包时间取各自在明细中最后一次记录，供查看库内节点。</td></tr>
                 <tr><th scope="row">物流上网</th><td>17TRACK 首条有效揽收或运输扫描</td><td>按归一运单号，从关键节点、近期轨迹与可匹配的历史轨迹取最早的一条揽收、起运、到达、清关或其他有效运输扫描。面单创建、电子信息预报、等待收件等记录不计。最早扫描换算后早于建单，或没有可用扫描时，该单不计上网时效。</td></tr>
                 <tr><th scope="row">物流妥投</th><td>优先 17TRACK，缺失时用 ERP / WMS 补算</td><td>统计使用有效签收记录。国内仓（如 JY01、XC01）按原值北京时间处理，WINIT 仓按目的地时区及夏令时换算。时区不明确或时间顺序异常的 WMS 记录不用于补算。轨迹时间线保留承运商当地时间。</td></tr>
@@ -304,7 +305,8 @@
                 <tr><th scope="row">库内处理</th><td>出库时间减创建履约单时间。按分钟计算，取大于 0 的样本平均值，换算为小时。分配、打包节点供核对过程。</td></tr>
                 <tr><th scope="row">下单 / 出库 / 上网到妥投</th><td>妥投时间减所选起点，换算为天。缺有效起点或妥投时间、耗时小于等于 0 的记录不计入平均时效及达成率。</td></tr>
                 <tr><th scope="row">妥投覆盖率</th><td>有有效妥投时间的履约单数 ÷ 本次筛选范围内的履约单数。取消单仅计入出库单状态统计。</td></tr>
-                <tr><th scope="row">海外仓发货占比</th><td>海外仓已出库履约单 ÷ 筛选范围内全部已出库履约单。按仓库代码判断，WINIT、NF01 和 MGZYTH01 归为海外仓，未归类仓库单独显示。日期筛选按履约单创建日。</td></tr>
+                <tr><th scope="row">海外仓发货占比</th><td>海外仓已出库履约单 ÷ 筛选范围内全部已出库履约单。按仓库代码判断，WINIT、NF01 和 MGZYTH01 归为海外仓，未归类仓库单独显示。</td></tr>
+                <tr><th scope="row">总览 6 天达成率</th><td>出库后 6 个自然日内签收的履约单数 ÷ 出库到签收的有效样本数。缺少出库或有效签收时间、签收时间不晚于出库的记录不计入样本。按实际经过时间计算，6 天等于 144 小时。</td></tr>
                 <tr><th scope="row">订单拆单率</th><td>拆单订单数 ÷ 筛选命中的可识别订单数。按平台和 ERP 订单号识别，一张订单有两个或以上有效履约单即为拆单。筛选命中任一履约单即纳入订单，判定类型时看整张订单。同仓指所有履约单仓库相同，异仓指涉及两个或以上仓库。仓库缺失且无法判定时单独显示。</td></tr>
                 <tr><th scope="row">承诺时效达成率</th><td>在承诺天数内妥投的有效样本数 ÷ 有效签收样本数。按每单的「当前渠道」配置确定 SLA 起点与承诺天数，渠道表现按 C 端显示物流渠道对比。</td></tr>
                 <tr><th scope="row">平均时效和 P90</th><td>使用当前选择的时效起点及有效妥投样本。P90 是时效的第 90 百分位，约 90% 的有效样本在这个耗时内妥投。</td></tr>
@@ -318,9 +320,9 @@
               <thead><tr><th scope="col">项目</th><th scope="col">口径</th></tr></thead>
               <tbody>
                 <tr><th scope="row">履约单数与总件数</th><td>按履约单号汇总，一张履约单计一单。总件数来自订单明细的商品数量之和，同一平台订单拆成多个履约单时分别计数。</td></tr>
-                <tr><th scope="row">按建单 / 按出库</th><td>日单量按所选口径的北京时间自然日分组。按出库时仅计有签出时间的单，日期和月份也按签出日筛选。点击图中的日期会打开对应口径的履约单列表。</td></tr>
+                <tr><th scope="row">日单量</th><td>可按支付时间、创建时间或出库时间的北京时间自然日统计。点击图中的日期会打开对应口径的履约单列表。</td></tr>
                 <tr><th scope="row">近 45 天与有单日均</th><td>近 45 天从当前口径下最后一个有单日倒推。日均用范围内单量除以有单的天数，峰值取其中单量最高的一天。</td></tr>
-                <tr><th scope="row">周次与日期范围</th><td>周次、月份和日期范围取交集，使用所选时间字段。总览可按履约单创建时间或签出时间，渠道时效可按支付时间或签出时间。下拉数字是该时间口径下的全量有效履约单数。只选日期时默认从 00:00 到 23:59，包含最后一分钟的记录。</td></tr>
+                <tr><th scope="row">周次与日期范围</th><td>各业务列表和报表可按支付时间、创建时间或出库时间筛选，默认选出库时间。周次、月份和日期范围使用所选时间字段并取交集。下拉数字是该时间口径下的全量有效履约单数。只选日期时默认从 00:00 到 23:59，包含最后一分钟的记录。</td></tr>
                 <tr><th scope="row">分布占比</th><td>分组单量 ÷ 筛选范围内的履约单总量。出库单状态的分母包含取消单。只显示排名靠前的分组时，仍以全部筛选结果为分母。</td></tr>
                 <tr><th scope="row">自定义渠道分组</th><td>使用履约单的「当前渠道」，每个渠道可归入一组，剩余单量计入「未归组」。分组用于总览统计。</td></tr>
                 <tr><th scope="row">渠道与物流商</th><td>「后台物流商」是 ERP 物流服务商，「当前渠道」用于配置 SLA，「C 端渠道」是客户可见的承运商名称。三个字段分别筛选。</td></tr>
@@ -429,6 +431,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261123-overview-groups" defer></script>
+<script src="/static/app.js?v=20261123-date-basis" defer></script>
 </body>
 </html>

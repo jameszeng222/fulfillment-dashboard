@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     created_at   TEXT,
     shipped_date TEXT,
     shipped_at   TEXT,
+    paid_at      TEXT,
     current_channel TEXT,
     platform_code TEXT,
     customer_order_no TEXT,

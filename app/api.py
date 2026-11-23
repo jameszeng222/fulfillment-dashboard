@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from . import alert_history, cloud_login, core, ops_auth, ops_assistant, public_preview
 from .carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts, transport_minutes
-from .filter_time import REPORTING_WEEKS, time_bounds, week_filter
+from .filter_time import DATE_BASIS_FIELDS, DEFAULT_DATE_BASIS, REPORTING_WEEKS, DateBasis, time_bounds, week_filter
 from .order_time import delivery_facts
 from . import tracking_archive, tracking_freshness
 from .rules import RULES as BUSINESS_RULES, visible_alerts
@@ -115,7 +115,8 @@ def meta(request: Request):
                 "start": start.isoformat(), "end": end.isoformat(),
             })
         date_options = {}
-        for basis, column in (("paid", "支付时间"), ("shipped", "签出时间")):
+        for basis in ("paid", "shipped"):
+            column = DATE_BASIS_FIELDS[basis]
             days = con.execute(f"""
                 SELECT CAST({column} AS DATE), count(*) FROM {facts} WHERE {column} IS NOT NULL GROUP BY 1
             """).fetchall()
@@ -413,7 +414,7 @@ def list_alerts(request: Request,
                 month: str = "", sort: str = "shipped", start: str = "", end: str = "",
                 main_only: bool = False, channel: str = "", lastmile: str = "", week: str = "",
                 tstat: str = "", sub: str = "",
-                date_basis: Literal["", "created", "shipped"] = "created",
+                date_basis: DateBasis = DEFAULT_DATE_BASIS,
                 view: Literal["pending", "archive"] = "pending"):
     core.require_user(request)
     bounds = time_bounds(start, end)
@@ -451,11 +452,12 @@ def list_alerts(request: Request,
         inlist("a.platform_code" if "platform_code" in columns else "NULL", _multi(pf))
         carrier = f"coalesce(nullif({core.last_mile_sql('a.last_mile')},''),'__empty__')" if "last_mile" in columns else "'__empty__'"
         inlist(carrier, core.last_mile_filter_values(lastmile))
-        prefix = "shipped" if date_basis == "shipped" else "created"
-        date_column = f"a.{prefix}_date"
+        prefix = date_basis or DEFAULT_DATE_BASIS
         stamp = f"{prefix}_at"
         timestamp_column = f"replace(a.{stamp},'T',' ')" if stamp in columns else "NULL"
-        calendar_day = f"coalesce({date_column},substr({timestamp_column},1,10))"
+        calendar_day = f"substr({timestamp_column},1,10)"
+        if f"{prefix}_date" in columns:
+            calendar_day = f"coalesce(a.{prefix}_date,{calendar_day})"
         inlist(f"substr({calendar_day},1,7)", _multi(month))
         week_sql, week_args = week_filter(calendar_day, _multi(week))
         if week_sql:

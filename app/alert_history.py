@@ -10,7 +10,7 @@ HISTORY_METADATA = "state, handled_by, handle_at, handle_note, cleared_at"
 ALERT_FIELDS = (
     "order_no", "rule", "rule_cn", "category", "level", "is_main", "evidence", "days",
     "order_status", "carrier", "warehouse", "country", "tracking_no", "track_status", "track_sub",
-    "created_date", "created_at", "shipped_date", "shipped_at", "current_channel", "platform_code",
+    "created_date", "created_at", "shipped_date", "shipped_at", "paid_at", "current_channel", "platform_code",
     "customer_order_no", "platform_order_no", "last_mile", "base_date", "synced_at", "first_seen_at",
 )
 HISTORY_SCHEMA = (

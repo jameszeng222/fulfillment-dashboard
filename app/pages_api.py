@@ -17,7 +17,7 @@ from .carrier_delivery import (
     DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts, transport_minutes,
 )
 from .channel_timing import ONLINE_START, TimingBasis, online_scan_join, timing_start, transport_archive_version
-from .filter_time import time_bounds, week_filter
+from .filter_time import DATE_BASIS_FIELDS, DEFAULT_DATE_BASIS, DateBasis, time_bounds, week_filter
 from .order_time import delivery_facts
 from .tracking_archive import fill_local_times, sources as tracking_sources
 from .waybill import key_sql, normalized as normalize_waybill
@@ -35,7 +35,7 @@ TRACK_STATUS_LABEL = """coalesce(t.状态中文, CASE
 # ---------------------------------------------------------------- 公共
 
 def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="",
-          alias="o", lastmile="", channel="", date_basis="created", week=""):
+          alias="o", lastmile="", channel="", date_basis=DEFAULT_DATE_BASIS, week="", require_time=False):
     """返回 (sql, args)，sql 形如 " AND ..."，可直接拼在 WHERE 1=1 之后。"""
     w, a = [], []
 
@@ -45,14 +45,12 @@ def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="
             w.append(f'{column} IN ({",".join("?" * len(vals))})')
             a.extend(vals)
 
-    if date_basis in ("shipped", "paid"):
-        field = "签出时间" if date_basis == "shipped" else "支付时间"
-        timestamp_column = f"{alias}.{field}"
-        date_column = f"CAST({timestamp_column} AS DATE)"
-        month_column = f"strftime({date_column}, '%Y-%m')"
+    basis = date_basis or DEFAULT_DATE_BASIS
+    timestamp_column = f"{alias}.{DATE_BASIS_FIELDS[basis]}"
+    date_column = f"{alias}.创建日期" if basis == "created" else f"CAST({timestamp_column} AS DATE)"
+    month_column = f"{alias}.创建月份" if basis == "created" else f"strftime({date_column}, '%Y-%m')"
+    if require_time and basis != "created":
         w.append(f"{timestamp_column} IS NOT NULL")
-    else:
-        timestamp_column, date_column, month_column = (f"{alias}.{field}" for field in ("创建时间", "创建日期", "创建月份"))
     inl(month_column, month)
     week_sql, week_args = week_filter(date_column, core.filter_values(week))
     if week_sql:
@@ -207,10 +205,10 @@ def update_overview_channel_groups(body: OverviewChannelGroups, request: Request
 @router.get("/overview")
 def overview(request: Request, month: str = "", wh: str = "", pf: str = "", cr: str = "",
              cn: str = "", start: str = "", end: str = "", lastmile: str = "", channel: str = "", week: str = "",
-             date_basis: Literal["", "created", "shipped"] = "created"):
+             date_basis: DateBasis = DEFAULT_DATE_BASIS):
     core.require_reader(request)
     result = _overview(core.snapshot_key(), month, wh, pf, cr, cn, start, end, lastmile, channel, week,
-                       date_basis or "created")
+                       date_basis or DEFAULT_DATE_BASIS)
     with core.ops() as db:
         groups = get_channel_groups(db)["groups"]
     counts = {row["k"]: row["n"] for row in result["_currentChannels"]}
@@ -226,10 +224,10 @@ def overview(request: Request, month: str = "", wh: str = "", pf: str = "", cr: 
 
 @lru_cache(maxsize=32)
 def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, week, date_basis):
-    def filters(basis):
+    def filters(basis, *, require_time=False):
         return _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel,
-                     week=week, date_basis=basis)
-    cond, args = filters(date_basis)
+                     week=week, date_basis=basis, require_time=require_time)
+    cond, args = filters(date_basis, require_time=True)
 
     con = core.duck()
     try:
@@ -241,7 +239,7 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
         con.execute(f"""
             CREATE TEMP TABLE overview_timing AS
             SELECT o.创建月份,o.仓内分钟,o.物流分钟,o.件数,o.仓库,o.物流商,o.目的国中文,
-                   o.C端承运商,o.当前渠道,o.签出时间,o.平台,o.订单号,o.{DELIVERED_BJ},o.{DELIVERY_SOURCE}
+                   o.C端承运商,o.当前渠道,o.签出时间,o.支付时间,o.平台,o.订单号,o.{DELIVERED_BJ},o.{DELIVERY_SOURCE}
             FROM {facts} o WHERE 1=1{cond}
         """, args)
         k = con.execute(f"""
@@ -267,32 +265,32 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
                 FROM overview_timing o GROUP BY 1 ORDER BY n DESC, k NULLS LAST LIMIT {limit}
             """).df().to_dict("records")
 
-        month_column = "strftime(o.签出时间, '%Y-%m')" if date_basis == "shipped" else "o.创建月份"
+        month_column = ("o.创建月份" if date_basis == "created"
+                        else f"strftime(o.{DATE_BASIS_FIELDS[date_basis]}, '%Y-%m')")
         monthly = con.execute(f"""
             SELECT {month_column} m, count(*) n, count(o.{DELIVERED_BJ}) s,
                    avg(o.物流分钟) FILTER (WHERE o.物流分钟 > 0)/1440.0 d
             FROM overview_timing o GROUP BY 1 ORDER BY 1
         """).df().to_dict("records")
-        create_cond, create_args = filters("created")
-        daily = con.execute(f"""
-            SELECT o.创建日期::VARCHAR AS day, count(*) AS n
-            FROM {active_orders} o WHERE o.创建日期 IS NOT NULL{create_cond}
-            GROUP BY 1 ORDER BY 1
-        """, create_args).fetchall()
-        ship_cond, ship_args = filters("shipped")
-        daily_shipped = con.execute(f"""
-            SELECT CAST(o.签出时间 AS DATE)::VARCHAR AS day, count(*) AS n
-            FROM {active_orders} o WHERE o.签出时间 IS NOT NULL{ship_cond}
-            GROUP BY 1 ORDER BY 1
-        """, ship_args).fetchall()
+        daily = {}
+        for basis, key in (("created", "daily"), ("shipped", "dailyShipped"), ("paid", "dailyPaid")):
+            daily_cond, daily_args = filters(basis)
+            field = DATE_BASIS_FIELDS[basis]
+            rows = con.execute(f"""
+                SELECT CAST(o.{field} AS DATE)::VARCHAR AS day, count(*) AS n
+                FROM {active_orders} o WHERE o.{field} IS NOT NULL{daily_cond}
+                GROUP BY 1 ORDER BY 1
+            """, daily_args).fetchall()
+            daily[key] = [{"day": day, "n": count} for day, count in rows]
 
         by_carrier = by("物流商", 20)
         by_wh = by("仓库", 20)
         by_country = by("目的国中文", 15)
+        status_cond, status_args = filters(date_basis)
         by_status = con.execute(f"""
             SELECT coalesce(o.状态, '未填写状态') k, count(*) n
-            FROM {all_orders} o WHERE 1=1{cond} GROUP BY 1 ORDER BY n DESC,k
-        """, args).df().to_dict("records")
+            FROM {all_orders} o WHERE 1=1{status_cond} GROUP BY 1 ORDER BY n DESC,k
+        """, status_args).df().to_dict("records")
         by_last_mile = by("C端承运商", 16)
         current_channels = con.execute("""SELECT 当前渠道 k, count(*) n FROM overview_timing
                                           GROUP BY 1 ORDER BY n DESC, k NULLS LAST""").df().to_dict("records")
@@ -329,8 +327,7 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
         },
         "monthly": monthly, "byCarrier": by_carrier, "byWarehouse": by_wh,
         "warehouseShipping": warehouse_shipping, "orderSplit": order_split,
-        "daily": [{"day": day, "n": count} for day, count in daily],
-        "dailyShipped": [{"day": day, "n": count} for day, count in daily_shipped],
+        **daily,
         "byCountry": by_country, "byStatus": by_status,
         "byLastMile": by_last_mile, "byCurrentChannel": current_channels[:10], "_currentChannels": current_channels,
         "byTrackingStatus": track_states, "dateBasis": date_basis,
@@ -347,7 +344,7 @@ def track(request: Request,
           sort: str = "停滞天数", order: str = "desc",
           start: str = "", end: str = "", lastmile: str = "",
           sub: str = "", coverage: str = "", channel: str = "", week: str = "",
-          date_basis: Literal["", "created", "paid", "shipped"] = "created",
+          date_basis: DateBasis = DEFAULT_DATE_BASIS,
           part: Literal["all", "rows", "summary"] = "all"):
     if core.require_reader(request)["preview"]:
         return public_preview.search(q, page, size)
@@ -534,7 +531,7 @@ def track(request: Request,
 def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
              cn: str = "", min_n: int = Query(100, ge=1), cr: str = "", lastmile: str = "",
              start: str = "", end: str = "", channel: str = "", week: str = "",
-             basis: TimingBasis = "shipped", date_basis: Literal["", "paid", "shipped"] = "paid"):
+             basis: TimingBasis = "shipped", date_basis: DateBasis = DEFAULT_DATE_BASIS):
     core.require_reader(request)
     if basis == "created":
         basis = "paid"  # Value used by earlier clients for 下单到签收.
@@ -543,9 +540,9 @@ def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
     archive = transport_archive_version() if basis == "online" or any(
         item.get("basis") == "online" for item in saved.values()
     ) else None
-    date_basis = date_basis or "paid"
+    date_basis = date_basis or DEFAULT_DATE_BASIS
     cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel, week=week,
-                       date_basis=date_basis)
+                       date_basis=date_basis, require_time=True)
     report = _channel_report(core.snapshot_key(), archive, json.dumps(saved, sort_keys=True), basis, cond, tuple(args),
                              date_basis)
     return {**report, "dateBasis": date_basis, "rows": [row for row in report["rows"] if row["orders"] >= min_n]}
@@ -558,7 +555,7 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis):
         raw_facts = core.active_facts(core.order_facts(con))
         facts = reporting_facts(con, delivery_facts(con, raw_facts))
         asof = con.execute(f"SELECT max(创建日期) FROM {raw_facts}").fetchone()[0]
-        field = "签出时间" if date_basis == "shipped" else "支付时间"
+        field = DATE_BASIS_FIELDS[date_basis]
         date_asof = con.execute(f"SELECT CAST(max({field}) AS DATE) FROM {raw_facts}").fetchone()[0]
         slas = rules.current_channel_slas(con, raw_facts, json.loads(saved))
         sla_sql, sla_values = rules.sla_table(slas)

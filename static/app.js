@@ -393,6 +393,7 @@ function makeTimeRange(onChange) {
 function makeFilters(host, defs, onChange) {
   host.innerHTML = '';
   const refs = {};
+  const defaults = new Map();
   let timeRange;
   const change = (...args) => {
     if (!timeRange || timeRange.validate()) onChange(...args);
@@ -436,19 +437,25 @@ function makeFilters(host, defs, onChange) {
     } else {
       const s = el('select'); s.dataset.key = d.key;
       s.setAttribute('aria-label', d.label);
-      s.innerHTML = `<option value="">${d.defaultLabel || d.label + '：全部'}</option>` +
+      s.innerHTML = (d.defaultValue == null ? `<option value="">${d.defaultLabel || d.label + '：全部'}</option>` : '') +
         (d.options || []).filter(o => o != null && o !== '').map(o => {
           const v = (o && typeof o === 'object') ? o.v : o;
           const t = (o && typeof o === 'object') ? (o.t != null ? o.t : o.v) : o;
           return `<option value="${esc(v)}">${esc(t)}</option>`;
         }).join('');
       s.onchange = () => change(1);
+      if (d.defaultValue != null) {
+        s.value = d.defaultValue;
+        defaults.set(d.key, d.defaultValue);
+      }
       host.appendChild(s); refs[d.key] = s;
     }
   });
   const btn = el('button', 'btn ghost sm', '重置');
   btn.onclick = () => {
-    Object.values(refs).forEach(control => { if ('value' in control) control.value = ''; });
+    Object.entries(refs).forEach(([key, control]) => {
+      if ('value' in control) control.value = defaults.get(key) ?? '';
+    });
     change(1);
   };
   host.appendChild(btn);
@@ -492,7 +499,9 @@ function pager(host, total, page, size, go) {
 /* ================= 数据总览 ================= */
 let DF = null;
 let renderedDash = null;
-const trend = { created: [], shipped: [], filters: {}, span: 45, basis: 'created' };
+const DEFAULT_DATE_BASIS = 'shipped';
+const dateBasisLabel = {paid: '支付时间', created: '创建时间', shipped: '出库时间'};
+const trend = { created: [], shipped: [], paid: [], filters: {}, span: 45, basis: DEFAULT_DATE_BASIS };
 const channelGroupPath = '/api/overview/channel-groups';
 let channelGroups;
 let chosenChannels = new Set();
@@ -595,14 +604,10 @@ function drawWeekCalendar() {
   }).join('') || blankRow(10, '暂时无法读取周次表');
 }
 
-const dateBasisLabel = {created: '履约单创建时间', paid: '支付时间', shipped: '签出时间'};
-
-function dateBasisFilter(defaultBasis) {
-  const options = defaultBasis === 'paid' ? ['shipped'] :
-    defaultBasis === 'track' ? ['paid', 'shipped'] : ['shipped'];
+function dateBasisFilter() {
   return {type: 'select', label: '筛选时间', key: 'date_basis',
-    defaultLabel: dateBasisLabel[defaultBasis === 'track' ? 'created' : defaultBasis],
-    options: options.map(v => ({v, t: dateBasisLabel[v]}))};
+    defaultValue: DEFAULT_DATE_BASIS,
+    options: Object.entries(dateBasisLabel).map(([v, t]) => ({v, t}))};
 }
 
 function updateDateOptions(filters, basis) {
@@ -613,9 +618,9 @@ function updateDateOptions(filters, basis) {
   }
 }
 
-function dashFilterDefs(basis) {
+function commonDateFilters() {
   return [
-    ...(basis ? [dateBasisFilter(basis)] : []),
+    dateBasisFilter(),
     { type: 'time-range' },
     ...Object.entries({ month: '月份', week: '周次', wh: '仓库', pf: '平台', cr: '后台物流商',
       channel: '当前渠道', lastmile: 'C 端渠道', cn: '国家' }).map(([key, label]) =>
@@ -626,13 +631,13 @@ function dashFilterDefs(basis) {
 async function loadDash() {
   await Promise.all([loadMeta(), loadChartLibrary()]);
   if (VIEW !== 'dash') return;
-  if (!DF) DF = makeFilters($('#dashFilters'), dashFilterDefs('created'), () => run(loadDash));
+  if (!DF) DF = makeFilters($('#dashFilters'), commonDateFilters(), () => run(loadDash));
   const f = readF(DF);
-  updateDateOptions(DF, f.date_basis || 'created');
+  updateDateOptions(DF, f.date_basis);
   const d = await latest('dash', '/api/overview?' + qs(f));
   if (!d || VIEW !== 'dash' || renderedDash === d) return;
   renderedDash = d;
-  const dateBasis = d.dateBasis || 'created';
+  const dateBasis = d.dateBasis || (d.snapshotAt ? 'created' : f.date_basis);
   $('#monthlyScope').textContent = `按${dateBasisLabel[dateBasis]}所属月份统计 · 物流时效为出库到妥投`;
   DF._info.hidden = !d.snapshotFiltersSkipped;
   DF._info.textContent = d.snapshotFiltersSkipped ? '实时筛选暂不可用，图表显示全量快照' : '';
@@ -645,7 +650,7 @@ async function loadDash() {
     ['妥投覆盖率', measure(k.signRate, '%'), `含 WMS 补算 ${fmt(k.fallbackSigned)} 单`, 'check', 'green'],
     ['仓内处理', k.inboundHours == null ? '—' : `${fmt1(k.inboundHours)} <small>小时</small>`, '履约单创建 → 出库', 'warehouse', 'violet'],
     ['物流运输', k.transitDays == null ? '—' : `${fmt1(k.transitDays)} <small>天</small>`, `出库 → 妥投 · ${fmt(k.transitSamples)} 单`, 'truck', 'cyan'],
-    ['6 天达成率', measure(k.rate6, '%'), '有效时效样本中 ≤6 天', 'clock', 'green'],
+    ['6 天达成率', measure(k.rate6, '%'), '出库 → 签收 · 有效样本中 ≤6 天', 'clock', 'green'],
   ];
   $('#dashKpi').innerHTML = defs.map(([label, value, detail, name, tone]) =>
     `<div class="kpi"><div class="kpi-label"><span class="lbl">${label}</span>${sectionIcon(name, tone)}</div><div class="val">${value}</div><div class="fl">${detail}</div></div>`).join('');
@@ -681,6 +686,7 @@ async function loadDash() {
   }
   trend.created = d.daily;
   trend.shipped = d.dailyShipped;
+  trend.paid = d.dailyPaid;
   trend.filters = f;
   drawDailyVolume();
 
@@ -777,16 +783,16 @@ function drawDailyVolume() {
   const clock = day => Date.parse(day + 'T00:00:00Z');
   const dayMs = 86_400_000;
   const series = trend[trend.basis] || [];
-  const shipped = trend.basis === 'shipped';
+  const label = dateBasisLabel[trend.basis];
   const last = series.at(-1);
   const latest = last ? clock(last.day) : 0;
   const days = trend.span ? series.filter(row => clock(row.day) >= latest - (trend.span - 1) * dayMs) : series;
   $('#dailyNote').hidden = ME.preview || !days.length;
-  $('#dailyNote').textContent = shipped ? '点击查看当天出库的履约单' : '点击查看当天创建的履约单';
+  $('#dailyNote').textContent = `点击按${label}查看当天的履约单`;
   $('#cDaily').hidden = !days.length;
   $('#dailyRange').textContent = days.length ?
-    `${days[0].day} 至 ${days.at(-1).day} · ${shipped ? '按出库日' : '按建单日'}（北京时间）` :
-    shipped && !trend.shipped ? '当前快照等待同步出库日单量' : '当前筛选无履约单';
+    `${days[0].day} 至 ${days.at(-1).day} · 按${label}统计（北京时间）` :
+    !trend[trend.basis] ? `当前快照暂无${label}日单量` : '当前筛选无履约单';
   if (!days.length) {
     $('#dailyFocus').textContent = '';
     return;
@@ -837,7 +843,7 @@ function drawDailyVolume() {
     const row = days.find(day => Math.abs(clock(day.day) - date) <= dayMs / 2);
     if (row) {
       const {start, end} = trend.filters;
-      openTracking({ ...trend.filters, date_basis: shipped ? 'shipped' : '',
+      openTracking({ ...trend.filters, date_basis: trend.basis,
         start: start?.startsWith(row.day) ? start : row.day,
         end: end?.startsWith(row.day) ? end : row.day });
     }
@@ -936,7 +942,7 @@ const trackingLookup = () => ({type: 'text', label: '履约单号 / 运单号 / 
   key: 'q', w: 275, submit: true, auto: !ME.preview});
 
 function monitoringFilterDefs(alerts = false) {
-  const common = dashFilterDefs();
+  const common = commonDateFilters();
   if (alerts) {
     const channels = META.alertChannels || [];
     Object.assign(common.find(def => def.key === 'channel'), {
@@ -945,7 +951,6 @@ function monitoringFilterDefs(alerts = false) {
   }
   return [
     trackingLookup(),
-    dateBasisFilter(alerts ? 'created' : 'track'),
     ...common,
     { type: 'select', label: '17TRACK 状态', key: 'tstat', options: trackingGroups() },
     { type: 'select', label: '子状态', key: 'sub' },
@@ -966,10 +971,11 @@ function prepareTrack() {
       options: coverageOptions.map(([v, t]) => ({ v, t })) },
     { type: 'select', label: '排序', key: 'sort', options: ['创建时间', '签出时间', '停滞天数', '逐条事件数'] },
   ], (_, action) => {
-    updateDateOptions(TF, TF.date_basis.value || 'created');
+    updateDateOptions(TF, TF.date_basis.value);
     updateSubstates(TF);
     run(() => loadTrack(1, action === 'search'));
   });
+  updateDateOptions(TF, TF.date_basis.value);
   updateSubstates(TF);
   TF._info.setAttribute('role', 'status');
 }
@@ -977,8 +983,13 @@ function prepareTrack() {
 function openTracking(values = {}) {
   if (!ME.preview && !META) return run(async () => { await loadMeta(); openTracking(values); });
   prepareTrack();
-  if (!ME.preview) updateDateOptions(TF, values.date_basis || 'created');
-  Object.entries(TF).forEach(([key, control]) => { if (key !== '_info') control.value = values[key] || ''; });
+  if (!ME.preview) {
+    TF.date_basis.value = values.date_basis || DEFAULT_DATE_BASIS;
+    updateDateOptions(TF, TF.date_basis.value);
+  }
+  Object.entries(TF).forEach(([key, control]) => {
+    if (key !== '_info' && key !== 'date_basis') control.value = values[key] || '';
+  });
   if (!ME.preview) updateSubstates(TF);
   setTrackMode('tracking');
   showView('track');
@@ -1153,7 +1164,8 @@ function prepareAlerts() {
     { type: 'select', label: '预警规则', key: 'rule', options: ruleOptions() },
     { type: 'select', label: '级别', key: 'level', options: ['紧急', '高', '中'] },
     { type: 'select', label: '命中范围', key: 'main_only', options: [{ v: 'true', t: '仅主预警' }] },
-  ], () => { updateSubstates(AF); run(loadAlerts); });
+  ], () => { updateDateOptions(AF, AF.date_basis.value); updateSubstates(AF); run(loadAlerts); });
+  updateDateOptions(AF, AF.date_basis.value);
   updateSubstates(AF);
 }
 
@@ -1289,10 +1301,10 @@ async function loadChannelFilters() {
   }
   if (CF) return;
   CF = makeFilters(host, [
-    ...dashFilterDefs('paid'),
+    ...commonDateFilters(),
     { type: 'select', label: '最少单量（默认 100）', key: 'min_n', options: [1, 10, 30, 100, 500] },
   ], () => run(loadChannels));
-  updateDateOptions(CF, 'paid');
+  updateDateOptions(CF, CF.date_basis.value);
   if (renderedChannels) showChannelDataDate(renderedChannels);
 }
 
@@ -1373,7 +1385,7 @@ async function loadChannels() {
   if (!CF) run(loadChannelFilters);
   const basis = channelBasis;
   const filters = readF(CF || {});
-  if (CF) updateDateOptions(CF, filters.date_basis || 'paid');
+  if (CF) updateDateOptions(CF, filters.date_basis);
   const loading = $('#channelLoading');
   const results = $('#channelResults');
   const currentResult = Boolean(renderedChannels);
