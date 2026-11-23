@@ -1077,6 +1077,7 @@ const syncReasons = {
   credentials: '请检查本机 17TRACK 凭据', prepare: '查询或准备数据失败', publish: '数据库切换失败',
   interrupted: '上次任务中断', unmatched: '待匹配履约单', postnet: '按规则跳过 Postnet',
   not_in_scope: '不在当前处理范围',
+  outside_tracking_window: '出库超过五个月，已停止更新',
   different_carrier: '与已匹配的承运商代码不同', older: '本地已有更新的轨迹',
   notification_only: '通知已记录',
 };
@@ -1115,12 +1116,12 @@ async function loadSyncStatus() {
   $('#pollStatus').className = 'badge ' + pollTone;
   $('#pollStatus').textContent = pollLabel;
   $('#pollSummary').innerHTML = sourceRows([
-    ['查询范围', '近 3 个月出库，以及更早出库但仍未签收的合规运单'],
+    ['查询范围', '近 3 个月出库的合规运单，以及出库 3–5 个月且未签收的合规运单'],
     ['运行计划', poll.schedule ? '每 2 小时检查 · 单批最多 4,000 运单' : '计划任务状态暂不可读'],
     ...(poll.coverage ? [
-      ['待持续核对范围', `${fmt(poll.coverage.orders)} 单 · 超过三个月 ${fmt(poll.coverage.olderOrders)} 单`],
+      ['待持续核对范围', `${fmt(poll.coverage.orders)} 单 · 出库 3–5 个月 ${fmt(poll.coverage.olderOrders)} 单`],
       ['逐单核对进度', `近 24 小时成功 ${fmt(poll.coverage.verified24h)} 单 · 待首次核对 ${fmt(poll.coverage.uncheckedOrders)} 单 · 最近一次异常 ${fmt(poll.coverage.exceptionOrders)} 单`],
-      ['超过三个月的未签收单', `近 24 小时成功 ${fmt(poll.coverage.olderVerified24h)} 单 · 待首次核对 ${fmt(poll.coverage.olderUnchecked)} 单`],
+      ['出库 3–5 个月的未签收单', `近 24 小时成功 ${fmt(poll.coverage.olderVerified24h)} 单 · 待首次核对 ${fmt(poll.coverage.olderUnchecked)} 单`],
     ] : []),
     ['最近成功', syncTime(poll.lastSuccess)],
     ['最近一批', run?.detail?.queried != null ?

@@ -167,7 +167,8 @@ def apply_pushes(con, pushes):
     live_status, _, _ = tracking_archive.sources(con)
     numbers = [push["number"] for push in pushes]
     facts = con.execute(f"""
-        SELECT o.单号归一,o.物流商,o.C端承运商,t.carrier,t.最新事件时间,t.状态,{core.active_order()} AS active
+        SELECT o.单号归一,o.物流商,o.C端承运商,t.carrier,t.最新事件时间,t.状态,{core.active_order()} AS active,
+               coalesce(o.签出时间 < {tracking_freshness.OLDEST_DISPATCH}, false) AS too_old
         FROM fct_order o LEFT JOIN {live_status} t ON t.单号=o.单号归一
         WHERE o.单号归一 IN (SELECT unnest(?::VARCHAR[]))
         QUALIFY row_number() OVER (PARTITION BY o.单号归一
@@ -182,9 +183,12 @@ def apply_pushes(con, pushes):
             expired = now - datetime.fromisoformat(push["received_at"]) >= timedelta(days=1)
             outcomes.append([push_id, "ignored" if expired else "queued", "unmatched"])
             continue
-        raw_carrier, lastmile, previous, last_event, last_status, active = matched[number]
+        raw_carrier, lastmile, previous, last_event, last_status, active, too_old = matched[number]
         if not active:
             outcomes.append([push_id, "ignored", "not_in_scope"])
+            continue
+        if too_old:
+            outcomes.append([push_id, "ignored", "outside_tracking_window"])
             continue
         if any((name or "").strip().casefold() == "postnet" for name in (raw_carrier, lastmile)):
             outcomes.append([push_id, "ignored", "postnet"])
@@ -203,7 +207,7 @@ def apply_pushes(con, pushes):
             outcomes.append([push_id, "ignored", "older"])
             continue
         track17.save_one(con, result)
-        matched[number] = (raw_carrier, lastmile, carrier, latest, next_status, active)
+        matched[number] = (raw_carrier, lastmile, carrier, latest, next_status, active, too_old)
         outcomes.append([push_id, "applied", None])
     return outcomes
 

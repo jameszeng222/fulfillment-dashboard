@@ -5,6 +5,7 @@ from . import core, tracking_archive
 
 
 TABLE = "trk_verification"
+OLDEST_DISPATCH = "date_trunc('day', current_timestamp AT TIME ZONE 'Asia/Shanghai') - INTERVAL '5 months'"
 
 
 def scope(con):
@@ -29,7 +30,7 @@ def scope(con):
             WHERE {core.active_order()} AND length(o.单号归一) BETWEEN 8 AND 50
               AND lower(coalesce(trim(o.物流商),''))<>'postnet'
               AND lower(coalesce(trim(o.C端承运商),''))<>'postnet'
-              AND o.签出时间 IS NOT NULL AND o.签出时间<=now
+              AND o.签出时间 BETWEEN {OLDEST_DISPATCH} AND now
               AND (o.签出时间>=date_trunc('day', now)-INTERVAL '3 months' OR o.已签收=0)
               AND (coalesce(t.状态,'')<>'Delivered' OR (
                    NOT (coalesce(h.事件数,0)>0 AND h.carrier IS NOT DISTINCT FROM t.carrier)
