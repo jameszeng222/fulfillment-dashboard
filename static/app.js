@@ -1120,6 +1120,7 @@ async function loadSyncStatus() {
     ...(poll.coverage ? [
       ['待持续核对范围', `${fmt(poll.coverage.orders)} 单 · 超过三个月 ${fmt(poll.coverage.olderOrders)} 单`],
       ['逐单核对进度', `近 24 小时成功 ${fmt(poll.coverage.verified24h)} 单 · 待首次核对 ${fmt(poll.coverage.uncheckedOrders)} 单 · 最近一次异常 ${fmt(poll.coverage.exceptionOrders)} 单`],
+      ['超过三个月的未签收单', `近 24 小时成功 ${fmt(poll.coverage.olderVerified24h)} 单 · 待首次核对 ${fmt(poll.coverage.olderUnchecked)} 单`],
     ] : []),
     ['最近成功', syncTime(poll.lastSuccess)],
     ['最近一批', run?.detail?.queried != null ?
@@ -1501,12 +1502,12 @@ async function loadOrderDetail(no, path, refresh = false) {
     ['妥投统计来源', o.妥投统计来源 === 'WMS' ? 'WMS 补算' : o.妥投统计来源 || '—'],
     ['C 端承运商', o.C端承运商],
     ['17TRACK 主状态', orderTrackStatus(o)],
-    ['17TRACK 子状态', o.轨迹子状态], ['最近查询', dt(o.查询时间)],
+    ['17TRACK 子状态', o.轨迹子状态],
     ...(d.verification ? [
       ['最近核对（北京时间）', dt(d.verification.lastAttempt)],
       ['最近成功核对（北京时间）', dt(d.verification.lastVerified)],
       ['核对结果', verificationStatus[d.verification.outcome] || d.verification.outcome],
-    ] : []),
+    ] : [['最近查询', dt(o.查询时间)]]),
   ];
 
   const alerts = (d.alerts || []).map(a => `
