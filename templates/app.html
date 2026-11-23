@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261120-instant-drawer">
+<link rel="stylesheet" href="/static/app.css?v=20261123-overview-mix">
 </head>
 <body>
 <div class="app">
@@ -69,6 +69,14 @@
           </section>
         </div>
         <div class="grid overview-breakdown">
+          <section class="card plot-card" aria-labelledby="warehouseShareTitle">
+            <div class="ct"><div><h2 id="warehouseShareTitle">海外仓发货占比</h2><p class="tip">按已出库履约单统计 · 跟随总览筛选</p></div></div>
+            <div id="warehouseShippingMix"></div>
+          </section>
+          <section class="card plot-card" aria-labelledby="splitShareTitle">
+            <div class="ct"><div><h2 id="splitShareTitle">订单拆单率</h2><p class="tip">订单被拆为多个履约单 · 按该订单的全部有效履约单判定类型</p></div></div>
+            <div id="orderSplitMix"></div>
+          </section>
           <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip">单量按创建月份统计 · 物流时效为出库到妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
           <section class="card plot-card"><div class="ct"><div><h2>后台物流商单量</h2><p class="tip">单量前 10</p></div></div><div id="cCarrier"></div></section>
           <section class="card plot-card"><div class="ct"><div><h2>C 端承运商单量</h2><p class="tip">客户看到的末端承运商 · 单量前 10</p></div></div><div id="cLastMile"></div></section>
@@ -254,6 +262,8 @@
                 <tr><th scope="row">库内处理</th><td>出库时间减创建履约单时间。按分钟计算，取大于 0 的样本平均值，换算为小时。分配、打包节点供核对过程。</td></tr>
                 <tr><th scope="row">下单 / 出库 / 上网到妥投</th><td>妥投时间减所选起点，换算为天。缺有效起点或妥投时间、耗时小于等于 0 的记录不计入平均时效及达成率。</td></tr>
                 <tr><th scope="row">妥投覆盖率</th><td>有有效妥投时间的履约单数 ÷ 本次筛选范围内的履约单数。取消单仅计入出库单状态统计。</td></tr>
+                <tr><th scope="row">海外仓发货占比</th><td>海外仓已出库履约单 ÷ 筛选范围内全部已出库履约单。按仓库代码判断，WINIT、NF01 和 MGZYTH01 归为海外仓，未归类仓库单独显示。日期筛选按履约单创建日。</td></tr>
+                <tr><th scope="row">订单拆单率</th><td>拆单订单数 ÷ 筛选命中的可识别订单数。按平台和 ERP 订单号识别，一张订单有两个或以上有效履约单即为拆单。筛选命中任一履约单即纳入订单，判定类型时看整张订单。同仓指所有履约单仓库相同，异仓指涉及两个或以上仓库。仓库缺失且无法判定时单独显示。</td></tr>
                 <tr><th scope="row">承诺时效达成率</th><td>在承诺天数内妥投的有效样本数 ÷ 有效签收样本数。按每单的「当前渠道」配置确定 SLA 起点与承诺天数，渠道表现按 C 端显示物流渠道对比。</td></tr>
                 <tr><th scope="row">平均时效和 P90</th><td>使用当前选择的时效起点及有效妥投样本。P90 是时效的第 90 百分位，约 90% 的有效样本在这个耗时内妥投。</td></tr>
                 <tr><th scope="row">在途超时占比</th><td>分母是有可用 SLA 起点的在途单。分子是在数据基准日已超过当前渠道承诺天数的订单。相比业务预警的「运输超时」，这里按渠道承诺天数计算。</td></tr>
@@ -335,6 +345,6 @@
   </form>
 </dialog>
 
-<script src="/static/app.js?v=20261123-tracking-window" defer></script>
+<script src="/static/app.js?v=20261123-overview-mix" defer></script>
 </body>
 </html>

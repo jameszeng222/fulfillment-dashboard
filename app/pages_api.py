@@ -77,6 +77,61 @@ def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="
 
 # ---------------------------------------------------------------- 总览
 
+def _warehouse_shipping_mix(con):
+    result = con.execute("""
+        WITH shipped AS (
+            SELECT upper(trim(仓库)) AS warehouse FROM overview_timing
+            WHERE 签出时间 IS NOT NULL
+        ), regions AS (
+            SELECT CASE
+                WHEN contains(warehouse,'WINIT') OR warehouse IN ('MGZYTH01','NF01') THEN 'overseas'
+                WHEN warehouse IN ('JY01','JY02','JY03','XC01','XCWH01','WH01','ZBJ') THEN 'domestic'
+                ELSE 'unknown' END AS region
+            FROM shipped
+        )
+        SELECT count(*) AS total, count(*) FILTER (WHERE region='overseas') AS overseas,
+               count(*) FILTER (WHERE region='domestic') AS domestic,
+               count(*) FILTER (WHERE region='unknown') AS unknown
+        FROM regions
+    """)
+    return dict(zip((column[0] for column in result.description), result.fetchone()))
+
+
+def _order_split_mix(con, active_orders, filtered):
+    if filtered:
+        # Use the entire order to classify splits, even if only one fulfillment matches.
+        order_source = f"""{active_orders} o SEMI JOIN (
+            SELECT DISTINCT coalesce(trim(平台),'') AS platform, trim(订单号) AS order_no
+            FROM overview_timing WHERE nullif(trim(订单号),'') IS NOT NULL
+        ) matched ON matched.platform=coalesce(trim(o.平台),'') AND matched.order_no=trim(o.订单号)"""
+    else:
+        order_source = "overview_timing o"
+    result = con.execute(f"""
+        WITH order_groups AS (
+            SELECT coalesce(trim(o.平台),'') AS platform, trim(o.订单号) AS order_no,
+                   count(*) AS fulfillments,
+                   count(nullif(trim(o.仓库),'')) AS known_warehouses,
+                   min(nullif(upper(trim(o.仓库)),'')) AS first_warehouse,
+                   max(nullif(upper(trim(o.仓库)),'')) AS last_warehouse
+            FROM {order_source}
+            WHERE nullif(trim(o.订单号),'') IS NOT NULL GROUP BY 1,2
+        ), kinds AS (
+            SELECT CASE
+                WHEN fulfillments=1 THEN 'single'
+                WHEN first_warehouse<>last_warehouse THEN 'cross'
+                WHEN known_warehouses=fulfillments THEN 'same'
+                ELSE 'unknown' END AS kind
+            FROM order_groups
+        )
+        SELECT count(*) AS total, count(*) FILTER (WHERE kind<>'single') AS split,
+               count(*) FILTER (WHERE kind='same') AS same, count(*) FILTER (WHERE kind='cross') AS cross,
+               count(*) FILTER (WHERE kind='unknown') AS unknown,
+               (SELECT count(*) FROM overview_timing WHERE nullif(trim(订单号),'') IS NULL) AS missingFulfillments
+        FROM kinds
+    """)
+    return dict(zip((column[0] for column in result.description), result.fetchone()))
+
+
 @router.get("/overview")
 def overview(request: Request, month: str = "", wh: str = "", pf: str = "", cr: str = "",
              cn: str = "", start: str = "", end: str = "", lastmile: str = "", channel: str = ""):
@@ -98,7 +153,7 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel):
         con.execute(f"""
             CREATE TEMP TABLE overview_timing AS
             SELECT o.创建月份,o.仓内分钟,o.物流分钟,o.件数,o.仓库,o.物流商,o.目的国中文,
-                   o.C端承运商,o.当前渠道,o.{DELIVERED_BJ},o.{DELIVERY_SOURCE}
+                   o.C端承运商,o.当前渠道,o.签出时间,o.平台,o.订单号,o.{DELIVERED_BJ},o.{DELIVERY_SOURCE}
             FROM {facts} o WHERE 1=1{cond}
         """, args)
         k = con.execute(f"""
@@ -114,6 +169,8 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel):
                    count(*) FILTER (WHERE {DELIVERY_SOURCE}='WMS' AND 物流分钟>0) fallback_samples
             FROM overview_timing
         """).fetchone()
+        warehouse_shipping = _warehouse_shipping_mix(con)
+        order_split = _order_split_mix(con, active_orders, bool(cond))
 
         def by(col, limit=20):
             return con.execute(f"""
@@ -181,6 +238,7 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel):
             "fallbackSigned": k[10], "fallbackTransitSamples": k[11],
         },
         "monthly": monthly, "byCarrier": by_carrier, "byWarehouse": by_wh,
+        "warehouseShipping": warehouse_shipping, "orderSplit": order_split,
         "daily": [{"day": day, "n": count} for day, count in daily],
         "dailyShipped": [{"day": day, "n": count} for day, count in daily_shipped],
         "byCountry": by_country, "byStatus": by_status,

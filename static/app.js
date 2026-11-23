@@ -424,6 +424,8 @@ async function loadDash() {
   $('#dashKpi').innerHTML = defs.map(([l, v, s]) =>
     `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="fl">${s}</div></div>`).join('');
 
+  drawOverviewMixes(d);
+
   const c = initChart('cMonthly');
   c.setOption({
     animation: chartMotion, animationDuration: 230, animationDurationUpdate: 140, animationEasing: 'quarticOut',
@@ -463,6 +465,45 @@ async function loadDash() {
   drawRank('cCurrentChannel', d.byCurrentChannel || [], 10,
     ME.preview ? null : value => openTracking({ ...f, channel: value }));
   drawDispatchStatus(d.byStatus);
+}
+
+function drawOverviewMixes(data) {
+  const shipping = data.warehouseShipping;
+  const orders = data.orderSplit;
+  if (shipping) {
+    drawMix('warehouseShippingMix', shipping.overseas, shipping.total,
+      `${fmt(shipping.overseas)} / ${fmt(shipping.total)} 个已出库履约单`,
+      [
+        ['海外仓', shipping.overseas, 'primary'], ['国内仓', shipping.domestic, 'secondary'],
+        ...(shipping.unknown ? [['仓库未归类', shipping.unknown, 'unknown']] : []),
+      ], shipping.total);
+  } else {
+    $('#warehouseShippingMix').textContent = '等待快照同步';
+  }
+  if (orders) {
+    drawMix('orderSplitMix', orders.split, orders.total,
+      `${fmt(orders.split)} / ${fmt(orders.total)} 个订单拆单`,
+      [
+        ['同仓拆单', orders.same, 'primary'], ['异仓拆单', orders.cross, 'secondary'],
+        ...(orders.unknown ? [['仓库待确认', orders.unknown, 'unknown']] : []),
+      ], orders.split, '拆单构成按拆单订单数计算。' +
+      (orders.missingFulfillments ? `另有 ${fmt(orders.missingFulfillments)} 个履约单缺少订单号。` : ''));
+  } else {
+    $('#orderSplitMix').textContent = '等待快照同步';
+  }
+}
+
+function drawMix(id, numerator, denominator, summary, rows, groupTotal, note = '') {
+  const percentage = (n, total) => measure(total ? 100 * n / total : null, '%');
+  const bar = rows.filter(([, n]) => n > 0).map(([name, n, tone]) =>
+    `<span class="mix-${tone}" style="flex:${n} 0 0" title="${esc(name)} ${percentage(n, groupTotal)}"></span>`).join('');
+  $(`#${id}`).innerHTML = `
+    <div class="mix-summary"><strong>${percentage(numerator, denominator)}</strong><span class="tip">${esc(summary)}</span></div>
+    <div class="mix-track" aria-hidden="true">${bar}</div>
+    <ul class="mix-list">${rows.map(([name, n, tone]) => `<li>
+      <span class="mix-key mix-${tone}" aria-hidden="true"></span><span>${esc(name)}</span><strong>${fmt(n)} 单</strong>
+      <span class="mix-percentage">${percentage(n, groupTotal)}</span></li>`).join('')}</ul>
+    ${note ? `<p class="tip mix-note">${esc(note)}</p>` : ''}`;
 }
 
 function drawDispatchStatus(rows) {
