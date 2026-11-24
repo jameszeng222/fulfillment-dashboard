@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261124-channel-group-comparison">
+<link rel="stylesheet" href="/static/app.css?v=20261124-filter-visuals">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -29,6 +29,13 @@
   <symbol id="i-pin" viewBox="0 0 24 24"><path d="M19 10c0 5-7 11-7 11s-7-6-7-11a7 7 0 1 1 14 0Z"/><circle cx="12" cy="10" r="2.2"/></symbol>
   <symbol id="i-return" viewBox="0 0 24 24"><path d="m9 5-5 5 5 5m-5-5h11a5 5 0 0 1 0 10h-3"/></symbol>
   <symbol id="i-external" viewBox="0 0 24 24"><path d="M14 4h6v6m0-6-9 9m7 0v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></symbol>
+  <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 10h18m-12 4h2m3 0h2m-7 3h2m3 0h2"/></symbol>
+  <symbol id="i-week" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4m10-4v4M3 10h18M7 14h10M7 17h6"/></symbol>
+  <symbol id="i-store" viewBox="0 0 24 24"><path d="M4 10v11h16V10M3 10l2-6h14l2 6M3 10a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0M9 21v-6h6v6"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m15.3 15.3 4.2 4.2"/></symbol>
+  <symbol id="i-wallet" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18m-8 6h4M6 15h3"/></symbol>
+  <symbol id="i-sort" viewBox="0 0 24 24"><path d="M8 20V4m-4 4 4-4 4 4m4-4v16m-4-4 4 4 4-4"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M12 6c-3-2-6-2-9-1v14c3-1 6-1 9 1 3-2 6-2 9-1V5c-3-1-6-1-9 1Zm0 0v14"/></symbol>
 </svg>
 <div class="app">
 
@@ -131,9 +138,9 @@
       <section class="view" id="v-track">
         <div class="page-head"><div><h1>轨迹监控</h1><p id="trackIntro">查看 17TRACK 主子状态、履约节点与预警处理进度。</p></div></div>
         <div class="tabs" id="trackTabs" aria-label="轨迹监控分类">
-          <button type="button" data-mode="tracking" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>运单轨迹</button>
-          <button type="button" data-mode="alerts" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg>预警处理 <span class="nav-count" id="alertTabCount"></span></button>
-          <button type="button" data-mode="archive" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg>归档列表</button>
+          <button type="button" class="tab-toned tone-cyan" data-mode="tracking" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>运单轨迹</button>
+          <button type="button" class="tab-toned tone-warn" data-mode="alerts" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg>预警处理 <span class="nav-count" id="alertTabCount"></span></button>
+          <button type="button" class="tab-toned tone-violet" data-mode="archive" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg>归档列表</button>
         </div>
         <div class="workspace-stack" id="trackingPane">
         <div class="filters" id="trackFilters"></div>
@@ -191,22 +198,22 @@
       <section class="view" id="v-channels">
         <div class="page-head"><div><h1>渠道时效</h1><p>比较 C 端物流渠道和自定义渠道分组的签收时效。妥投优先用 17TRACK，缺失时按仓库及承运商时间口径用 WMS 补算。</p></div></div>
         <div class="tabs" id="channelTabs" aria-label="渠道时效分类">
-          <button type="button" data-pane="timing" aria-pressed="true">时效对比</button>
-          <button type="button" data-pane="exceptions" aria-pressed="false">轨迹异常</button>
+          <button type="button" class="tab-toned tone-blue" data-pane="timing" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg>时效对比</button>
+          <button type="button" class="tab-toned tone-warn" data-pane="exceptions" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg>轨迹异常</button>
         </div>
         <div class="workspace-stack" id="channelTimingPane">
         <div class="filters" id="channelFilters"></div>
         <div class="card channel-basis">
           <div class="channel-dimension-control"><span>对比维度</span>
             <div class="tabs" id="channelDimension" role="group" aria-label="渠道对比维度">
-              <button type="button" data-dimension="lastmile" aria-pressed="true">C 端渠道</button>
-              <button type="button" data-dimension="group" aria-pressed="false">自定义渠道</button>
+              <button type="button" class="tab-toned tone-cyan" data-dimension="lastmile" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>C 端渠道</button>
+              <button type="button" class="tab-toned tone-green" data-dimension="group" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg>自定义渠道</button>
             </div>
           </div>
           <div class="tabs" id="channelBasis" role="group" aria-label="时效统计口径">
-            <button type="button" data-basis="paid" aria-pressed="false">支付到签收</button>
-            <button type="button" data-basis="shipped" aria-pressed="true">出库到签收</button>
-            <button type="button" data-basis="online" aria-pressed="false">上网到签收</button>
+            <button type="button" class="tab-toned tone-blue" data-basis="paid" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-wallet"/></svg>支付到签收</button>
+            <button type="button" class="tab-toned tone-green" data-basis="shipped" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-warehouse"/></svg>出库到签收</button>
+            <button type="button" class="tab-toned tone-cyan" data-basis="online" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-scan"/></svg>上网到签收</button>
           </div>
           <p id="channelBasisNote" aria-live="polite">从出库（北京时间）到妥投。计算时统一时区。</p>
         </div>
@@ -291,8 +298,8 @@
           <div><h1 id="usTitle">区域分析</h1><p>比较各目的地区的渠道构成与履约关键阶段时效。</p></div>
         </div>
         <div class="tabs" id="regionMarkets" role="group" aria-label="分析区域">
-          <button type="button" data-value="us" aria-pressed="true">美国</button>
-          <button type="button" data-value="other" aria-pressed="false">其他国家</button>
+          <button type="button" class="tab-toned tone-blue" data-value="us" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-pin"/></svg>美国</button>
+          <button type="button" class="tab-toned tone-cyan" data-value="other" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg>其他国家</button>
         </div>
         <div class="filters" id="usFilters"></div>
         <div class="card us-basis">
@@ -371,13 +378,13 @@
       <section class="view" id="v-rules">
         <div class="page-head"><div><h1>数据与规则</h1><p>核对数据来源、17TRACK 覆盖和当前预警计算口径。</p></div><button type="button" class="btn ghost" id="refreshRules">刷新数据</button></div>
         <div class="tabs" id="ruleTabs" aria-label="数据与规则分类">
-          <button type="button" data-rule-pane="data" aria-pressed="true">数据健康</button>
-          <button type="button" data-rule-pane="definitions" aria-pressed="false">数据口径</button>
-          <button type="button" data-rule-pane="sync" aria-pressed="false">17TRACK 同步</button>
-          <button type="button" data-rule-pane="business" aria-pressed="false">业务预警规则</button>
-          <button type="button" data-rule-pane="channel-groups" aria-pressed="false">自定义渠道</button>
-          <button type="button" data-rule-pane="sla" aria-pressed="false">渠道 SLA</button>
-          <button type="button" data-rule-pane="dictionary" aria-pressed="false">17TRACK 字典</button>
+          <button type="button" class="tab-toned tone-green" data-rule-pane="data" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-check"/></svg>数据健康</button>
+          <button type="button" class="tab-toned tone-blue" data-rule-pane="definitions" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-book"/></svg>数据口径</button>
+          <button type="button" class="tab-toned tone-cyan" data-rule-pane="sync" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-sync"/></svg>17TRACK 同步</button>
+          <button type="button" class="tab-toned tone-warn" data-rule-pane="business" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-bell"/></svg>业务预警规则</button>
+          <button type="button" class="tab-toned tone-green" data-rule-pane="channel-groups" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg>自定义渠道</button>
+          <button type="button" class="tab-toned tone-violet" data-rule-pane="sla" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg>渠道 SLA</button>
+          <button type="button" class="tab-toned tone-blue" data-rule-pane="dictionary" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg>17TRACK 字典</button>
         </div>
         <div class="workspace-stack" id="rules-sync" hidden>
           <div class="sync-grid">
@@ -611,6 +618,6 @@
       <button type="submit" class="btn" id="trackRuleSave">保存规则</button></footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261124-channel-group-comparison" defer></script>
+<script src="/static/app.js?v=20261124-filter-visuals" defer></script>
 </body>
 </html>

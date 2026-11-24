@@ -4,6 +4,8 @@ const el = (t, c, h) => { const e = document.createElement(t); if (c) e.classNam
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const icon = name => `<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#i-${name}"></use></svg>`;
 const sectionIcon = (name, tone) => `<span class="section-icon tone-${tone}">${icon(name)}</span>`;
+const metricCard = (label, value, detail, name, tone) =>
+  `<div class="kpi metric-card tone-${tone}"><div class="kpi-label"><span class="lbl">${label}</span>${sectionIcon(name,tone)}</div><div class="val">${value}</div><div class="fl">${detail}</div></div>`;
 const fmt = n => (n == null || isNaN(n)) ? '—' : Math.round(n).toLocaleString('zh-CN');
 const fmt1 = n => (n == null || isNaN(n)) ? '—' : (Math.round(n * 10) / 10).toFixed(1);
 const dt = s => s ? String(s).replace('T', ' ').slice(0, 16) : '—';
@@ -457,14 +459,27 @@ function resizeVisibleCharts() {
 }
 
 /* ---------------- 筛选条 ---------------- */
+const FILTER_VISUALS = {
+  q:['search','blue'], date_basis:['clock','blue'], month:['calendar','blue'], week:['week','blue'],
+  wh:['warehouse','sand'], pf:['store','violet'], cr:['truck','cyan'], channel:['route','cyan'],
+  channel_group:['layers','green'], lastmile:['box','green'], cn:['globe','blue'],
+  tstat:['scan','cyan'], sub:['list','cyan'], rule:['bell','warn'], level:['alert','warn'],
+  state:['check','green'], status:['check','green'], resolved_only:['check','green'],
+  coverage:['layers','violet'], sort:['sort','blue'], main_only:['sliders','warn'], min_n:['chart','violet'],
+};
+const filterVisual = key => FILTER_VISUALS[key] || ['sliders','blue'];
+function filterGlyph(key) {
+  return el('span','filter-icon',icon(filterVisual(key)[0]));
+}
+
 function multiFilter(def, onChange) {
-  const root = el('details', 'multi-filter');
+  const root = el('details', 'multi-filter tone-' + filterVisual(def.key)[1]);
   root.dataset.filter = def.key;
   const trigger = el('summary', 'multi-trigger');
   const name = el('span');
   name.textContent = def.label;
   const badge = el('strong');
-  trigger.append(name, badge, el('span', 'multi-caret'));
+  trigger.append(filterGlyph(def.key), name, badge, el('span', 'multi-caret'));
   const panel = el('div', 'multi-popover');
   const search = el('input');
   search.type = 'search';
@@ -484,6 +499,7 @@ function multiFilter(def, onChange) {
 
   function update() {
     badge.textContent = selected.size ? `已选 ${selected.size}` : '全部';
+    root.classList.toggle('has-selection', selected.size > 0);
     all.checked = !selected.size;
   }
 
@@ -557,7 +573,7 @@ function multiFilter(def, onChange) {
 }
 
 function makeTimeRange(onChange) {
-  const root = el('div', 'filter-time-range');
+  const root = el('div', 'filter-time-range tone-blue');
   root.setAttribute('role', 'group');
   root.setAttribute('aria-label', '时间范围（北京时间）');
   const fields = {};
@@ -578,6 +594,7 @@ function makeTimeRange(onChange) {
     const updateTime = () => {
       time.disabled = !date.value;
       time.value = date.value ? time.value || defaultTime : '';
+      field.classList.toggle('has-date', Boolean(date.value));
     };
     const changed = () => { updateTime(); onChange(1); };
     date.onchange = changed;
@@ -601,7 +618,7 @@ function makeTimeRange(onChange) {
       },
     };
   }
-  root.append(el('span', 'filter-timezone', '北京时间'), error);
+  root.append(el('span', 'filter-timezone', icon('clock') + '<span>北京时间</span>'), error);
   return {root, fields, validate() {
     const {start, end} = fields;
     const invalidInput = inputs.some(input => !input.validity.valid);
@@ -643,10 +660,14 @@ function makeFilters(host, defs, onChange) {
         const button = el('button', 'btn ghost sm', '搜索');
         button.type = 'button';
         button.onclick = submit;
-        group.append(i, button);
+        const searchField = el('span','filter-search-field tone-' + filterVisual(d.key)[1]);
+        searchField.append(filterGlyph(d.key),i);
+        group.append(searchField, button);
         host.appendChild(group);
       } else {
-        host.appendChild(i);
+        const searchField = el('span','filter-search-field tone-' + filterVisual(d.key)[1]);
+        searchField.append(filterGlyph(d.key),i);
+        host.appendChild(searchField);
       }
       refs[d.key] = i;
     } else if (d.type === 'time-range') {
@@ -671,10 +692,14 @@ function makeFilters(host, defs, onChange) {
         s.value = d.defaultValue;
         defaults.set(d.key, d.defaultValue);
       }
-      host.appendChild(s); refs[d.key] = s;
+      const control = el('span','filter-select tone-' + filterVisual(d.key)[1]);
+      control.dataset.filterKey = d.key;
+      control.append(filterGlyph(d.key),s);
+      host.appendChild(control); refs[d.key] = s;
     }
   });
-  const btn = el('button', 'btn ghost sm', '重置');
+  const btn = el('button', 'btn ghost sm filter-reset', icon('sync') + '重置');
+  btn.type = 'button';
   btn.onclick = () => {
     Object.entries(refs).forEach(([key, control]) => {
       if ('value' in control) control.value = defaults.get(key) ?? '';
@@ -892,8 +917,7 @@ function renderDash(d, f) {
     ['物流运输', k.transitDays == null ? '—' : `${fmt1(k.transitDays)} <small>天</small>`, `出库 → 妥投 · ${fmt(k.transitSamples)} 单`, 'truck', 'cyan'],
     ['6 天达成率', measure(k.rate6, '%'), '出库 → 签收 · 有效样本中 ≤6 天', 'clock', 'green'],
   ];
-  $('#dashKpi').innerHTML = defs.map(([label, value, detail, name, tone]) =>
-    `<div class="kpi"><div class="kpi-label"><span class="lbl">${label}</span>${sectionIcon(name, tone)}</div><div class="val">${value}</div><div class="fl">${detail}</div></div>`).join('');
+  $('#dashKpi').innerHTML = defs.map(row => metricCard(...row)).join('');
 
   drawOverviewMixes(d);
 
@@ -1707,11 +1731,11 @@ function renderChannels(d, filters) {
   const overAll = rows.reduce((a, r) => a + (r.overdue || 0), 0);
   const inAll = rows.reduce((a, r) => a + r.slaInTransit, 0);
   $('#channelKpi').innerHTML = [
-    [dimension === 'group' ? '对比分组数' : 'C 端渠道数', fmt(rows.length), `单量 ≥${filters.min_n || 100}`],
-    ['有效签收样本', fmt(samples), signed ? `含 WMS 补算 ${fmt(fallback)} 单` : '当前范围无可用的妥投时间'],
-    ['覆盖单量', fmt(totalOrders), '参与统计'],
-    ['SLA 在途超时', fmt(overAll), inAll ? `占可计时在途 ${fmt1(100 * overAll / inAll)}%` : '当前范围无可计时的在途单'],
-  ].map(([l, v, s]) => `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="fl">${s}</div></div>`).join('');
+    [dimension === 'group' ? '对比分组数' : 'C 端渠道数', fmt(rows.length), `单量 ≥${filters.min_n || 100}`, dimension === 'group' ? 'layers' : 'route','violet'],
+    ['有效签收样本', fmt(samples), signed ? `含 WMS 补算 ${fmt(fallback)} 单` : '当前范围无可用的妥投时间','check','green'],
+    ['覆盖单量', fmt(totalOrders), '参与统计','box','blue'],
+    ['SLA 在途超时', fmt(overAll), inAll ? `占可计时在途 ${fmt1(100 * overAll / inAll)}%` : '当前范围无可计时的在途单','clock',overAll ? 'warn' : 'green'],
+  ].map(row => metricCard(...row)).join('');
 
   $('#channelBody').innerHTML = rows.length ? rows.map(r => {
     return `<tr>
@@ -2035,12 +2059,12 @@ function renderUsReport() {
   const mix = usView.place === null ? channels : selected?.channels || [];
   const selectedChannel = usView.channel;
   $('#usKpi').innerHTML = [
-    [other ? '其他国家履约单' : '美国履约单', fmt(national.orders), '单量含在途单'],
+    [other ? '其他国家履约单' : '美国履约单', fmt(national.orders), '单量含在途单','globe','blue'],
     ['有效时效样本', fmt(national.samples), earlySegments.includes(usReport.basis) ?
-      `有效覆盖 ${usPercent(usShare(national.samples, national.orders))}` : `含 WMS 补算 ${fmt(national.fallback)} 单`],
-    ['平均时效', usDay(national.avg), usTimingLabel[usReport.basis]],
-    ['P90 时效', usDay(national.p90), '约 90% 的有效样本在该时长内完成该阶段'],
-  ].map(([label, value, detail]) => `<div class="card kpi"><div class="lbl">${label}</div><div class="val">${value}</div><div class="fl">${detail}</div></div>`).join('');
+      `有效覆盖 ${usPercent(usShare(national.samples, national.orders))}` : `含 WMS 补算 ${fmt(national.fallback)} 单`,'check','green'],
+    ['平均时效', usDay(national.avg), usTimingLabel[usReport.basis],'clock','cyan'],
+    ['P90 时效', usDay(national.p90), '约 90% 的有效样本在该时长内完成该阶段','history','violet'],
+  ].map(row => metricCard(...row)).join('');
 
   $('#usMixTitle').textContent = scope + '渠道构成';
   $('#usMixScope').textContent = `${fmt(selected?.orders ?? 0)} 单 · ${usTimingLabel[usReport.basis]}`;
@@ -2454,12 +2478,12 @@ function renderHealth(d) {
   updateActivity(d.pendingOrders, d.recentImports[0]?.ingested_at, d.range.end);
   const t = d.tracking;
   $('#dataKpi').innerHTML = [
-    ['ERP 履约单', fmt(d.orders), `${d.range.start} 至 ${d.range.end}`],
-    ['17TRACK 查询记录', fmt(t.records), '按运单号统计'],
-    ['已有轨迹事件', fmt(t.withEvent), '有最新事件时间'],
-    ['登记未匹配', fmt(t.unmatched), '历史详情查询返回未匹配'],
-    ['可查看逐条轨迹的运单', fmt(t.detailedNumbers), `${fmt(t.detailedEvents)} 条承运商事件`],
-  ].map(([l, v, s]) => `<div class="kpi"><div class="lbl">${l}</div><div class="val">${v}</div><div class="fl">${s}</div></div>`).join('');
+    ['ERP 履约单', fmt(d.orders), `${d.range.start} 至 ${d.range.end}`,'box','blue'],
+    ['17TRACK 查询记录', fmt(t.records), '按运单号统计','route','cyan'],
+    ['已有轨迹事件', fmt(t.withEvent), '有最新事件时间','check','green'],
+    ['登记未匹配', fmt(t.unmatched), '历史详情查询返回未匹配','alert',t.unmatched ? 'warn' : 'green'],
+    ['可查看逐条轨迹的运单', fmt(t.detailedNumbers), `${fmt(t.detailedEvents)} 条承运商事件`,'list','violet'],
+  ].map(row => metricCard(...row)).join('');
   $('#sourceHealth').innerHTML = [
     ['ERP / WMS', `建单截止 ${d.range.end} · 最近导入 ${dt(lastImportAt)}`],
     ['17TRACK', `最近查询 ${dt(t.lastCheck)} · 历史回补 ${fmt(t.archiveNumbers)} 个运单 · 已查询无轨迹 ${fmt(t.empty)} 个运单`],
