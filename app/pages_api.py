@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 import pandas as pd
 
-from . import alert_history, channel_groups, core, public_preview, rules
+from . import alert_history, channel_groups, core, public_preview, rules, us_analysis
 from .carrier_delivery import (
     DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts, transport_minutes,
 )
@@ -321,6 +321,26 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
         "byLastMile": by_last_mile, "byCurrentChannel": current_channels[:10], "_currentChannels": current_channels,
         "byTrackingStatus": track_states, "dateBasis": date_basis,
     })
+
+
+# ---------------------------------------------------------------- 美国分析
+
+@router.get("/us-analysis")
+def usa(request: Request, month: str = "", wh: str = "", pf: str = "", cr: str = "",
+        start: str = "", end: str = "", lastmile: str = "", channel: str = "", week: str = "",
+        date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = "",
+        basis: us_analysis.TransitBasis = "paid", dimension: us_analysis.ChannelDimension = "lastmile"):
+    core.require_user(request)
+    groups = []
+    if channel_group or dimension == "group":
+        with core.ops() as db:
+            groups = channel_groups.load(db)["groups"]
+    date_basis = date_basis or DEFAULT_DATE_BASIS
+    cond, args = _cond(month, wh, pf, cr, start=start, end=end, lastmile=lastmile, channel=channel, week=week,
+                       date_basis=date_basis, require_time=True,
+                       group_selection=channel_groups.filter_values(channel_group, groups))
+    settings = json.dumps(groups, ensure_ascii=False, sort_keys=True) if dimension == "group" else ""
+    return us_analysis.report(core.snapshot_key(), date_basis, basis, dimension, cond, tuple(args), settings)
 
 
 # ---------------------------------------------------------------- 轨迹监控

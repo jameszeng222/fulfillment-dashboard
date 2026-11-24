@@ -1,0 +1,57 @@
+code,name,label,region
+AL,Alabama,阿拉巴马,东南部
+AK,Alaska,阿拉斯加,太平洋
+AZ,Arizona,亚利桑那,山地
+AR,Arkansas,阿肯色,南部
+CA,California,加利福尼亚,太平洋
+CO,Colorado,科罗拉多,山地
+CT,Connecticut,康涅狄格,东北部
+DE,Delaware,特拉华,中大西洋
+DC,District of Columbia,华盛顿特区,中大西洋
+FL,Florida,佛罗里达,东南部
+GA,Georgia,佐治亚,东南部
+HI,Hawaii,夏威夷,太平洋
+ID,Idaho,爱达荷,山地
+IL,Illinois,伊利诺伊,中西部
+IN,Indiana,印第安纳,中西部
+IA,Iowa,爱荷华,中西部
+KS,Kansas,堪萨斯,中西部
+KY,Kentucky,肯塔基,东南部
+LA,Louisiana,路易斯安那,南部
+ME,Maine,缅因,东北部
+MD,Maryland,马里兰,中大西洋
+MA,Massachusetts,马萨诸塞,东北部
+MI,Michigan,密歇根,中西部
+MN,Minnesota,明尼苏达,中西部
+MS,Mississippi,密西西比,东南部
+MO,Missouri,密苏里,中西部
+MT,Montana,蒙大拿,山地
+NE,Nebraska,内布拉斯加,中西部
+NV,Nevada,内华达,山地
+NH,New Hampshire,新罕布什尔,东北部
+NJ,New Jersey,新泽西,东北部
+NM,New Mexico,新墨西哥,山地
+NY,New York,纽约,东北部
+NC,North Carolina,北卡罗来纳,东南部
+ND,North Dakota,北达科他,中西部
+OH,Ohio,俄亥俄,中西部
+OK,Oklahoma,俄克拉荷马,南部
+OR,Oregon,俄勒冈,太平洋
+PA,Pennsylvania,宾夕法尼亚,东北部
+RI,Rhode Island,罗得岛,东北部
+SC,South Carolina,南卡罗来纳,东南部
+SD,South Dakota,南达科他,中西部
+TN,Tennessee,田纳西,东南部
+TX,Texas,得克萨斯,南部
+UT,Utah,犹他,山地
+VT,Vermont,佛蒙特,东北部
+VA,Virginia,弗吉尼亚,中大西洋
+WA,Washington,华盛顿州,太平洋
+WV,West Virginia,西弗吉尼亚,中大西洋
+WI,Wisconsin,威斯康星,中西部
+WY,Wyoming,怀俄明,山地
+PR,Puerto Rico,波多黎各,美国属地
+VI,United States Virgin Islands,美属维尔京群岛,美国属地
+GU,Guam,关岛,美国属地
+AS,American Samoa,美属萨摩亚,美国属地
+MP,Northern Mariana Islands,北马里亚纳群岛,美国属地

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261123-channel-groups">
+<link rel="stylesheet" href="/static/app.css?v=20261124-us-analysis">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -41,6 +41,7 @@
       <button type="button" data-v="dash" class="on" aria-current="page"><svg class="ui-icon" aria-hidden="true"><use href="#i-grid"/></svg>数据总览</button>
       <button type="button" data-v="track"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>轨迹监控</button>
       <button type="button" data-v="channels"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg>渠道时效</button>
+      <button type="button" data-v="us"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg>美国分析</button>
       <button type="button" data-v="rules"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg>数据与规则</button>
     </nav>
     <div class="sidefoot">
@@ -238,6 +239,71 @@
             </table>
           </div>
         </div>
+        </div>
+      </section>
+
+      <!-- ============ 美国分析 ============ -->
+      <section class="view" id="v-us" aria-labelledby="usTitle">
+        <div class="page-head">
+          <div><h1 id="usTitle">美国分析</h1><p>按目的州和业务区域比较渠道单量、占比和签收时效。</p></div>
+        </div>
+        <div class="filters" id="usFilters"></div>
+        <div class="card us-basis">
+          <div><span>时效起点</span>
+            <div class="tabs" id="usBasis" role="group" aria-label="美国时效起点">
+              <button type="button" data-value="paid" aria-pressed="true">下单到签收</button>
+              <button type="button" data-value="shipped" aria-pressed="false">出库到签收</button>
+            </div>
+          </div>
+          <div><label for="usDimension">比较渠道</label>
+            <select id="usDimension"><option value="lastmile">C 端渠道</option><option value="current">当前渠道</option><option value="group">自定义渠道</option></select>
+          </div>
+        </div>
+        <p class="tip us-status" id="usStatus" role="status">正在读取美国履约数据…</p>
+        <div id="usResults" class="workspace-stack" hidden>
+          <div class="kpis us-kpi" id="usKpi"></div>
+          <div class="us-layout">
+            <section class="card plot-card us-map-card" aria-labelledby="usMapTitle">
+              <div class="ct"><div><h2 id="usMapTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span>美国履约地图</h2>
+                <p class="tip icon-caption" id="usMapHint">按目的州展示 P90 时效</p></div>
+                <div class="tabs period-tabs" id="usLevel" role="group" aria-label="地图地域级别">
+                  <button type="button" data-value="states" aria-pressed="true">按州</button>
+                  <button type="button" data-value="regions" aria-pressed="false">按业务区域</button>
+                </div>
+              </div>
+              <div class="us-map-controls">
+                <div class="tabs period-tabs" id="usMetric" role="group" aria-label="地图指标">
+                  <button type="button" data-value="orders" aria-pressed="false">单量</button>
+                  <button type="button" data-value="share" aria-pressed="false">占比</button>
+                  <button type="button" data-value="avg" aria-pressed="false">平均时效</button>
+                  <button type="button" data-value="p90" aria-pressed="true">P90 时效</button>
+                </div>
+                <label class="us-focus">地图渠道<select id="usMapChannel" aria-label="地图渠道"></select></label>
+              </div>
+              <div class="chart us-map" id="usMap" role="img" aria-label="美国各州地图。可在下方明细通过键盘选择州或区域。"></div>
+              <div class="us-legend" id="usLegend" aria-label="地图色阶"></div>
+              <p class="tip" id="usMapStatus" role="status">正在加载州界…</p>
+            </section>
+            <section class="card plot-card us-channels-card" aria-labelledby="usMixTitle">
+              <div class="ct"><div><h2 id="usMixTitle">全美渠道构成</h2><p class="tip" id="usMixScope"></p></div>
+                <button type="button" class="btn ghost sm" id="usClear" hidden>返回全美</button></div>
+              <div class="tblwrap"><table class="tbl us-channel-table">
+                <thead><tr><th scope="col">渠道</th><th scope="col">单量</th><th scope="col">占比</th><th scope="col">平均</th><th scope="col">P90</th><th scope="col">样本</th></tr></thead>
+                <tbody id="usMixBody"></tbody>
+              </table></div>
+            </section>
+          </div>
+          <section class="card table-card" aria-labelledby="usDetailTitle">
+            <div class="ct table-head"><div><h2 id="usDetailTitle">州级明细</h2><p class="tip" id="usDetailScope"></p></div>
+              <input type="search" class="inline-search" id="usSearch" placeholder="搜索州名、代码或区域" aria-label="搜索州名、代码或区域">
+            </div>
+            <div class="tblwrap"><table class="tbl">
+              <thead><tr><th scope="col" id="usPlaceColumn">目的州</th><th scope="col" id="usChannelColumn">单量最高的渠道</th>
+                <th scope="col">单量</th><th scope="col">占比</th><th scope="col">平均时效</th><th scope="col">P90 时效</th><th scope="col">有效样本</th></tr></thead>
+              <tbody id="usDetailsBody"></tbody>
+            </table></div>
+          </section>
+          <p class="tip us-notes">单量按履约单计，含在途单。平均时效与 P90 只用有有效起点和签收时间的正值样本，按实际经过的 24 小时折算为天。P90 表示约 90% 的有效样本在该时长内签收。签收优先取 17TRACK，缺失时按仓库时区口径使用 WMS。区域沿用万邑通七区，阿拉斯加和夏威夷并入太平洋，美国属地单列。州从收件州字段识别，缺失时按 ZIP 邮编补齐。<a href="https://github.com/apache/echarts-examples/blob/gh-pages/public/data/asset/geo/USA.json" target="_blank" rel="noopener noreferrer">州界来源</a></p>
         </div>
       </section>
 
@@ -444,6 +510,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261123-resolved-filter" defer></script>
+<script src="/static/app.js?v=20261124-us-analysis" defer></script>
 </body>
 </html>

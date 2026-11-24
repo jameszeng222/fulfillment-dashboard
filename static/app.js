@@ -1,4 +1,4 @@
-/* 履约监控系统 · 前端（四页：总览 / 轨迹监控 / 渠道时效 / 数据与规则） */
+/* 履约监控系统 · 前端 */
 const $ = s => document.querySelector(s);
 const el = (t, c, h) => { const e = document.createElement(t); if (c) e.className = c; if (h != null) e.innerHTML = h; return e; };
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -41,7 +41,7 @@ let chartsFetch = null;
 const charts = {};
 const pendingRequests = new Map();
 const pageResponses = new Map();
-const cachedPages = new Set(['activity', 'dash', 'health', 'track', 'trackSummary', 'drawer', 'channels', 'rules']);
+const cachedPages = new Set(['activity', 'dash', 'health', 'track', 'trackSummary', 'drawer', 'channels', 'us', 'rules']);
 let readGeneration = 0;
 let resizeFrame = 0;
 let toastTimer;
@@ -110,7 +110,8 @@ function loadMeta() {
   if (!metaFetch) metaFetch = api('/api/meta', {signal: AbortSignal.timeout(12_000)}).then(data => {
     META = data;
     setTopMeta(META.range.end);
-    for (const filter of [DF?.channel_group, TF?.channel_group, AF?.channel_group, CF?.channel_group, slaGroupFilter]) {
+    for (const filter of [DF?.channel_group, TF?.channel_group, AF?.channel_group, CF?.channel_group,
+      UF?.channel_group, slaGroupFilter]) {
       filter?.setOptions(META.filterOptions.channel_group || [], META.range.orders, false);
     }
     return META;
@@ -201,12 +202,12 @@ function exportCsv(name, fields, rows) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const VIEW_META = { dash: '数据总览', track: '轨迹监控', channels: '渠道时效', rules: '数据与规则' };
+const VIEW_META = { dash: '数据总览', track: '轨迹监控', channels: '渠道时效', us: '美国分析', rules: '数据与规则' };
 let VIEW = 'dash';
 let trackMode = 'tracking';
 
 function showView(v) {
-  if (ME.preview && v === 'rules') v = 'dash';
+  if (ME.preview && ['rules', 'us'].includes(v)) v = 'dash';
   VIEW = v;
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#nav button').forEach(b => {
@@ -220,7 +221,7 @@ function showView(v) {
   window.scrollTo({ top: 0 });
   resizeVisibleCharts();
   run({ dash: loadDash, track: trackMode === 'tracking' ? loadTrack : loadAlerts,
-    channels: loadChannels, rules: loadRules }[v]);
+    channels: loadChannels, us: loadUs, rules: loadRules }[v]);
 }
 
 function initChart(id) {
@@ -1480,6 +1481,235 @@ async function loadChannels() {
 
 }
 
+/* ================= 美国分析 ================= */
+
+let UF = null;
+let usReport = null;
+let usMapLoad;
+let usMapPlaces = new Map();
+const usView = {basis: 'paid', dimension: 'lastmile', level: 'states', metric: 'p90', place: null, channel: ''};
+const usMetricLabel = {orders: '单量', share: '单量占比', avg: '平均时效', p90: 'P90 时效'};
+const usTimingLabel = {paid: '下单到签收', shipped: '出库到签收'};
+const usPalette = ['#e2eaf8', '#bccdf0', '#8ba7dd', '#5377bb', '#25447d'];
+const usBlank = '#e7ebef';
+const usDay = value => Number.isFinite(value) ? value.toFixed(2) + ' 天' : '—';
+const usPercent = value => value > 0 && value < 0.1 ? '&lt;0.1%' : measure(value, '%');
+const usShare = (part, total) => total > 0 ? 100 * part / total : null;
+
+async function loadUs() {
+  await loadMeta();
+  if (VIEW !== 'us') return;
+  if (!UF) UF = makeFilters($('#usFilters'), commonDateFilters().filter(item => item.key !== 'cn'), () => run(loadUs));
+  const filters = readF(UF);
+  updateDateOptions(UF, filters.date_basis);
+  const status = $('#usStatus');
+  status.textContent = usReport ? '正在更新…' : '正在读取美国履约数据…';
+  let report;
+  try {
+    report = await latest('us', '/api/us-analysis?' + qs({...filters, basis: usView.basis, dimension: usView.dimension}),
+      {signal: AbortSignal.timeout(18_000)});
+  } catch (error) {
+    if (VIEW !== 'us') return;
+    const retry = el('button', 'btn ghost sm', '重试');
+    retry.type = 'button';
+    retry.onclick = () => run(loadUs);
+    status.replaceChildren('美国履约数据暂时无法加载。 ', retry);
+    return;
+  }
+  if (!report || VIEW !== 'us') return;
+  usReport = report;
+  status.textContent = `筛选按${dateBasisLabel[report.dateBasis]}（北京时间） · 时效按${usTimingLabel[report.basis]}`;
+  $('#usResults').hidden = false;
+  const selector = $('#usMapChannel');
+  selector.replaceChildren(new Option('全部渠道', ''), ...report.channels.map(row => new Option(row.label, row.label)));
+  selector.value = usView.channel;
+  if (selector.selectedIndex < 0) selector.value = '';
+  usView.channel = selector.value;
+  renderUsReport();
+  void loadUsMap();
+}
+
+function usPlaceLabel(key) {
+  if (usView.level === 'regions') return key;
+  const state = usReport.geography[key];
+  return state ? `${state.label}（${key}）` : '未识别州';
+}
+
+function renderUsReport() {
+  if (!usReport) return;
+  const {national, states, regions, channels} = usReport;
+  const isRegion = usView.level === 'regions';
+  const places = isRegion ? regions : states;
+  const selected = usView.place === null ? national : places[usView.place];
+  const scope = usView.place === null ? '全美' : usPlaceLabel(usView.place);
+  const mix = usView.place === null ? channels : selected?.channels || [];
+  const selectedChannel = usView.channel;
+  $('#usKpi').innerHTML = [
+    ['美国履约单', fmt(national.orders), '单量含在途单'],
+    ['有效时效样本', fmt(national.samples), `含 WMS 补算 ${fmt(national.fallback)} 单`],
+    ['平均时效', usDay(national.avg), usTimingLabel[usReport.basis]],
+    ['P90 时效', usDay(national.p90), '约 90% 的有效样本在该时长内签收'],
+  ].map(([label, value, detail]) => `<div class="card kpi"><div class="lbl">${label}</div><div class="val">${value}</div><div class="fl">${detail}</div></div>`).join('');
+
+  $('#usMixTitle').textContent = scope + '渠道构成';
+  $('#usMixScope').textContent = `${fmt(selected?.orders ?? 0)} 单 · ${usTimingLabel[usReport.basis]}`;
+  $('#usClear').hidden = usView.place === null;
+  $('#usMixBody').innerHTML = mix.map(row => {
+    const share = usShare(row.orders, selected.orders);
+    return `<tr><td><button class="order-link" type="button" data-us-channel="${esc(row.label)}"
+      aria-label="在地图查看 ${esc(row.label)}">${esc(row.label)}</button></td><td>${fmt(row.orders)}</td>
+      <td>${usPercent(share)}<div class="us-share-meter" aria-hidden="true"><i style="width:${share ?? 0}%"></i></div></td>
+      <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${fmt(row.samples)}</td></tr>`;
+  }).join('') || blankRow(6, '当前范围无渠道数据');
+
+  const countNote = selectedChannel ? '渠道单量 ÷ 当地总单量' : '当地单量 ÷ 全美总单量';
+  const source = selectedChannel || '全部渠道';
+  $('#usMapHint').textContent = `${source} · ${usMetricLabel[usView.metric]} · ${usView.metric === 'share' ? countNote :
+    (['p90', 'avg'].includes(usView.metric) ? usTimingLabel[usReport.basis] : '按履约单计')}`;
+  $('#usDetailTitle').textContent = isRegion ? '业务区域明细' : '州级明细';
+  $('#usDetailScope').textContent = `${source} · 占比为${countNote} · 点击地域查看渠道构成`;
+  $('#usPlaceColumn').textContent = isRegion ? '业务区域' : '目的州';
+  $('#usChannelColumn').textContent = selectedChannel ? '所选渠道' : '单量最高的渠道';
+  const metrics = (key, place) => {
+    const data = selectedChannel ? place.channels?.find(row => row.label === selectedChannel) : place;
+    const orders = data?.orders ?? 0;
+    const share = usShare(orders, selectedChannel ? place.orders : national.orders);
+    return {key, label: usPlaceLabel(key), region: isRegion ? key : usReport.geography[key]?.region || '未识别州',
+      orders, share, avg: data?.avg, p90: data?.p90, samples: data?.samples ?? 0,
+      channel: selectedChannel || place.channels?.[0]?.label || '—',
+      leadingShare: !selectedChannel && place.channels?.[0] ? usShare(place.channels[0].orders, place.orders) : null};
+  };
+  const placeMetrics = Object.entries(places).map(([key, place]) => metrics(key, place));
+  const byPlace = new Map(placeMetrics.map(row => [row.key, row]));
+  const query = $('#usSearch').value.trim().toLocaleLowerCase();
+  const metric = usView.metric;
+  const details = placeMetrics.filter(row => `${row.label} ${row.region} ${usReport.geography[row.key]?.name || ''}`
+    .toLocaleLowerCase().includes(query)).sort((a,b) => (b[metric] ?? -1) - (a[metric] ?? -1) || a.label.localeCompare(b.label));
+  $('#usDetailsBody').innerHTML = details.map(row => `<tr class="${row.key === usView.place ? 'chosen' : ''}">
+    <td><button type="button" class="order-link" data-us-place="${esc(row.key)}"
+      aria-pressed="${row.key === usView.place}">${esc(row.label)}</button>${isRegion ? '' : `<small class="cell-sub">${esc(row.region)}</small>`}</td>
+    <td>${esc(row.channel)}${row.leadingShare != null ? `<small class="cell-sub">占当地 ${usPercent(row.leadingShare)}</small>` : ''}</td>
+    <td>${fmt(row.orders)}</td><td>${usPercent(row.share)}</td>
+    <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${fmt(row.samples)}</td></tr>`).join('') ||
+    blankRow(7, '没有符合条件的州或区域');
+
+  usMapPlaces = new Map(Object.entries(usReport.geography).map(([code, state]) => [
+    state.name, {key: isRegion ? state.region : code, state: state.label, code, region: state.region,
+      row: byPlace.get(isRegion ? state.region : code)},
+  ]));
+  drawUsMap();
+}
+
+function drawUsMap() {
+  const chart = charts.usMap;
+  if (!chart || !usReport || VIEW !== 'us') return;
+  const metric = usView.metric;
+  const cuts = {orders: [100, 1000, 10000, 50000], share: [1, 5, 15, 35], avg: [3, 4, 5, 6],
+    p90: usReport.basis === 'paid' ? [5, 6, 7, 8] : [4, 5, 6, 7]}[metric];
+  const format = metric === 'orders' ? n => fmt(n) + ' 单' : metric === 'share' ? usPercent : usDay;
+  const pieces = usPalette.map((color, index) => {
+    const min = cuts[index - 1], max = cuts[index];
+    return {...(min == null ? {} : {gt: min}), ...(max == null ? {} : {lte: max}), color,
+      label: min == null ? '≤ ' + format(max) : max == null ? '> ' + format(min) : `> ${format(min)} 至 ${format(max)}`};
+  });
+  $('#usLegend').innerHTML = [...pieces, {color: usBlank, label: '无数据或样本'}]
+    .map(piece => `<span><i style="background:${piece.color}"></i>${piece.label}</span>`).join('');
+  chart.setOption({
+    animation: false,
+    tooltip: {...chartTip, trigger: 'item', formatter: item => {
+      const place = usMapPlaces.get(item.name);
+      if (!place) return esc(item.name);
+      const row = place.row;
+      return `<strong>${esc(place.state)}（${place.code}） · ${esc(place.region)}</strong><br>${
+        row ? `单量 ${fmt(row.orders)} · 占比 ${usPercent(row.share)}<br>平均 ${usDay(row.avg)} · P90 ${usDay(row.p90)}<br>有效样本 ${fmt(row.samples)} 单` : '当前范围无记录'}`;
+    }},
+    visualMap: [{type: 'piecewise', show: false, pieces, outOfRange: {color: usBlank}}],
+    series: [{type: 'map', map: 'fulfillment-us', roam: false, layoutCenter: ['50%', '50%'], layoutSize: '140%',
+      itemStyle: {areaColor: usBlank, borderColor: '#ffffff', borderWidth: 1},
+      emphasis: {label: {show: false}, itemStyle: {borderColor: '#182b52', borderWidth: 1.6}},
+      data: [...usMapPlaces].map(([name, place]) => ({name, value: place.row?.[metric] ?? NaN,
+        itemStyle: place.key === usView.place ? {borderColor: '#182b52', borderWidth: 2} : undefined})),
+    }],
+  }, {notMerge: true});
+  resizeVisibleCharts();
+}
+
+async function loadUsMap() {
+  if (charts.usMap) return;
+  if (!usMapLoad) {
+    usMapLoad = Promise.all([
+      loadChartLibrary(),
+      fetch('/static/us-states.geojson?v=1', {signal: AbortSignal.timeout(12_000)}).then(response => {
+        if (!response.ok) throw new Error('州界读取失败');
+        return response.json();
+      }),
+    ]).then(([, geo]) => {
+      echarts.registerMap('fulfillment-us', geo, {
+        Alaska: {left: -131, top: 25, width: 15}, Hawaii: {left: -110, top: 28, width: 5},
+        'Puerto Rico': {left: -76, top: 26, width: 2},
+      });
+      const chart = initChart('usMap');
+      chart.on('click', event => {
+        const place = usMapPlaces.get(event.name);
+        if (place) selectUsPlace(place.key);
+      });
+      $('#usMapStatus').hidden = true;
+      drawUsMap();
+    }).catch(() => {
+      usMapLoad = null;
+      const retry = el('button', 'btn ghost sm', '重试地图');
+      retry.type = 'button';
+      retry.onclick = loadUsMap;
+      $('#usMapStatus').replaceChildren('州界暂时无法加载。 ', retry);
+    });
+  }
+  await usMapLoad;
+}
+
+function selectUsPlace(key) {
+  usView.place = usView.place === key ? null : key;
+  renderUsReport();
+}
+
+function setupUsControls() {
+  for (const [id, field, reload] of [['usBasis', 'basis', true], ['usLevel', 'level', false], ['usMetric', 'metric', false]]) {
+    const container = document.getElementById(id);
+    container.onclick = event => {
+      const button = event.target.closest('button[data-value]');
+      if (!button || usView[field] === button.dataset.value) return;
+      usView[field] = button.dataset.value;
+      container.querySelectorAll('button').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+      if (field === 'level') usView.place = null;
+      if (reload) run(loadUs);
+      else renderUsReport();
+    };
+  }
+  $('#usDimension').onchange = event => {
+    usView.dimension = event.target.value;
+    usView.channel = '';
+    run(loadUs);
+  };
+  $('#usMapChannel').onchange = event => {
+    usView.channel = event.target.value;
+    renderUsReport();
+  };
+  $('#usMixBody').onclick = event => {
+    const button = event.target.closest('[data-us-channel]');
+    if (!button) return;
+    usView.channel = $('#usMapChannel').value = button.dataset.usChannel;
+    renderUsReport();
+  };
+  $('#usDetailsBody').onclick = event => {
+    const button = event.target.closest('[data-us-place]');
+    if (!button) return;
+    const key = button.dataset.usPlace;
+    selectUsPlace(key);
+    [...$('#usDetailsBody').querySelectorAll('[data-us-place]')].find(item => item.dataset.usPlace === key)?.focus({preventScroll: true});
+  };
+  $('#usSearch').oninput = renderUsReport;
+  $('#usClear').onclick = () => selectUsPlace(null);
+}
+
 /* ================= 数据与规则 ================= */
 let activeConfiguration = null;
 let slaGroupFilter;
@@ -2083,7 +2313,7 @@ run(async function boot() {
   $('#logout').hidden = ME.preview || ME.openTest;
   if (!ME.preview) $('#currentChannelTip').textContent += ' · 点击渠道查看履约单';
   if (ME.preview) {
-    for (const selector of ['[data-v="rules"]', '#openPending',
+    for (const selector of ['[data-v="rules"]', '[data-v="us"]', '#openPending',
       '#trackTabs', '#showDetailed', '#exportTrack', '#trackAlertHeading']) {
       $(selector).hidden = true;
     }
@@ -2094,6 +2324,7 @@ run(async function boot() {
   $('#batchAction').hidden = !ME.can_edit;
   $('#applyBatch').hidden = !ME.can_edit;
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => showView(b.dataset.v));
+  setupUsControls();
   const periods = [...document.querySelectorAll('#dailyPeriod button')];
   periods.forEach(button => button.onclick = () => {
     if (trend.span === Number(button.dataset.days)) return;

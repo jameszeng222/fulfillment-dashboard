@@ -5,7 +5,8 @@ const SNAPSHOT = "/__edge/snapshot/";
 const PROXY_HEADER = "x-fulfillment-edge-key";
 const PUBLIC_PATHS = new Set(["/", "/login", "/sharing", "/assistant.html", "/favicon.ico", "/ops/auth/login", "/ops/auth/callback"]);
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
-const APP_ASSETS = new Set(["/static/app.css", "/static/app.js", "/static/echarts.min.js", "/static/sharing.js"]);
+const APP_ASSETS = new Set(["/static/app.css", "/static/app.js", "/static/echarts.min.js", "/static/sharing.js",
+  "/static/us-states.geojson", "/static/us-map-LICENSE.txt"]);
 const VISITOR = { username: "preview", display_name: "只读预览", role: "viewer",
   role_label: "访客", team: null, can_edit: false, preview: true, cloudSharing: false, opsAssistant: false };
 const FORWARDED_HEADERS = ["accept", "content-type", "cookie", "origin", "sec-fetch-site",
