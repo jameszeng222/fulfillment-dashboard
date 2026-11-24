@@ -305,9 +305,9 @@ def order_detail(order_no: str, request: Request, q: str = ""):
         cols = [d[0] for d in con.description]
         detail = dict(zip(cols, row))
         if core.columns(con, track_lookup.TABLE):
-            status = con.execute(f"SELECT 状态标签,核对结果 FROM {track_lookup.TABLE} WHERE 履约单号=?", [order_no]).fetchone()
+            status = con.execute(f"SELECT 状态标签,核对结果,状态,状态中文,子状态 FROM {track_lookup.TABLE} WHERE 履约单号=?", [order_no]).fetchone()
             if status:
-                detail["状态标签"], detail["核对结果"] = status
+                detail["状态标签"], detail["核对结果"], detail["轨迹状态"], detail["轨迹状态中文"], detail["轨迹子状态"] = status
 
         fields = core.columns(con, "履约单明细")
         detail_fields = [

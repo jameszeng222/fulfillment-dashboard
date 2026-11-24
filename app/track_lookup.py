@@ -44,7 +44,8 @@ def projection(con):
                    v.outcome AS 核对结果,
                    t.单号 IS NULL AND m.单号 IS NOT NULL AS 未注册,
                    coalesce(nullif(h.事件数,0),{event_count}) AS 逐条事件数,
-                   CASE WHEN t.单号 IS NOT NULL THEN 'tracked'
+                   CASE WHEN v.outcome='carrier_conflict' AND coalesce(nullif(h.事件数,0),{event_count})=0 THEN 'carrier_conflict'
+                        WHEN t.单号 IS NOT NULL THEN 'tracked'
                         WHEN v.outcome='carrier_conflict' THEN 'carrier_conflict'
                         WHEN {abnormal} THEN 'signed_time_invalid'
                         WHEN m.单号 IS NOT NULL THEN 'unmatched'
@@ -60,7 +61,13 @@ def projection(con):
             QUALIFY row_number() OVER (PARTITION BY o.履约单号 ORDER BY t.最新事件时间 DESC NULLS LAST,
                 (h.carrier IS NOT DISTINCT FROM t.carrier) DESC,h.事件数 DESC NULLS LAST,t.carrier)=1
         )
-        SELECT *,coalesce(状态中文,CASE 覆盖 {labels} ELSE '17TRACK 状态未提供' END) AS 状态标签 FROM merged
+        SELECT * REPLACE (
+            CASE WHEN 覆盖='carrier_conflict' THEN NULL ELSE 状态 END AS 状态,
+            CASE WHEN 覆盖='carrier_conflict' THEN NULL ELSE 状态中文 END AS 状态中文,
+            CASE WHEN 覆盖='carrier_conflict' THEN NULL ELSE 子状态 END AS 子状态),
+            CASE WHEN 覆盖='carrier_conflict' THEN '{LABELS['carrier_conflict']}'
+                 ELSE coalesce(状态中文,CASE 覆盖 {labels} ELSE '17TRACK 状态未提供' END) END AS 状态标签
+        FROM merged
     """
 
 

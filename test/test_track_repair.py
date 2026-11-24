@@ -32,7 +32,7 @@ class TrackRepairTests(unittest.TestCase):
             con.execute("""CREATE TABLE trk_status (单号 VARCHAR, carrier INTEGER, 状态 VARCHAR, 状态中文 VARCHAR,
                 子状态 VARCHAR, 签收时间 TIMESTAMP, 最新事件时间 TIMESTAMP, 最新描述 VARCHAR, 地点 VARCHAR,
                 停滞天数 INTEGER, 查询时间 TIMESTAMP)""")
-            con.execute("INSERT INTO trk_status(单号,carrier,状态,状态中文) VALUES ('carrier',191278,'InTransit','运输中')")
+            con.execute("INSERT INTO trk_status(单号,carrier,状态,状态中文) VALUES ('carrier',191278,'InTransit','运输中'),('conflict',100644,'NotFound','查无此单')")
             con.execute("CREATE TABLE trk_missing (单号 VARCHAR)")
             con.execute("CREATE TABLE trk_verification (number VARCHAR, outcome VARCHAR)")
             con.execute("INSERT INTO trk_verification VALUES ('conflict','carrier_conflict')")
