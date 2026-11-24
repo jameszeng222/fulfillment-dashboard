@@ -104,6 +104,7 @@ test("a visitor can open Pages and look up a complete reference without the tunn
   values.set("preview/v1/blocks/reports", Uint8Array.from(gzipSync(JSON.stringify({
     meta: {range: {orders: 1}}, overview: {kpi: {orders: 1}, dateBasis: "shipped"},
     channels: {shipped: {dateBasis: "shipped", rows: [{orders: 240}, {orders: 9}]}},
+    channelGroups: {shipped: {dateBasis: "shipped", dimension: "group", rows: [{channel: "WF7日达", orders: 249}]}},
   }))).buffer);
   values.set("preview/v1/active.json", JSON.stringify({current, previous: null}));
   const pages = {
@@ -126,6 +127,9 @@ test("a visitor can open Pages and look up a complete reference without the tunn
   const grouped = await (await get("/api/overview?channel_group=test-group")).json();
   assert.equal(grouped.snapshotFiltersSkipped, true);
   assert.equal((await (await get("/api/channels")).json()).rows.length, 1);
+  const groupedChannels = await (await get("/api/channels?dimension=group")).json();
+  assert.equal(groupedChannels.dimension, "group");
+  assert.equal(groupedChannels.rows[0].channel, "WF7日达");
   assert.equal((await (await get("/api/track")).json()).rows.length, 0);
   const query = "?q=" + number;
   const found = await (await get("/api/track" + query)).json();

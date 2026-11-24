@@ -244,6 +244,7 @@ function scheduleReport(key, refresh) {
 async function warmReports() {
   const base = {date_basis: 'shipped'};
   const paths = ['/api/overview?' + qs(base), '/api/channels?' + qs({...base,basis:'shipped'}),
+    '/api/channels?' + qs({...base,basis:'shipped',dimension:'group'}),
     '/api/regional-analysis?' + qs({...base,market:'us',basis:'paid',dimension:'lastmile'}),
     '/api/regional-analysis?' + qs({...base,market:'us',dimension:'lastmile',detail:'segments',level:'all'}),
     '/api/regional-analysis?' + qs({...base,market:'other',basis:'paid',dimension:'lastmile'}),
@@ -1537,6 +1538,9 @@ const TIMING_BASIS = {
 let CF = null;
 let channelRows = [];
 let channelBasis = 'shipped';
+let channelDimension = 'lastmile';
+let channelComparisonExpanded = false;
+const CHANNEL_DIMENSIONS = {lastmile:'C 端渠道',group:'自定义渠道'};
 let renderedChannels = null;
 let renderedChannelFilters = {};
 
@@ -1615,12 +1619,18 @@ function channelMeasure(label, value, unit, scale, tone) {
 }
 
 function renderChannelComparison(data, rows) {
-  const visible = rows.filter(row => row.samples > 0).slice(0, 8);
+  const isGroup = data.dimension === 'group';
+  const eligible = rows.filter(row => row.samples > 0);
+  const visible = isGroup && channelComparisonExpanded ? eligible : eligible.slice(0, 8);
+  const expand = isGroup && eligible.length > 8;
+  $('#channelCompareExpand').hidden = !expand;
+  $('#channelCompareToggle').textContent = channelComparisonExpanded ? '收起其余分组' : `展开其余 ${eligible.length - 8} 个分组`;
+  $('#channelCompareToggle').setAttribute('aria-expanded', String(isGroup && channelComparisonExpanded));
   $('#channelCompareHead').hidden = !visible.length;
   $('#channelChartEmpty').hidden = Boolean(visible.length);
   const label = TIMING_BASIS[data.basis].label;
   $('#channelChartScope').textContent = visible.length ?
-    `${label} · 单量靠前的 ${visible.length} 个有样本渠道 · P90 表示约 90% 的有效样本在该用时内签收` : label;
+    `${label} · ${isGroup ? '按当前渠道归组 · ' : ''}${visible.length === eligible.length ? '全部' : '单量靠前的'} ${visible.length} 个有样本${isGroup ? '分组' : '渠道'} · P90 表示约 90% 的有效样本在该用时内签收` : label;
   const maxDays = Math.max(1, ...visible.flatMap(row => [row.avgDays || 0, row.p90Days || 0]));
   $('#channelComparisonRows').innerHTML = visible.map(row => `<li class="compare-grid compare-row">
     <div class="compare-name">${channelLink(row)}</div>
@@ -1634,10 +1644,12 @@ function renderChannelComparison(data, rows) {
 }
 
 async function loadChannels() {
-  if (!CF) fetchReport(reportPath('/api/channels?' + qs({date_basis:'shipped',basis:channelBasis}))).catch(() => {});
+  const queryDimension = channelDimension === 'group' ? {dimension:'group'} : {};
+  if (!CF) fetchReport(reportPath('/api/channels?' + qs({date_basis:'shipped',basis:channelBasis,...queryDimension}))).catch(() => {});
   if (!CF) await loadChannelFilters();
   if (!CF || VIEW !== 'channels') return;
   const basis = channelBasis;
+  const dimension = channelDimension;
   const filters = readF(CF || {});
   if (CF) updateDateOptions(CF, filters.date_basis);
   const loading = $('#channelLoading');
@@ -1647,8 +1659,9 @@ async function loadChannels() {
   loading.textContent = '正在读取渠道时效…';
   results.setAttribute('aria-busy', 'true');
   try {
-    await presentReport('channels', '/api/channels?' + qs({...filters,basis}),
-      d => renderChannels(d, filters), {signal: AbortSignal.timeout(18_000)}, {oldVisible: currentResult});
+    await presentReport('channels', '/api/channels?' + qs({...filters,basis,...(dimension === 'group' ? {dimension} : {})}),
+      d => { if (dimension === channelDimension && (d.dimension || 'lastmile') === dimension) renderChannels(d, filters); },
+      {signal: AbortSignal.timeout(18_000)}, {oldVisible: currentResult});
   } catch (error) {
     if (VIEW === 'channels') {
       loading.hidden = false;
@@ -1672,6 +1685,14 @@ function renderChannels(d, filters) {
   results.setAttribute('aria-busy', 'false');
   if (renderedChannels === d) return;
   renderedChannels = d;
+  const dimension = d.dimension || 'lastmile';
+  const dimensionLabel = CHANNEL_DIMENSIONS[dimension];
+  $('#channelComparisonName').textContent = dimensionLabel + '时效对比';
+  $('#channelCompareLabel').textContent = dimensionLabel;
+  $('#channelPerformanceTitle').textContent = dimensionLabel + '表现对比';
+  $('#channelTableLabel').textContent = dimension === 'group' ? '自定义渠道分组' : 'C 端显示物流渠道';
+  $('#channelCountryTitle').textContent = dimensionLabel + ' × 国家';
+  $('#channelCountryLabel').textContent = dimensionLabel;
   renderedChannelFilters = d.snapshotFiltersSkipped ? {} : {...filters, date_basis: d.dateBasis || filters.date_basis};
   showChannelDataDate(d);
   renderChannelPeriod(d, renderedChannelFilters);
@@ -1686,7 +1707,7 @@ function renderChannels(d, filters) {
   const overAll = rows.reduce((a, r) => a + (r.overdue || 0), 0);
   const inAll = rows.reduce((a, r) => a + r.slaInTransit, 0);
   $('#channelKpi').innerHTML = [
-    ['C 端渠道数', fmt(rows.length), `单量 ≥${filters.min_n || 100}`],
+    [dimension === 'group' ? '对比分组数' : 'C 端渠道数', fmt(rows.length), `单量 ≥${filters.min_n || 100}`],
     ['有效签收样本', fmt(samples), signed ? `含 WMS 补算 ${fmt(fallback)} 单` : '当前范围无可用的妥投时间'],
     ['覆盖单量', fmt(totalOrders), '参与统计'],
     ['SLA 在途超时', fmt(overAll), inAll ? `占可计时在途 ${fmt1(100 * overAll / inAll)}%` : '当前范围无可计时的在途单'],
@@ -3007,7 +3028,23 @@ run(async function boot() {
   };
   $('#channelResults').onclick = event => {
     const button = event.target.closest('[data-channel-track]');
-    if (button) openTracking({ ...renderedChannelFilters, lastmile: button.dataset.channelTrack });
+    if (button) {
+      const dimension = renderedChannels?.dimension === 'group' ? 'channel_group' : 'lastmile';
+      openTracking({...renderedChannelFilters, [dimension]:button.dataset.channelTrack});
+    }
+  };
+  $('#channelDimension').onclick = event => {
+    const button = event.target.closest('button[data-dimension]');
+    if (!button || channelDimension === button.dataset.dimension) return;
+    channelDimension = button.dataset.dimension;
+    channelComparisonExpanded = false;
+    $('#channelDimension').querySelectorAll('button').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+    run(loadChannels);
+  };
+  $('#channelCompareToggle').onclick = () => {
+    if (renderedChannels?.dimension !== 'group') return;
+    channelComparisonExpanded = !channelComparisonExpanded;
+    renderChannelComparison(renderedChannels,channelRows);
   };
   $('#channelBasis').onclick = event => {
     const button = event.target.closest('button[data-basis]');
@@ -3041,6 +3078,22 @@ run(async function boot() {
     const button = event.currentTarget;
     run(() => openChannelGroups(button));
   };
+  $('#exportChannelGroups').onclick = event => run(async () => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const config = await api(channelGroupPath);
+      const exportedAt = new Date();
+      const payload = {...config,exportedAt:exportedAt.toISOString()};
+      const name = exportedAt.toLocaleString('sv-SE',{timeZone:'Asia/Shanghai',dateStyle:'short',timeStyle:'medium'}).replace(/[: ]/g,'-');
+      const href = URL.createObjectURL(new Blob([JSON.stringify(payload,null,2)+'\n'],{type:'application/json;charset=utf-8'}));
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = `自定义渠道_${name}.json`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(href),1000);
+    } finally { button.disabled = false; }
+  });
   $('#channelGroupRulesBody').onclick = event => {
     const button = event.target.closest('[data-edit-group]');
     if (button) run(() => openChannelGroups(button, button.dataset.editGroup));
@@ -3082,15 +3135,20 @@ run(async function boot() {
     ...(trackMode === 'archive' ? [['处理人', row => row.handled_by], ['归档时间', row => syncTime(row.handle_at)]] : []),
     ['当前物流渠道', row => row.current_channel], ['后台物流商', row => row.carrier], ['异常持续天数', row => row.days],
   ], alertRows);
-  $('#exportChannels').onclick = () => exportCsv('渠道时效-' + TIMING_BASIS[channelBasis].label, [
-    ['时效口径', () => TIMING_BASIS[channelBasis].label],
-    ['C 端显示物流渠道', row => row.channel], ['单量', row => row.orders], ['有妥投时间', row => row.signed],
+  $('#exportChannels').onclick = () => {
+    if (!renderedChannels) return;
+    const basis = TIMING_BASIS[renderedChannels.basis].label;
+    const dimension = CHANNEL_DIMENSIONS[renderedChannels.dimension || 'lastmile'];
+    exportCsv(`渠道时效-${dimension}-${basis}`, [
+    ['时效口径', () => basis],
+    [dimension, row => row.channel], ['单量', row => row.orders], ['有妥投时间', row => row.signed],
     ['有效签收样本', row => row.samples], ['WMS 补算样本', row => row.fallbackSamples],
     ['平均时效（天）', row => row.avgDays], ['P90（天）', row => row.p90Days],
     ['3天达成率（%）', row => row.rate3], ['5天达成率（%）', row => row.rate5],
     ['6天达成率（%）', row => row.rate6], ['7天达成率（%）', row => row.rate7],
     ['SLA 在途超时', row => row.overdue], ['SLA 有效签收样本', row => row.sla_samples], ['SLA达成率（%）', row => row.slaRate],
-  ], channelRows);
+    ], channelRows);
+  };
   $('#dClose').onclick = closeDrawer;
   $('#mask').onclick = closeDrawer;
   document.addEventListener('keydown', event => {

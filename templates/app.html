@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261124-analytics-cache">
+<link rel="stylesheet" href="/static/app.css?v=20261124-channel-group-comparison">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -189,7 +189,7 @@
 
       <!-- ============ 渠道时效 ============ -->
       <section class="view" id="v-channels">
-        <div class="page-head"><div><h1>渠道时效</h1><p>按 C 端物流渠道对比。妥投优先用 17TRACK，缺失时按仓库时间口径用 WMS 补算。</p></div></div>
+        <div class="page-head"><div><h1>渠道时效</h1><p>比较 C 端物流渠道和自定义渠道分组的签收时效。妥投优先用 17TRACK，缺失时按仓库及承运商时间口径用 WMS 补算。</p></div></div>
         <div class="tabs" id="channelTabs" aria-label="渠道时效分类">
           <button type="button" data-pane="timing" aria-pressed="true">时效对比</button>
           <button type="button" data-pane="exceptions" aria-pressed="false">轨迹异常</button>
@@ -197,6 +197,12 @@
         <div class="workspace-stack" id="channelTimingPane">
         <div class="filters" id="channelFilters"></div>
         <div class="card channel-basis">
+          <div class="channel-dimension-control"><span>对比维度</span>
+            <div class="tabs" id="channelDimension" role="group" aria-label="渠道对比维度">
+              <button type="button" data-dimension="lastmile" aria-pressed="true">C 端渠道</button>
+              <button type="button" data-dimension="group" aria-pressed="false">自定义渠道</button>
+            </div>
+          </div>
           <div class="tabs" id="channelBasis" role="group" aria-label="时效统计口径">
             <button type="button" data-basis="paid" aria-pressed="false">支付到签收</button>
             <button type="button" data-basis="shipped" aria-pressed="true">出库到签收</button>
@@ -209,24 +215,25 @@
         <div class="kpis" id="channelKpi"></div>
         <section class="card channel-comparison" aria-labelledby="channelComparisonTitle">
           <div class="ct table-head"><div>
-            <h2 id="channelComparisonTitle"><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span>渠道时效对比</h2>
+            <h2 id="channelComparisonTitle"><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span><span id="channelComparisonName">C 端渠道时效对比</span></h2>
             <p class="tip icon-caption" id="channelChartScope"></p>
           </div></div>
           <div class="channel-period" id="channelComparisonPeriod" aria-label="统计时间范围"></div>
           <div class="compare-grid compare-head" id="channelCompareHead" aria-hidden="true">
-            <div>C 端渠道</div><div>有效样本 / 单量</div><div>平均用时</div><div>90% 签收用时 <small>P90</small></div>
+            <div id="channelCompareLabel">C 端渠道</div><div>有效样本 / 单量</div><div>平均用时</div><div>90% 签收用时 <small>P90</small></div>
             <div>3 天内签收</div><div>5 天内签收</div><div>6 天内签收</div><div>7 天内签收</div>
           </div>
           <ul class="compare-list" id="channelComparisonRows" aria-label="渠道时效图与数据"></ul>
+          <div class="channel-compare-expand" id="channelCompareExpand" hidden><button type="button" id="channelCompareToggle" class="btn ghost sm"></button></div>
           <p class="tip compare-empty" id="channelChartEmpty" hidden>当前筛选和口径下没有有效签收样本。</p>
         </section>
         <div class="card table-card">
-          <div class="ct table-head"><div><h2>C 端渠道表现对比</h2><p class="tip">SLA 达成率和超时在途按每单「当前渠道」配置的起点与承诺天数计算。超时占比仅统计可计时的在途单。</p></div><button type="button" class="btn ghost sm" id="exportChannels">导出结果</button></div>
+          <div class="ct table-head"><div><h2 id="channelPerformanceTitle">C 端渠道表现对比</h2><p class="tip">SLA 达成率和超时在途按每单「当前渠道」配置的起点与承诺天数计算。超时占比仅统计可计时的在途单。</p></div><button type="button" class="btn ghost sm" id="exportChannels">导出结果</button></div>
           <div class="channel-period" id="channelTablePeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:none">
             <table class="tbl">
               <thead><tr>
-                <th>C 端显示物流渠道</th><th>单量</th><th>有妥投时间</th><th>有效样本</th><th>平均时效</th><th>P90</th>
+                <th id="channelTableLabel">C 端显示物流渠道</th><th>单量</th><th>有妥投时间</th><th>有效样本</th><th>平均时效</th><th>P90</th>
                 <th>3天达成</th><th>5天达成</th><th>6天达成</th><th>7天达成</th><th>SLA 达成率</th>
                 <th>在途</th><th>超时在途</th>
               </tr></thead>
@@ -235,11 +242,11 @@
           </div>
         </div>
         <div class="card" style="padding:0">
-          <div class="ct" style="padding:12px 14px 0"><h2>C 端渠道 × 国家</h2><div class="tip">单量 ≥ 200 的组合</div></div>
+          <div class="ct" style="padding:12px 14px 0"><h2 id="channelCountryTitle">C 端渠道 × 国家</h2><div class="tip">单量 ≥ 200 的组合</div></div>
           <div class="channel-period" id="channelCountryPeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:460px">
             <table class="tbl">
-              <thead><tr><th>C 端渠道</th><th>国家</th><th>单量</th><th>有效样本</th><th>平均时效</th><th>6天达成</th></tr></thead>
+              <thead><tr><th id="channelCountryLabel">C 端渠道</th><th>国家</th><th>单量</th><th>有效样本</th><th>平均时效</th><th>6天达成</th></tr></thead>
               <tbody id="chanCountryBody"></tbody>
             </table>
           </div>
@@ -494,7 +501,8 @@
           <div class="ct table-head">
             <div><h2 id="channelGroupRulesTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>自定义渠道分组</h2>
               <p class="tip icon-caption">每个履约单的「当前渠道」只能归入一组。分组保存后可在各业务页面筛选。</p></div>
-            <button type="button" class="btn ghost sm" id="openChannelGroups" hidden>新增分组</button>
+            <div class="toolbar"><button type="button" class="btn ghost sm" id="exportChannelGroups">导出配置</button>
+            <button type="button" class="btn ghost sm" id="openChannelGroups" hidden>新增分组</button></div>
           </div>
           <div class="tblwrap"><table class="tbl">
             <thead><tr><th scope="col">分组名称</th><th scope="col">包含的当前渠道</th><th scope="col" id="channelGroupAction" hidden>操作</th></tr></thead>
@@ -603,6 +611,6 @@
       <button type="submit" class="btn" id="trackRuleSave">保存规则</button></footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261124-analytics-cache" defer></script>
+<script src="/static/app.js?v=20261124-channel-group-comparison" defer></script>
 </body>
 </html>

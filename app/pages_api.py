@@ -566,27 +566,29 @@ def track(request: Request,
 def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
              cn: str = "", min_n: int = Query(100, ge=1), cr: str = "", lastmile: str = "",
              start: str = "", end: str = "", channel: str = "", week: str = "",
-             basis: TimingBasis = "shipped", date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = ""):
+             basis: TimingBasis = "shipped", date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = "",
+             dimension: Literal["lastmile", "group"] = "lastmile"):
     core.require_reader(request)
     if basis == "created":
         basis = "paid"  # Value used by earlier clients for 下单到签收.
     with core.ops() as ops:
         _, saved = rules.load_settings(ops)
-        selection = (channel_groups.filter_values(channel_group, channel_groups.load(ops)["groups"])
-                     if channel_group else (None, None))
+        groups = channel_groups.load(ops)["groups"] if channel_group or dimension == "group" else []
+        selection = channel_groups.filter_values(channel_group, groups)
     archive = transport_archive_version() if basis == "online" or any(
         item.get("basis") == "online" for item in saved.values()
     ) else None
     date_basis = date_basis or DEFAULT_DATE_BASIS
     cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel, week=week,
                        date_basis=date_basis, require_time=True, group_selection=selection)
+    grouping = json.dumps(groups, ensure_ascii=False, sort_keys=True) if dimension == "group" else ""
     report = _channel_report(core.snapshot_key(), archive, json.dumps(saved, sort_keys=True), basis, cond, tuple(args),
-                             date_basis)
+                             date_basis, dimension, grouping)
     return {**report, "dateBasis": date_basis, "rows": [row for row in report["rows"] if row["orders"] >= min_n]}
 
 
 @lru_cache(maxsize=32)
-def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis):
+def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, dimension="lastmile", grouping=""):
     con = core.duck()
     try:
         raw_facts = core.active_facts(core.order_facts(con))
@@ -605,14 +607,21 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis):
         }[basis]
         sla_start = timing_start("tgt.basis", sla_scans, online_start)
         active = f"o.已签收=0 AND o.{DELIVERED_UTC} IS NULL AND (o.状态 IS DISTINCT FROM '已完成' OR o.签收时间 IS NOT NULL) AND o.签出时间 IS NOT NULL"
-        scoped = f"""SELECT coalesce(nullif(o.C端承运商,''),'__empty__') AS key,
+        group_join = ""
+        key = "coalesce(nullif(o.C端承运商,''),'__empty__')"
+        if dimension == "group":
+            group_rows = [(channel,group["name"]) for group in json.loads(grouping) for channel in group["channels"]]
+            con.register("comparison_groups", pd.DataFrame(group_rows, columns=["channel","label"]).astype("string"))
+            group_join = "LEFT JOIN comparison_groups g ON g.channel=trim(o.当前渠道)"
+            key = f"coalesce(g.label,'{channel_groups.UNGROUPED}')"
+        scoped = f"""SELECT {key} AS key,
                             coalesce(o.目的国中文,o.目的国) AS ctry,
                             o.{DELIVERED_BJ} AS delivered, o.{DELIVERY_SOURCE} AS delivery_source,
                             {minutes} AS duration_min, {sla_start} AS sla_start,
                             coalesce(tgt.days,{rules.DEFAULT_SLA_DAYS}) AS sla_days,
                             {active} AS in_transit
                      FROM {facts} o LEFT JOIN tgt ON tgt.ch=o.当前渠道
-                     {scan_join} WHERE 1=1{cond}"""
+                     {group_join} {scan_join} WHERE 1=1{cond}"""
         usable = "o.duration_min>0"
         sla_minutes = elapsed_minutes("o.sla_start", "o.delivered")
         sla_usable = f"{sla_minutes}>0"
@@ -647,7 +656,11 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis):
 
     records, by_country = [], []
     for row in grouped:
-        name = "未填写 C 端渠道" if row["key"] == "__empty__" else row["key"]
+        name = row["key"]
+        if dimension == "group" and name == channel_groups.UNGROUPED:
+            name = channel_groups.UNGROUPED_LABEL
+        elif dimension == "lastmile" and name == "__empty__":
+            name = "未填写 C 端渠道"
         if not row.pop("channel_total"):
             if len(by_country) < 40:
                 by_country.append({"key": row["key"], "ch": name, "ctry": row["ctry"], "n": row["orders"],
@@ -661,7 +674,8 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis):
         row["slaRate"] = pct(row.pop("within_sla"), row["sla_samples"])
         row["overRate"] = pct(row["overdue"], row["slaInTransit"])
         records.append(row)
-    return core.clean({"asof": str(asof), "dateAsof": date_asof, "basis": basis, "rows": records, "byCountry": by_country})
+    return core.clean({"asof": str(asof), "dateAsof": date_asof, "basis": basis, "dimension": dimension,
+                       "rows": records, "byCountry": by_country})
 
 
 # ---------------------------------------------------------------- 规则与 SLA

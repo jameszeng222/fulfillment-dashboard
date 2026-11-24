@@ -248,6 +248,8 @@ def create_version(packages):
         "overview": pages_api.overview(request),
         "channels": {basis: pages_api.channels(request, min_n=1, basis=basis)
                      for basis in ("paid", "shipped", "online")},
+        "channelGroups": {basis: pages_api.channels(request, min_n=1, basis=basis, dimension="group")
+                          for basis in ("paid", "shipped", "online")},
     }
     with core.duck() as con:
         facts = core.active_facts(core.order_facts(con))

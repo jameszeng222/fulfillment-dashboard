@@ -179,11 +179,15 @@ async function readVersion(bucket, m, url, order, filtered) {
   }
   const timing = url.searchParams.get("basis") || "shipped";
   const basis = timing === "created" ? "paid" : timing;
+  const dimension = url.searchParams.get("dimension") || "lastmile";
   const minimum = Number(url.searchParams.get("min_n") || 100);
-  if (!Object.hasOwn(stats.channels, basis) || !Number.isSafeInteger(minimum) || minimum < 1) {
+  if (!["lastmile", "group"].includes(dimension) || !Number.isSafeInteger(minimum) || minimum < 1) {
     return json({detail: "无效渠道统计参数"}, 422);
   }
-  const report = stats.channels[basis];
+  const reports = dimension === "group" ? stats.channelGroups : stats.channels;
+  if (!reports) return null;
+  if (!Object.hasOwn(reports, basis)) return json({detail: "无效渠道统计参数"}, 422);
+  const report = reports[basis];
   return json({...report, rows: report.rows.filter(row => row.orders >= minimum), snapshotAt: m.at,
     snapshotFiltersSkipped: filtered || dateBasis !== (report.dateBasis || "created")});
 }

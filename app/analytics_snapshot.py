@@ -23,8 +23,8 @@ def facts(con):
 
 def scan_source(con, archive_version):
     if available(con) and core.columns(con, INFO):
-        version = con.execute(f"SELECT archive_version FROM {INFO}").fetchone()
-        if version == (archive_version,):
+        version = con.execute(f"SELECT archive_version FROM {INFO}").fetchall()
+        if version == [(archive_version,)]:
             return "", "CASE WHEN o.analytics_online>=o.创建时间 THEN o.analytics_online END"
     return online_scan_join(con), ONLINE_START
 
