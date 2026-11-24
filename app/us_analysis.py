@@ -1,4 +1,4 @@
-"""Volume and delivery timing by US destination and fulfillment channel."""
+"""Volume and milestone timing by destination and fulfillment channel."""
 import csv
 import json
 import re
@@ -11,11 +11,33 @@ import pandas as pd
 from . import core
 from .carrier_delivery import DELIVERED_BJ, DELIVERY_SOURCE, elapsed_minutes, reporting_facts
 from .order_time import delivery_facts
+from .regional_pickup import build_pickups
 
 ChannelDimension = Literal["lastmile", "current", "group"]
-TransitBasis = Literal["paid", "shipped"]
+TransitBasis = Literal["paid", "created", "shipped", "paid_create", "create_ship", "ship_pickup", "pickup_delivered"]
+Market = Literal["us", "other"]
+PlaceLevel = Literal["all", "states", "regions"]
 REFERENCE = Path(__file__).resolve().parents[1] / "reference"
 UNKNOWN = "未识别州"
+US_COUNTRIES = "('united states', 'united states of america', 'us', 'usa')"
+SEGMENTS = {
+    "paid_create": ("o.支付时间", "o.创建时间"),
+    "create_ship": ("o.创建时间", "o.签出时间"),
+    "ship_pickup": ("o.签出时间", "p.pickup"),
+    "pickup_delivered": ("p.pickup", f"o.{DELIVERED_BJ}"),
+    "shipped": ("o.签出时间", f"o.{DELIVERED_BJ}"),
+    "created": ("o.创建时间", f"o.{DELIVERED_BJ}"),
+    "paid": ("o.支付时间", f"o.{DELIVERED_BJ}"),
+}
+WORLD_ALIASES = {
+    "South Korea": "Korea", "Congo, The Democratic Republic Of The": "Dem. Rep. Congo",
+    "Czech Republic": "Czech Rep.", "Tanzania, United Republic Of": "Tanzania",
+    "Côte d’Ivoire": "Côte d'Ivoire", "Aland Islands": "Aland", "North Macedonia": "Macedonia",
+    "Bosnia And Herzegovina": "Bosnia and Herz.", "Equatorial Guinea": "Eq. Guinea",
+    "South Sudan": "S. Sudan", "Eswatini": "Swaziland", "Cayman Islands": "Cayman Is.",
+    "VIRGIN ISLAND (US)": "U.S. Virgin Is.", "Virgin Islands, U.S.": "U.S. Virgin Is.",
+    "Northern Mariana Islands": "N. Mariana Is.",
+}
 
 
 def _normalize(value):
@@ -43,39 +65,36 @@ def _register_reference(con):
     return states
 
 
-def _scoped_delivery_facts(con):
-    facts = reporting_facts(con, "us_orders", page_only=True)
+def _address_sql(con):
     columns = core.columns(con, "履约单明细")
     state = '''regexp_replace(lower(trim(d."省、州")), '[[:space:].]+', '', 'g')''' if "省、州" in columns else "NULL"
     postal = """regexp_extract(trim(d.邮编, ' "' || chr(39)), '^([0-9]{5})(?:-?[0-9]{4})?$', 1)""" \
         if "邮编" in columns else "NULL"
-    return facts, state, postal
+    return state, postal
 
 
-@lru_cache(maxsize=16)
-def report(_snapshot, date_basis, basis, dimension, cond, args, settings):
-    with core.duck() as con:
+def _build_scope(con, market, dimension, cond, args, settings, level="all", place="", focus=""):
+    orders = delivery_facts(con, core.active_facts(core.order_facts(con)))
+    country_filter = f"lower(trim(o.目的国)) {'IN' if market == 'us' else 'NOT IN'} {US_COUNTRIES}"
+    con.execute(f"""
+        CREATE TEMP TABLE regional_orders AS SELECT o.* FROM {orders} o
+        WHERE {country_filter} AND nullif(trim(o.目的国),'') IS NOT NULL {cond}
+    """, args)
+    group_join = ""
+    if dimension == "group":
+        group_rows = [(key, group["name"]) for group in json.loads(settings) for key in group["channels"]]
+        con.register("us_channel_groups", pd.DataFrame(group_rows, columns=["channel", "label"]).astype("string"))
+        group_join = "LEFT JOIN us_channel_groups g ON g.channel=trim(o.当前渠道)"
+        channel = "coalesce(g.label, '未归组')"
+    elif dimension == "current":
+        channel = "coalesce(nullif(trim(o.当前渠道),''), '未填写当前渠道')"
+    else:
+        channel = "coalesce(nullif(trim(o.C端承运商),''), '未填写 C 端渠道')"
+    params = []
+    if market == "us":
         states = _register_reference(con)
-        orders = delivery_facts(con, core.active_facts(core.order_facts(con)))
-        con.execute(f"""
-            CREATE TEMP TABLE us_orders AS SELECT o.* FROM {orders} o
-            WHERE lower(trim(o.目的国)) IN ('united states', 'united states of america', 'us', 'usa')
-              {cond}
-        """, args)
-        facts, state_field, postal_field = _scoped_delivery_facts(con)
-        group_join = ""
-        if dimension == "group":
-            group_rows = [(key, group["name"]) for group in json.loads(settings) for key in group["channels"]]
-            con.register("us_channel_groups", pd.DataFrame(group_rows, columns=["channel", "label"]).astype("string"))
-            group_join = "LEFT JOIN us_channel_groups g ON g.channel=trim(o.当前渠道)"
-            channel = "coalesce(g.label, '未归组')"
-        elif dimension == "current":
-            channel = "coalesce(nullif(trim(o.当前渠道),''), '未填写当前渠道')"
-        else:
-            channel = "coalesce(nullif(trim(o.C端承运商),''), '未填写 C 端渠道')"
-        duration = "o.物流分钟" if basis == "shipped" else elapsed_minutes("o.支付时间", f"o.{DELIVERED_BJ}")
-        rows = con.execute(f"""
-            WITH zipcodes AS (
+        state_field, postal_field = _address_sql(con)
+        scope = f"""WITH zipcodes AS (
                 SELECT postal_code,min(region_code) AS code FROM read_csv(?, all_varchar=true)
                 WHERE region_code IN (SELECT code FROM us_state_names)
                 GROUP BY postal_code HAVING count(DISTINCT region_code)=1
@@ -83,25 +102,70 @@ def report(_snapshot, date_basis, basis, dimension, cond, args, settings):
                 SELECT d.履约单号,
                    CASE WHEN count(DISTINCT s.code)=1 THEN min(s.code)
                         WHEN count(DISTINCT s.code)=0 AND count(DISTINCT z.code)=1 THEN min(z.code) END AS code
-                FROM 履约单明细 d SEMI JOIN us_orders u USING (履约单号)
+                FROM 履约单明细 d SEMI JOIN regional_orders u USING (履约单号)
                 LEFT JOIN us_state_aliases s ON s.alias={state_field}
                 LEFT JOIN zipcodes z ON z.postal_code={postal_field}
                 GROUP BY d.履约单号
-            ), scoped AS (
-                SELECT coalesce(a.code,'') AS state, coalesce(s.region,?) AS region, {channel} AS channel,
-                       {duration} AS minutes, o.{DELIVERY_SOURCE} AS delivery_source
-                FROM {facts} o LEFT JOIN address a USING (履约单号)
+            )
+                SELECT o.*, coalesce(a.code,'') AS geo_state, coalesce(s.region,?) AS geo_region, {channel} AS geo_channel
+                FROM regional_orders o LEFT JOIN address a USING (履约单号)
                 LEFT JOIN us_state_names s ON s.code=a.code {group_join}
+        """
+        params.extend([str(REFERENCE / "us-postal-timezones.csv"), UNKNOWN])
+    else:
+        countries = con.execute("""
+            SELECT 目的国,coalesce(max(nullif(目的国中文,'')),目的国) FROM regional_orders GROUP BY 1
+        """).fetchall()
+        states = {country: {"code": country, "name": WORLD_ALIASES.get(country, country),
+                            "label": "北马其顿" if country == "North Macedonia" else label, "region": "其他国家"}
+                  for country, label in countries}
+        scope = f"""SELECT o.*, o.目的国 AS geo_state, o.目的国 AS geo_region, {channel} AS geo_channel
+                    FROM regional_orders o {group_join}"""
+    clauses = []
+    if level != "all":
+        clauses.append("geo_region=?" if level == "regions" else "geo_state=?")
+        params.append(place)
+    if focus:
+        clauses.append("geo_channel=?")
+        params.append(focus)
+    where = " WHERE " + " AND ".join(clauses) if clauses else ""
+    con.execute(f"CREATE TEMP TABLE regional_scope AS SELECT * FROM ({scope}) geography{where}", params)
+    return states
+
+
+def _metric_sources(con, keys):
+    delivery = any(SEGMENTS[key][1] == f"o.{DELIVERED_BJ}" for key in keys)
+    pickup = any(key in ("ship_pickup", "pickup_delivered") for key in keys)
+    facts = reporting_facts(con, "regional_scope", page_only=True) if delivery else "regional_scope"
+    pickup_join = ""
+    if pickup:
+        build_pickups(con)
+        pickup_join = "LEFT JOIN regional_pickups p USING (履约单号)"
+    return facts, pickup_join, f"o.{DELIVERY_SOURCE}" if delivery else "NULL"
+
+
+@lru_cache(maxsize=16)
+def report(_snapshot, date_basis, basis, dimension, cond, args, settings, market="us"):
+    with core.duck() as con:
+        states = _build_scope(con, market, dimension, cond, args, settings)
+        facts, pickup_join, delivery_source = _metric_sources(con, [basis])
+        duration = elapsed_minutes(*SEGMENTS[basis])
+        grouping = "((), (state), (region), (channel), (state,channel), (region,channel))"
+        rows = con.execute(f"""
+            WITH scoped AS (
+                SELECT o.geo_state AS state,o.geo_region AS region,o.geo_channel AS channel,
+                       {duration} AS minutes, {delivery_source} AS delivery_source
+                FROM {facts} o {pickup_join}
             )
             SELECT grouping_id(state,region,channel), state, region, channel, count(*),
                    count(*) FILTER (WHERE minutes>0), count(*) FILTER (WHERE minutes>0 AND delivery_source='WMS'),
-                   round(avg(minutes) FILTER (WHERE minutes>0)/1440.0, 2),
-                   round(quantile_cont(minutes, 0.9) FILTER (WHERE minutes>0)/1440.0, 2)
+                   avg(minutes) FILTER (WHERE minutes>0)/1440.0,
+                   quantile_cont(minutes, 0.9) FILTER (WHERE minutes>0)/1440.0
             FROM scoped
-            GROUP BY GROUPING SETS ((), (state), (region), (channel), (state,channel), (region,channel))
+            GROUP BY GROUPING SETS {grouping}
             ORDER BY count(*) DESC, state NULLS LAST, region NULLS LAST, channel NULLS LAST
-        """, [str(REFERENCE / "us-postal-timezones.csv"), UNKNOWN]).fetchall()
-    result = {"dateBasis": date_basis, "basis": basis, "dimension": dimension, "national": {},
+        """).fetchall()
+    result = {"dateBasis": date_basis, "basis": basis, "dimension": dimension, "market": market, "national": {},
               "states": {}, "regions": {}, "channels": []}
     place_channels = {}
     for flags, state, region, channel, orders, samples, fallback, average, p90 in rows:
@@ -118,5 +182,28 @@ def report(_snapshot, date_basis, basis, dimension, cond, args, settings):
             place_channels.setdefault(key, []).append({"label": channel, **metrics})
     for (level, place), channels in place_channels.items():
         result[level][place]["channels"] = channels
+    if market == "other":
+        result["regions"] = {}
     result["geography"] = states
     return result
+
+
+@lru_cache(maxsize=24)
+def segments(_snapshot, market, date_basis, dimension, cond, args, settings, level, place, focus):
+    with core.duck() as con:
+        _build_scope(con, market, dimension, cond, args, settings, level, place, focus)
+        facts, pickup_join, delivery_source = _metric_sources(con, SEGMENTS)
+        minutes = ", ".join(f"{elapsed_minutes(*endpoints)} AS {key}" for key, endpoints in SEGMENTS.items())
+        metrics = ", ".join(
+            f"count(*) FILTER (WHERE {key}>0),avg({key}) FILTER (WHERE {key}>0),"
+            f"quantile_cont({key},0.9) FILTER (WHERE {key}>0)" for key in SEGMENTS)
+        summary = con.execute(f"""
+            WITH measured AS (
+                SELECT {minutes} FROM {facts} o {pickup_join}
+            ) SELECT count(*), {metrics} FROM measured
+        """).fetchone()
+    records = []
+    for index, key in enumerate(SEGMENTS):
+        count, avg, p90 = summary[1 + index * 3:4 + index * 3]
+        records.append({"key": key, "samples": count, "avgMinutes": avg, "p90Minutes": p90})
+    return {"total": summary[0], "segments": records, "market": market, "dateBasis": date_basis}

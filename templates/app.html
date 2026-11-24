@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261124-track-rules">
+<link rel="stylesheet" href="/static/app.css?v=20261124-regional-analysis">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -41,7 +41,7 @@
       <button type="button" data-v="dash" class="on" aria-current="page"><svg class="ui-icon" aria-hidden="true"><use href="#i-grid"/></svg>数据总览</button>
       <button type="button" data-v="track"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>轨迹监控</button>
       <button type="button" data-v="channels"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg>渠道时效</button>
-      <button type="button" data-v="us"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg>美国分析</button>
+      <button type="button" data-v="us"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg>区域分析</button>
       <button type="button" data-v="rules"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg>数据与规则</button>
     </nav>
     <div class="sidefoot">
@@ -198,7 +198,7 @@
         <div class="filters" id="channelFilters"></div>
         <div class="card channel-basis">
           <div class="tabs" id="channelBasis" role="group" aria-label="时效统计口径">
-            <button type="button" data-basis="paid" aria-pressed="false">下单到签收</button>
+            <button type="button" data-basis="paid" aria-pressed="false">支付到签收</button>
             <button type="button" data-basis="shipped" aria-pressed="true">出库到签收</button>
             <button type="button" data-basis="online" aria-pressed="false">上网到签收</button>
           </div>
@@ -278,18 +278,29 @@
         </div>
       </section>
 
-      <!-- ============ 美国分析 ============ -->
+      <!-- ============ 区域分析 ============ -->
       <section class="view" id="v-us" aria-labelledby="usTitle">
         <div class="page-head">
-          <div><h1 id="usTitle">美国分析</h1><p>按目的州和业务区域比较渠道单量、占比和签收时效。</p></div>
+          <div><h1 id="usTitle">区域分析</h1><p>比较各目的地区的渠道构成与履约关键阶段时效。</p></div>
+        </div>
+        <div class="tabs" id="regionMarkets" role="group" aria-label="分析区域">
+          <button type="button" data-value="us" aria-pressed="true">美国</button>
+          <button type="button" data-value="other" aria-pressed="false">其他国家</button>
         </div>
         <div class="filters" id="usFilters"></div>
         <div class="card us-basis">
-          <div><span>时效起点</span>
-            <div class="tabs" id="usBasis" role="group" aria-label="美国时效起点">
-              <button type="button" data-value="paid" aria-pressed="true">下单到签收</button>
-              <button type="button" data-value="shipped" aria-pressed="false">出库到签收</button>
-            </div>
+          <div><label for="usBasis">时效口径</label>
+            <select id="usBasis">
+              <optgroup label="全程及运输">
+                <option value="paid">支付到签收</option><option value="created">创建到签收</option>
+                <option value="shipped">出库到签收</option><option value="pickup_delivered">提取到签收</option>
+              </optgroup>
+              <optgroup label="接单与交接">
+                <option value="paid_create">支付到创建</option><option value="create_ship">创建到出库</option>
+                <option value="ship_pickup">出库到提取</option>
+              </optgroup>
+            </select>
+            <span class="tip">支付即客户下单，创建即 ERP 履约单创建。</span>
           </div>
           <div><label for="usDimension">比较渠道</label>
             <select id="usDimension"><option value="lastmile">C 端渠道</option><option value="current">当前渠道</option><option value="group">自定义渠道</option></select>
@@ -300,7 +311,7 @@
           <div class="kpis us-kpi" id="usKpi"></div>
           <div class="us-layout">
             <section class="card plot-card us-map-card" aria-labelledby="usMapTitle">
-              <div class="ct"><div><h2 id="usMapTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span>美国履约地图</h2>
+              <div class="ct"><div><h2 id="usMapTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span><span id="regionMapTitle">美国履约地图</span></h2>
                 <p class="tip icon-caption" id="usMapHint">按目的州展示 P90 时效</p></div>
                 <div class="tabs period-tabs" id="usLevel" role="group" aria-label="地图地域级别">
                   <button type="button" data-value="states" aria-pressed="true">按州</button>
@@ -329,6 +340,12 @@
               </table></div>
             </section>
           </div>
+          <section class="card plot-card" aria-labelledby="regionalSegmentsTitle">
+            <div class="ct"><div><h2 id="regionalSegmentsTitle">分段时效</h2>
+              <p class="tip" id="regionalSegmentStatus" role="status">正在统计各阶段…</p></div></div>
+            <div id="regionalSegmentContent" class="regional-segments"></div>
+            <p class="tip us-notes">提取为首条实际揽收记录或 17TRACK PickedUp 节点。缺少起点、终点或耗时小于等于零的样本不计入该段时效。各阶段有效样本数独立计算。点击阶段查看该时效的地域分布。</p>
+          </section>
           <section class="card table-card" aria-labelledby="usDetailTitle">
             <div class="ct table-head"><div><h2 id="usDetailTitle">州级明细</h2><p class="tip" id="usDetailScope"></p></div>
               <input type="search" class="inline-search" id="usSearch" placeholder="搜索州名、代码或区域" aria-label="搜索州名、代码或区域">
@@ -339,7 +356,7 @@
               <tbody id="usDetailsBody"></tbody>
             </table></div>
           </section>
-          <p class="tip us-notes">单量按履约单计，含在途单。平均时效与 P90 只用有有效起点和签收时间的正值样本，按实际经过的 24 小时折算为天。P90 表示约 90% 的有效样本在该时长内签收。签收优先取 17TRACK，缺失时按仓库时区口径使用 WMS。区域沿用万邑通七区，阿拉斯加和夏威夷并入太平洋，美国属地单列。州从收件州字段识别，缺失时按 ZIP 邮编补齐。<a href="https://github.com/apache/echarts-examples/blob/gh-pages/public/data/asset/geo/USA.json" target="_blank" rel="noopener noreferrer">州界来源</a></p>
+          <p class="tip us-notes">单量按履约单计，含在途单。平均时效与 P90 使用对应阶段的有效正值样本，按实际经过时间折算。P90 表示约 90% 的有效样本在该时长内完成该阶段。签收优先取 17TRACK，缺失时按仓库时区口径使用 WMS。美国沿用万邑通七区，阿拉斯加和夏威夷并入太平洋，美国属地单列。州从收件州字段识别，缺失时按 ZIP 邮编补齐。其他国家按目的国家字段统计。地图未描绘的小地区仍可在明细查看。<a id="regionMapSource" href="https://github.com/apache/echarts-examples/blob/gh-pages/public/data/asset/geo/USA.json" target="_blank" rel="noopener noreferrer">地图数据</a></p>
         </div>
       </section>
 
@@ -582,6 +599,6 @@
       <button type="submit" class="btn" id="trackRuleSave">保存规则</button></footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261124-track-rules" defer></script>
+<script src="/static/app.js?v=20261124-regional-analysis" defer></script>
 </body>
 </html>

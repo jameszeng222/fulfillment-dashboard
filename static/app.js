@@ -41,7 +41,7 @@ let chartsFetch = null;
 const charts = {};
 const pendingRequests = new Map();
 const pageResponses = new Map();
-const cachedPages = new Set(['activity', 'dash', 'health', 'track', 'trackSummary', 'drawer', 'channels', 'us', 'rules', 'trackExceptions']);
+const cachedPages = new Set(['activity', 'dash', 'health', 'track', 'trackSummary', 'drawer', 'channels', 'us', 'regionSegments', 'rules', 'trackExceptions']);
 let readGeneration = 0;
 let resizeFrame = 0;
 let toastTimer;
@@ -202,13 +202,14 @@ function exportCsv(name, fields, rows) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const VIEW_META = { dash: '数据总览', track: '轨迹监控', channels: '渠道时效', us: '美国分析', rules: '数据与规则' };
+const VIEW_META = { dash: '数据总览', track: '轨迹监控', channels: '渠道时效', us: '区域分析', rules: '数据与规则' };
 let VIEW = 'dash';
 let trackMode = 'tracking';
 let channelMode = 'timing';
 
 function showView(v) {
   if (ME.preview && ['rules', 'us'].includes(v)) v = 'dash';
+  if (VIEW === 'us' && v !== 'us') segmentPath = '';
   VIEW = v;
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#nav button').forEach(b => {
@@ -219,7 +220,8 @@ function showView(v) {
   $('#crumb').textContent = VIEW_META[v];
   setTopMeta(META?.range.end);
   const route = v === 'track' && trackMode !== 'tracking' ? trackMode :
-    v === 'channels' && channelMode === 'exceptions' ? 'channel-exceptions' : v;
+    v === 'channels' && channelMode === 'exceptions' ? 'channel-exceptions' :
+      v === 'us' ? (usView.market === 'us' ? 'regions' : 'regions-other') : v;
   history.replaceState(null, '', '#' + route);
   window.scrollTo({ top: 0 });
   resizeVisibleCharts();
@@ -1305,7 +1307,7 @@ async function applyBatch() {
 
 /* ================= 渠道时效 ================= */
 const TIMING_BASIS = {
-  paid: { label: '下单到签收', note: '从支付时间（北京时间）到妥投。优先 17TRACK，缺失时按仓库时间口径用 WMS 补算。' },
+  paid: { label: '支付到签收', note: '从支付时间（北京时间）到妥投。优先 17TRACK，缺失时按仓库时间口径用 WMS 补算。' },
   shipped: { label: '出库到签收', note: '从签出时间（北京时间）到妥投。优先 17TRACK，缺失时按仓库时间口径用 WMS 补算。' },
   online: { label: '上网到签收', note: '从 17TRACK 首条有效揽收或运输扫描到妥投。妥投时间优先 17TRACK，缺失时用 WMS 补算。' },
 };
@@ -1693,43 +1695,62 @@ function setupTrackExceptionControls() {
   form.onsubmit = event => { event.preventDefault(); run(() => saveTrackRule(false)); };
 }
 
-/* ================= 美国分析 ================= */
+/* ================= 区域分析 ================= */
 
 let UF = null;
 let usReport = null;
-let usMapLoad;
+const usMapLoads = new Map();
 let usMapPlaces = new Map();
-const usView = {basis: 'paid', dimension: 'lastmile', level: 'states', metric: 'p90', place: null, channel: ''};
+let regionalFilters = {};
+let segmentPath = '';
+let segmentGeneration = -1;
+const usView = {market: 'us', basis: 'paid', dimension: 'lastmile', level: 'states', metric: 'p90', place: null, channel: ''};
 const usMetricLabel = {orders: '单量', share: '单量占比', avg: '平均时效', p90: 'P90 时效'};
-const usTimingLabel = {paid: '下单到签收', shipped: '出库到签收'};
+const usTimingLabel = {paid: '支付到签收', created: '创建到签收', shipped: '出库到签收',
+  paid_create: '支付到创建', create_ship: '创建到出库', ship_pickup: '出库到提取', pickup_delivered: '提取到签收'};
+const earlySegments = ['paid_create', 'create_ship', 'ship_pickup'];
+const lateSegments = ['pickup_delivered', 'shipped', 'created', 'paid'];
 const usPalette = ['#e2eaf8', '#bccdf0', '#8ba7dd', '#5377bb', '#25447d'];
 const usBlank = '#e7ebef';
-const usDay = value => Number.isFinite(value) ? value.toFixed(2) + ' 天' : '—';
+const regionalDuration = (minutes, basis) => Number.isFinite(minutes) ?
+  earlySegments.includes(basis) ? (minutes / 60).toFixed(1) + ' 小时' : (minutes / 1440).toFixed(2) + ' 天' : '—';
+const usDay = value => Number.isFinite(value) ? regionalDuration(value * 1440, usReport.basis) : '—';
 const usPercent = value => value > 0 && value < 0.1 ? '&lt;0.1%' : measure(value, '%');
 const usShare = (part, total) => total > 0 ? 100 * part / total : null;
 
 async function loadUs() {
   await loadMeta();
   if (VIEW !== 'us') return;
-  if (!UF) UF = makeFilters($('#usFilters'), commonDateFilters().filter(item => item.key !== 'cn'), () => run(loadUs));
+  if (!UF) {
+    UF = makeFilters($('#usFilters'), commonDateFilters(), () => run(loadUs));
+    const others = (META.filterOptions.cn || []).filter(option =>
+      !['us', 'usa', 'united states', 'united states of america'].includes(option.v.trim().toLowerCase()));
+    UF.cn.setOptions(others, others.reduce((sum, option) => sum + option.n, 0), false);
+  }
+  UF.cn.root.hidden = usView.market === 'us';
+  if (usView.market === 'us' && UF.cn.value.length) UF.cn.value = [];
   const filters = readF(UF);
   updateDateOptions(UF, filters.date_basis);
   const status = $('#usStatus');
-  status.textContent = usReport ? '正在更新…' : '正在读取美国履约数据…';
+  status.textContent = usReport ? '正在更新…' : '正在读取区域履约数据…';
+  if (usReport && usReport.market !== usView.market) $('#usResults').hidden = true;
   let report;
   try {
-    report = await latest('us', '/api/us-analysis?' + qs({...filters, basis: usView.basis, dimension: usView.dimension}),
+    report = await latest('us', '/api/regional-analysis?' + qs({...filters, market: usView.market,
+      basis: usView.basis, dimension: usView.dimension}),
       {signal: AbortSignal.timeout(18_000)});
   } catch (error) {
     if (VIEW !== 'us') return;
     const retry = el('button', 'btn ghost sm', '重试');
     retry.type = 'button';
     retry.onclick = () => run(loadUs);
-    status.replaceChildren('美国履约数据暂时无法加载。 ', retry);
+    status.replaceChildren('区域履约数据暂时无法加载。 ', retry);
     return;
   }
-  if (!report || VIEW !== 'us') return;
+  if (!report || VIEW !== 'us' || report.market !== usView.market ||
+      report.basis !== usView.basis || report.dimension !== usView.dimension) return;
   usReport = report;
+  regionalFilters = filters;
   status.textContent = `筛选按${dateBasisLabel[report.dateBasis]}（北京时间） · 时效按${usTimingLabel[report.basis]}`;
   $('#usResults').hidden = false;
   const selector = $('#usMapChannel');
@@ -1738,34 +1759,43 @@ async function loadUs() {
   if (selector.selectedIndex < 0) selector.value = '';
   usView.channel = selector.value;
   renderUsReport();
-  void loadUsMap();
+  void loadUsMap(report.market);
 }
 
 function usPlaceLabel(key) {
+  if (usReport.market === 'other') return usReport.geography[key]?.label || key;
   if (usView.level === 'regions') return key;
   const state = usReport.geography[key];
   return state ? `${state.label}（${key}）` : '未识别州';
 }
 
 function renderUsReport() {
-  if (!usReport) return;
+  if (!usReport || usReport.market !== usView.market) return;
   const {national, states, regions, channels} = usReport;
-  const isRegion = usView.level === 'regions';
+  const other = usReport.market === 'other';
+  const isRegion = !other && usView.level === 'regions';
   const places = isRegion ? regions : states;
   const selected = usView.place === null ? national : places[usView.place];
-  const scope = usView.place === null ? '全美' : usPlaceLabel(usView.place);
+  const whole = other ? '其他国家合计' : '全美';
+  const scope = usView.place === null ? whole : usPlaceLabel(usView.place);
   const mix = usView.place === null ? channels : selected?.channels || [];
   const selectedChannel = usView.channel;
   $('#usKpi').innerHTML = [
-    ['美国履约单', fmt(national.orders), '单量含在途单'],
-    ['有效时效样本', fmt(national.samples), `含 WMS 补算 ${fmt(national.fallback)} 单`],
+    [other ? '其他国家履约单' : '美国履约单', fmt(national.orders), '单量含在途单'],
+    ['有效时效样本', fmt(national.samples), earlySegments.includes(usReport.basis) ?
+      `有效覆盖 ${usPercent(usShare(national.samples, national.orders))}` : `含 WMS 补算 ${fmt(national.fallback)} 单`],
     ['平均时效', usDay(national.avg), usTimingLabel[usReport.basis]],
-    ['P90 时效', usDay(national.p90), '约 90% 的有效样本在该时长内签收'],
+    ['P90 时效', usDay(national.p90), '约 90% 的有效样本在该时长内完成该阶段'],
   ].map(([label, value, detail]) => `<div class="card kpi"><div class="lbl">${label}</div><div class="val">${value}</div><div class="fl">${detail}</div></div>`).join('');
 
   $('#usMixTitle').textContent = scope + '渠道构成';
   $('#usMixScope').textContent = `${fmt(selected?.orders ?? 0)} 单 · ${usTimingLabel[usReport.basis]}`;
   $('#usClear').hidden = usView.place === null;
+  $('#usClear').textContent = '返回' + whole;
+  $('#regionMapTitle').textContent = other ? '其他国家履约地图' : '美国履约地图';
+  $('#regionMapSource').href = 'https://github.com/apache/echarts-examples/blob/gh-pages/public/data/asset/geo/' +
+    (other ? 'world.json' : 'USA.json');
+  $('#usLevel').hidden = other;
   $('#usMixBody').innerHTML = mix.map(row => {
     const share = usShare(row.orders, selected.orders);
     return `<tr><td><button class="order-link" type="button" data-us-channel="${esc(row.label)}"
@@ -1774,13 +1804,14 @@ function renderUsReport() {
       <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${fmt(row.samples)}</td></tr>`;
   }).join('') || blankRow(6, '当前范围无渠道数据');
 
-  const countNote = selectedChannel ? '渠道单量 ÷ 当地总单量' : '当地单量 ÷ 全美总单量';
+  const countNote = selectedChannel ? '渠道单量 ÷ 当地总单量' : other ? '当地单量 ÷ 其他国家总单量' : '当地单量 ÷ 全美总单量';
   const source = selectedChannel || '全部渠道';
   $('#usMapHint').textContent = `${source} · ${usMetricLabel[usView.metric]} · ${usView.metric === 'share' ? countNote :
     (['p90', 'avg'].includes(usView.metric) ? usTimingLabel[usReport.basis] : '按履约单计')}`;
-  $('#usDetailTitle').textContent = isRegion ? '业务区域明细' : '州级明细';
+  $('#usDetailTitle').textContent = other ? '国家明细' : isRegion ? '业务区域明细' : '州级明细';
   $('#usDetailScope').textContent = `${source} · 占比为${countNote} · 点击地域查看渠道构成`;
-  $('#usPlaceColumn').textContent = isRegion ? '业务区域' : '目的州';
+  $('#usPlaceColumn').textContent = other ? '目的国家' : isRegion ? '业务区域' : '目的州';
+  $('#usSearch').placeholder = other ? '搜索国家名称' : '搜索州名、代码或区域';
   $('#usChannelColumn').textContent = selectedChannel ? '所选渠道' : '单量最高的渠道';
   const metrics = (key, place) => {
     const data = selectedChannel ? place.channels?.find(row => row.label === selectedChannel) : place;
@@ -1799,25 +1830,84 @@ function renderUsReport() {
     .toLocaleLowerCase().includes(query)).sort((a,b) => (b[metric] ?? -1) - (a[metric] ?? -1) || a.label.localeCompare(b.label));
   $('#usDetailsBody').innerHTML = details.map(row => `<tr class="${row.key === usView.place ? 'chosen' : ''}">
     <td><button type="button" class="order-link" data-us-place="${esc(row.key)}"
-      aria-pressed="${row.key === usView.place}">${esc(row.label)}</button>${isRegion ? '' : `<small class="cell-sub">${esc(row.region)}</small>`}</td>
+      aria-pressed="${row.key === usView.place}">${esc(row.label)}</button>${other || isRegion ? '' : `<small class="cell-sub">${esc(row.region)}</small>`}</td>
     <td>${esc(row.channel)}${row.leadingShare != null ? `<small class="cell-sub">占当地 ${usPercent(row.leadingShare)}</small>` : ''}</td>
     <td>${fmt(row.orders)}</td><td>${usPercent(row.share)}</td>
     <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${fmt(row.samples)}</td></tr>`).join('') ||
-    blankRow(7, '没有符合条件的州或区域');
+    blankRow(7, other ? '没有符合条件的国家' : '没有符合条件的州或区域');
 
-  usMapPlaces = new Map(Object.entries(usReport.geography).map(([code, state]) => [
+  const mapEntries = Object.entries(usReport.geography).map(([code, state]) => [
     state.name, {key: isRegion ? state.region : code, state: state.label, code, region: state.region,
       row: byPlace.get(isRegion ? state.region : code)},
-  ]));
+  ]);
+  const names = new Set(), duplicateNames = new Set();
+  for (const [name] of mapEntries) {
+    if (names.has(name)) duplicateNames.add(name);
+    names.add(name);
+  }
+  usMapPlaces = new Map(mapEntries.filter(([name]) => !duplicateNames.has(name)));
   drawUsMap();
+  void loadRegionSegments(scope);
+}
+
+async function loadRegionSegments(scope) {
+  const filters = {...regionalFilters, market: usReport.market, dimension: usReport.dimension, detail: 'segments',
+    level: usView.place === null ? 'all' : usView.level, place: usView.place || '', focus: usView.channel};
+  const path = '/api/regional-analysis?' + qs(filters);
+  const generation = readGeneration;
+  if (segmentPath === path && segmentGeneration === generation) return;
+  segmentPath = path;
+  segmentGeneration = generation;
+  const status = $('#regionalSegmentStatus');
+  const selection = scope + ' · ' + (usView.channel || '全部渠道');
+  status.textContent = selection + ' · 正在统计各阶段…';
+  $('#regionalSegmentContent').replaceChildren();
+  try {
+    const report = await latest('regionSegments', path, {signal: AbortSignal.timeout(25_000)});
+    if (!report || segmentPath !== path || VIEW !== 'us' || usView.market !== report.market) return;
+    status.textContent = selection + ' · ' + fmt(report.total) + ' 单';
+    const byKey = new Map(report.segments.map(row => [row.key, row]));
+    $('#regionalSegmentContent').innerHTML = [
+      ['接单与物流交接', earlySegments], ['运输与全链路', lateSegments],
+    ].map(([heading, keys]) => {
+      const rows = keys.map(key => byKey.get(key));
+      const max = Math.max(1, ...rows.flatMap(row => [row.avgMinutes || 0, row.p90Minutes || 0]));
+      return `<section class="regional-segment-group"><h3>${heading}</h3>
+        <div class="regional-segment-heading"><span>阶段</span><span class="regional-segment-bar-label">平均 / P90</span>
+          <span>平均</span><span>P90</span><span class="regional-segment-samples">有效样本</span></div>
+        ${rows.map(row => `<div class="regional-segment-row">
+          <button type="button" class="order-link" data-segment="${row.key}">${usTimingLabel[row.key]}</button>
+          <div class="regional-segment-bars" aria-hidden="true">${[row.avgMinutes, row.p90Minutes].map(value =>
+            `<span><i style="width:${100 * (value || 0) / max}%"></i></span>`).join('')}</div>
+          <span>${regionalDuration(row.avgMinutes, row.key)}</span><span>${regionalDuration(row.p90Minutes, row.key)}</span>
+          <span class="regional-segment-samples">${fmt(row.samples)}
+            <small class="cell-sub">${usPercent(usShare(row.samples, report.total))}</small></span></div>`).join('')}
+      </section>`;
+    }).join('');
+  } catch (error) {
+    if (segmentPath !== path || VIEW !== 'us') return;
+    segmentPath = '';
+    const retry = el('button', 'btn ghost sm', '重试');
+    retry.type = 'button';
+    retry.onclick = () => loadRegionSegments(scope);
+    status.replaceChildren(selection + ' · 分段数据暂时无法加载。 ', retry);
+  }
+}
+
+function regionMapName(market) {
+  return market === 'us' ? 'fulfillment-us' : 'fulfillment-world';
 }
 
 function drawUsMap() {
   const chart = charts.usMap;
-  if (!chart || !usReport || VIEW !== 'us') return;
+  if (!chart || !usReport || VIEW !== 'us' || !echarts.getMap(regionMapName(usReport.market))) return;
   const metric = usView.metric;
-  const cuts = {orders: [100, 1000, 10000, 50000], share: [1, 5, 15, 35], avg: [3, 4, 5, 6],
-    p90: usReport.basis === 'paid' ? [5, 6, 7, 8] : [4, 5, 6, 7]}[metric];
+  const shortCuts = [4, 12, 24, 48].map(hours => hours / 24);
+  const other = usReport.market === 'other';
+  const cuts = {orders: other ? [10, 100, 1000, 10000] : [100, 1000, 10000, 50000],
+    share: [1, 5, 15, 35], avg: earlySegments.includes(usReport.basis) ? shortCuts : [3, 4, 5, 6],
+    p90: earlySegments.includes(usReport.basis) ? shortCuts :
+      ['paid','created'].includes(usReport.basis) ? [5, 6, 7, 8] : [4, 5, 6, 7]}[metric];
   const format = metric === 'orders' ? n => fmt(n) + ' 单' : metric === 'share' ? usPercent : usDay;
   const pieces = usPalette.map((color, index) => {
     const min = cuts[index - 1], max = cuts[index];
@@ -1832,11 +1922,11 @@ function drawUsMap() {
       const place = usMapPlaces.get(item.name);
       if (!place) return esc(item.name);
       const row = place.row;
-      return `<strong>${esc(place.state)}（${place.code}） · ${esc(place.region)}</strong><br>${
+      return `<strong>${esc(place.state)}（${esc(place.code)}） · ${esc(place.region)}</strong><br>${
         row ? `单量 ${fmt(row.orders)} · 占比 ${usPercent(row.share)}<br>平均 ${usDay(row.avg)} · P90 ${usDay(row.p90)}<br>有效样本 ${fmt(row.samples)} 单` : '当前范围无记录'}`;
     }},
     visualMap: [{type: 'piecewise', show: false, pieces, outOfRange: {color: usBlank}}],
-    series: [{type: 'map', map: 'fulfillment-us', roam: false, layoutCenter: ['50%', '50%'], layoutSize: '140%',
+    series: [{type: 'map', map: regionMapName(usReport.market), roam: false, layoutCenter: ['50%', '50%'], layoutSize: '140%',
       itemStyle: {areaColor: usBlank, borderColor: '#ffffff', borderWidth: 1},
       emphasis: {label: {show: false}, itemStyle: {borderColor: '#182b52', borderWidth: 1.6}},
       data: [...usMapPlaces].map(([name, place]) => ({name, value: place.row?.[metric] ?? NaN,
@@ -1846,36 +1936,50 @@ function drawUsMap() {
   resizeVisibleCharts();
 }
 
-async function loadUsMap() {
-  if (charts.usMap) return;
-  if (!usMapLoad) {
-    usMapLoad = Promise.all([
+async function loadUsMap(market = usReport?.market) {
+  if (!market) return;
+  const mapName = regionMapName(market);
+  if (!usMapLoads.has(market)) {
+    const asset = market === 'us' ? '/static/us-states.geojson' : '/static/world-countries.geojson';
+    usMapLoads.set(market, Promise.all([
       loadChartLibrary(),
-      fetch('/static/us-states.geojson?v=1', {signal: AbortSignal.timeout(12_000)}).then(response => {
-        if (!response.ok) throw new Error('州界读取失败');
+      fetch(asset + '?v=1', {signal: AbortSignal.timeout(12_000)}).then(response => {
+        if (!response.ok) throw new Error('地图读取失败');
         return response.json();
       }),
     ]).then(([, geo]) => {
-      echarts.registerMap('fulfillment-us', geo, {
+      echarts.registerMap(mapName, geo, market === 'us' ? {
         Alaska: {left: -131, top: 25, width: 15}, Hawaii: {left: -110, top: 28, width: 5},
         'Puerto Rico': {left: -76, top: 26, width: 2},
-      });
-      const chart = initChart('usMap');
-      chart.on('click', event => {
-        const place = usMapPlaces.get(event.name);
-        if (place) selectUsPlace(place.key);
-      });
-      $('#usMapStatus').hidden = true;
-      drawUsMap();
-    }).catch(() => {
-      usMapLoad = null;
-      const retry = el('button', 'btn ghost sm', '重试地图');
-      retry.type = 'button';
-      retry.onclick = loadUsMap;
-      $('#usMapStatus').replaceChildren('州界暂时无法加载。 ', retry);
+      } : undefined);
+    }).catch(error => { usMapLoads.delete(market); throw error; }));
+  }
+  if (!window.echarts || !echarts.getMap(mapName)) {
+    charts.usMap?.clear();
+    $('#usLegend').replaceChildren();
+    $('#usMapStatus').hidden = false;
+    $('#usMapStatus').textContent = '正在加载地图…';
+  }
+  try {
+    await usMapLoads.get(market);
+  } catch {
+    if (usView.market !== market) return;
+    const retry = el('button', 'btn ghost sm', '重试地图');
+    retry.type = 'button';
+    retry.onclick = () => loadUsMap(market);
+    $('#usMapStatus').replaceChildren('地图暂时无法加载。 ', retry);
+    return;
+  }
+  if (usReport?.market !== market || VIEW !== 'us') return;
+  if (!charts.usMap) {
+    const chart = initChart('usMap');
+    chart.on('click', event => {
+      const place = usMapPlaces.get(event.name);
+      if (place) selectUsPlace(place.key);
     });
   }
-  await usMapLoad;
+  $('#usMapStatus').hidden = true;
+  drawUsMap();
 }
 
 function selectUsPlace(key) {
@@ -1884,7 +1988,7 @@ function selectUsPlace(key) {
 }
 
 function setupUsControls() {
-  for (const [id, field, reload] of [['usBasis', 'basis', true], ['usLevel', 'level', false], ['usMetric', 'metric', false]]) {
+  for (const [id, field] of [['usLevel', 'level'], ['usMetric', 'metric']]) {
     const container = document.getElementById(id);
     container.onclick = event => {
       const button = event.target.closest('button[data-value]');
@@ -1892,10 +1996,30 @@ function setupUsControls() {
       usView[field] = button.dataset.value;
       container.querySelectorAll('button').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
       if (field === 'level') usView.place = null;
-      if (reload) run(loadUs);
-      else renderUsReport();
+      renderUsReport();
     };
   }
+  $('#usBasis').onchange = event => {
+    usView.basis = event.target.value;
+    run(loadUs);
+  };
+  $('#regionalSegmentContent').onclick = event => {
+    const target = event.target.closest('[data-segment]');
+    if (!target) return;
+    usView.basis = $('#usBasis').value = target.dataset.segment;
+    if (['orders', 'share'].includes(usView.metric)) {
+      usView.metric = 'p90';
+      $('#usMetric').querySelectorAll('button').forEach(button =>
+        button.setAttribute('aria-pressed', String(button.dataset.value === 'p90')));
+    }
+    run(loadUs);
+  };
+  $('#regionMarkets').onclick = event => {
+    const button = event.target.closest('button[data-value]');
+    if (!button || usView.market === button.dataset.value) return;
+    setRegionMarket(button.dataset.value);
+    showView('us');
+  };
   $('#usDimension').onchange = event => {
     usView.dimension = event.target.value;
     usView.channel = '';
@@ -1922,6 +2046,18 @@ function setupUsControls() {
   $('#usClear').onclick = () => selectUsPlace(null);
 }
 
+function setRegionMarket(market) {
+  if (market === usView.market) return;
+  usView.market = market;
+  usView.level = 'states';
+  usView.place = null;
+  usView.channel = '';
+  $('#usSearch').value = '';
+  $('#regionMarkets').querySelectorAll('button').forEach(button =>
+    button.setAttribute('aria-pressed', String(button.dataset.value === market)));
+  $('#usLevel').querySelectorAll('button').forEach(button =>
+    button.setAttribute('aria-pressed', String(button.dataset.value === 'states')));
+}
 /* ================= 数据与规则 ================= */
 let activeConfiguration = null;
 let slaGroupFilter;
@@ -2700,9 +2836,10 @@ run(async function boot() {
   const v = (location.hash || '').replace('#', '');
   if (v === 'alerts' || v === 'archive') setTrackMode(v);
   if (v === 'channel-exceptions') setChannelMode('exceptions');
+  if (v === 'regions-other') setRegionMarket('other');
   if (v === 'detailed') openTracking({ coverage: 'detailed', sort: '逐条事件数' });
   else showView(v === 'alerts' || v === 'archive' ? 'track' :
-    v === 'channel-exceptions' ? 'channels' : VIEW_META[v] ? v : 'dash');
+    v === 'channel-exceptions' ? 'channels' : ['regions', 'regions-other'].includes(v) ? 'us' : VIEW_META[v] ? v : 'dash');
   if (!ME.preview && v !== 'rules') run(loadActivity);
   window.addEventListener('resize', resizeVisibleCharts);
 });

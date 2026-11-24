@@ -323,24 +323,31 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
     })
 
 
-# ---------------------------------------------------------------- 美国分析
+# ---------------------------------------------------------------- 区域分析
 
+@router.get("/regional-analysis")
 @router.get("/us-analysis")
 def usa(request: Request, month: str = "", wh: str = "", pf: str = "", cr: str = "",
         start: str = "", end: str = "", lastmile: str = "", channel: str = "", week: str = "",
         date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = "",
-        basis: us_analysis.TransitBasis = "paid", dimension: us_analysis.ChannelDimension = "lastmile"):
+        basis: us_analysis.TransitBasis = "paid", dimension: us_analysis.ChannelDimension = "lastmile",
+        market: us_analysis.Market = "us", cn: str = "", detail: Literal["map", "segments"] = "map",
+        level: us_analysis.PlaceLevel = "all", place: str = "", focus: str = ""):
     core.require_user(request)
     groups = []
     if channel_group or dimension == "group":
         with core.ops() as db:
             groups = channel_groups.load(db)["groups"]
     date_basis = date_basis or DEFAULT_DATE_BASIS
-    cond, args = _cond(month, wh, pf, cr, start=start, end=end, lastmile=lastmile, channel=channel, week=week,
+    cond, args = _cond(month, wh, pf, cr, cn=cn if market == "other" else "",
+                       start=start, end=end, lastmile=lastmile, channel=channel, week=week,
                        date_basis=date_basis, require_time=True,
                        group_selection=channel_groups.filter_values(channel_group, groups))
     settings = json.dumps(groups, ensure_ascii=False, sort_keys=True) if dimension == "group" else ""
-    return us_analysis.report(core.snapshot_key(), date_basis, basis, dimension, cond, tuple(args), settings)
+    snapshot = core.snapshot_key()
+    if detail == "segments":
+        return us_analysis.segments(snapshot, market, date_basis, dimension, cond, tuple(args), settings, level, place, focus)
+    return us_analysis.report(snapshot, date_basis, basis, dimension, cond, tuple(args), settings, market)
 
 
 # ---------------------------------------------------------------- 轨迹监控
