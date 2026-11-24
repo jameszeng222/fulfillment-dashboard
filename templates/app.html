@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261124-us-analysis">
+<link rel="stylesheet" href="/static/app.css?v=20261124-track-rules">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -190,6 +190,11 @@
       <!-- ============ 渠道时效 ============ -->
       <section class="view" id="v-channels">
         <div class="page-head"><div><h1>渠道时效</h1><p>按 C 端物流渠道对比。妥投优先用 17TRACK，缺失时按仓库时间口径用 WMS 补算。</p></div></div>
+        <div class="tabs" id="channelTabs" aria-label="渠道时效分类">
+          <button type="button" data-pane="timing" aria-pressed="true">时效对比</button>
+          <button type="button" data-pane="exceptions" aria-pressed="false">轨迹异常</button>
+        </div>
+        <div class="workspace-stack" id="channelTimingPane">
         <div class="filters" id="channelFilters"></div>
         <div class="card channel-basis">
           <div class="tabs" id="channelBasis" role="group" aria-label="时效统计口径">
@@ -239,6 +244,37 @@
             </table>
           </div>
         </div>
+        </div>
+        </div>
+        <div class="workspace-stack" id="channelExceptionPane" hidden>
+          <section class="card plot-card" aria-labelledby="trackRulesTitle">
+            <div class="ct">
+              <div><h2 id="trackRulesTitle">轨迹异常规则</h2><p class="tip">按已入库的承运商轨迹核对截止时间。超过截止后才会标记。</p></div>
+              <button type="button" class="btn ghost sm" id="addTrackRule" hidden>新增规则</button>
+            </div>
+            <div id="trackRuleCards" class="trajectory-rule-cards"></div>
+            <p class="tip track-rule-note">3PE 常见节点为国内揽收 → 出口扫描 → 起飞 → 落地 → 进口扫描 → 目的地设施离站。当前用目的地设施离站作为尾程提取参考。</p>
+          </section>
+          <section class="card table-card" aria-labelledby="trackExceptionTitle">
+            <div class="ct table-head"><div><h2 id="trackExceptionTitle">命中清单</h2>
+              <p class="tip" id="trackExceptionStatus" role="status">正在核对轨迹…</p></div>
+              <div class="toolbar track-exception-filters">
+                <input type="search" id="trackExceptionSearch" class="inline-search" placeholder="履约单号或运单号" aria-label="搜索履约单号或运单号">
+                <select id="trackExceptionRule" aria-label="轨迹异常规则"><option value="">全部规则</option></select>
+                <select id="trackExceptionState" aria-label="异常类型"><option value="">全部命中</option>
+                  <option value="late">节点超时</option><option value="missing">超时未见节点</option></select>
+                <select id="trackExceptionDays" aria-label="按出库日期回看"><option value="7">近 7 天出库</option>
+                  <option value="14">近 14 天出库</option><option value="30" selected>近 30 天出库</option>
+                  <option value="60">近 60 天出库</option><option value="90">近 90 天出库</option></select>
+                <button type="button" class="btn ghost sm" id="refreshTrackExceptions">刷新</button>
+              </div>
+            </div>
+            <div class="tblwrap"><table class="tbl track-exception-table">
+              <thead><tr><th>履约单 / 运单号</th><th>命中规则</th><th>仓库 / 当前渠道</th><th>起始节点（当地）</th>
+                <th>承诺截止（当地）</th><th>实际节点（按起始地时区）</th></tr></thead>
+              <tbody id="trackExceptionBody"></tbody></table></div>
+          </section>
+          <div class="pager" id="trackExceptionPager"></div>
         </div>
       </section>
 
@@ -510,6 +546,42 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261124-us-analysis" defer></script>
+<dialog class="settings-dialog track-rule-dialog" id="trackRuleDialog" aria-labelledby="trackRuleFormTitle">
+  <form id="trackRuleForm">
+    <header><h2 id="trackRuleFormTitle">编辑轨迹规则</h2>
+      <button type="button" class="btn ghost sm" id="trackRuleClose">关闭</button></header>
+    <div class="settings-fields">
+      <label>规则名称<input name="name" required maxlength="70"></label>
+      <label class="settings-check"><input type="checkbox" name="enabled" checked>启用规则</label>
+      <label>按哪个渠道字段匹配<select name="scope"><option value="lastmile">C 端渠道</option>
+        <option value="current">当前渠道</option><option value="group">自定义渠道</option></select></label>
+      <label>轨迹查询渠道代码（可选）<input type="number" name="carrier" min="1" max="999999999"></label>
+      <label>适用渠道（每行一个）<textarea name="channels" rows="2" required></textarea></label>
+      <label>添加现有渠道<select id="trackRuleChannelPick"></select></label>
+      <label>起始节点<select name="anchor"><option value="shipped">履约签出（北京时间）</option>
+        <option value="event">某条轨迹（当地时间）</option></select></label>
+      <label id="trackRuleStart">起始轨迹关键词（每行一个）<textarea name="start" rows="2"></textarea></label>
+      <label class="track-rule-wide">完成轨迹关键词（每行一个）<textarea name="end" rows="2" required></textarea></label>
+      <p class="tip track-rule-wide">描述包含任一关键词即匹配，不区分大小写。节点时间必须晚于或等于起始节点。</p>
+      <div class="track-rule-wide" id="trackRuleSiteFields">
+        <div class="ct"><h3>截单地点</h3><button type="button" class="btn ghost sm" id="addTrackRuleSite">加地点</button></div>
+        <div class="track-rule-sites" id="trackRuleSites"></div>
+        <p class="tip">只有一个地点时，仓库代码可留空表示全部仓库。</p>
+      </div>
+      <div class="track-rule-wide">
+        <h3>每周排期</h3>
+        <p class="tip">填 0 表示当天，1 表示次日，以此类推。留空跳过该日。承诺日结束前完成即达标。</p>
+        <div class="tblwrap"><table class="tbl track-rule-schedule">
+          <thead><tr><th>起始星期</th><th id="trackRuleBeforeTitle">截单前</th><th id="trackRuleAfterTitle">截单时及之后</th></tr></thead>
+          <tbody id="trackRuleSchedule"></tbody></table></div>
+      </div>
+      <label class="track-rule-wide">口径说明（可选）<textarea name="note" rows="2" maxlength="400"></textarea></label>
+    </div>
+    <p class="settings-error" id="trackRuleError" role="alert"></p>
+    <footer><button type="button" class="btn ghost" id="trackRuleRemove" hidden>删除规则</button>
+      <button type="submit" class="btn" id="trackRuleSave">保存规则</button></footer>
+  </form>
+</dialog>
+<script src="/static/app.js?v=20261124-track-rules" defer></script>
 </body>
 </html>

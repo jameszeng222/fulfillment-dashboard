@@ -41,7 +41,7 @@ let chartsFetch = null;
 const charts = {};
 const pendingRequests = new Map();
 const pageResponses = new Map();
-const cachedPages = new Set(['activity', 'dash', 'health', 'track', 'trackSummary', 'drawer', 'channels', 'us', 'rules']);
+const cachedPages = new Set(['activity', 'dash', 'health', 'track', 'trackSummary', 'drawer', 'channels', 'us', 'rules', 'trackExceptions']);
 let readGeneration = 0;
 let resizeFrame = 0;
 let toastTimer;
@@ -205,6 +205,7 @@ function exportCsv(name, fields, rows) {
 const VIEW_META = { dash: '数据总览', track: '轨迹监控', channels: '渠道时效', us: '美国分析', rules: '数据与规则' };
 let VIEW = 'dash';
 let trackMode = 'tracking';
+let channelMode = 'timing';
 
 function showView(v) {
   if (ME.preview && ['rules', 'us'].includes(v)) v = 'dash';
@@ -217,11 +218,13 @@ function showView(v) {
   });
   $('#crumb').textContent = VIEW_META[v];
   setTopMeta(META?.range.end);
-  history.replaceState(null, '', '#' + (v === 'track' && trackMode !== 'tracking' ? trackMode : v));
+  const route = v === 'track' && trackMode !== 'tracking' ? trackMode :
+    v === 'channels' && channelMode === 'exceptions' ? 'channel-exceptions' : v;
+  history.replaceState(null, '', '#' + route);
   window.scrollTo({ top: 0 });
   resizeVisibleCharts();
   run({ dash: loadDash, track: trackMode === 'tracking' ? loadTrack : loadAlerts,
-    channels: loadChannels, us: loadUs, rules: loadRules }[v]);
+    channels: channelMode === 'exceptions' ? loadTrackExceptions : loadChannels, us: loadUs, rules: loadRules }[v]);
 }
 
 function initChart(id) {
@@ -1481,6 +1484,215 @@ async function loadChannels() {
 
 }
 
+/* ================= 渠道轨迹异常 ================= */
+
+let trajectorySettings;
+let editingTrackRule = null;
+const trajectoryPath = '/api/channel-track-rules';
+const trajectoryWeekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+const readTrackWords = value => value.split(/\r?\n/).map(word => word.trim()).filter(Boolean);
+const eventWallClock = value => value ? value.replace('T', ' ').slice(0, 16) + ' ' + value.slice(-6) : '—';
+
+function setChannelMode(mode) {
+  channelMode = ME.preview ? 'timing' : mode;
+  $('#channelTimingPane').hidden = channelMode !== 'timing';
+  $('#channelExceptionPane').hidden = channelMode !== 'exceptions';
+  $('#channelTabs').querySelectorAll('button').forEach(button =>
+    button.setAttribute('aria-pressed', String(button.dataset.pane === channelMode)));
+}
+
+function renderTrackRuleOptions() {
+  const select = $('#trackExceptionRule');
+  const current = select.value;
+  select.replaceChildren(new Option('全部规则', ''), ...trajectorySettings.rules.filter(rule => rule.enabled)
+    .map(rule => new Option(rule.name, rule.key)));
+  select.value = current;
+  if (select.selectedIndex < 0) select.value = '';
+}
+
+function renderTrackRuleCards(counts) {
+  const byRule = new Map(counts.map(summary => [summary.rule, summary]));
+  $('#trackRuleCards').innerHTML = trajectorySettings.rules.map(rule => {
+    const stat = byRule.get(rule.key);
+    const start = rule.anchor === 'shipped' ? '签出' : rule.start.join(' / ');
+    return `<article class="trajectory-rule">
+      <div class="ct"><h3>${esc(rule.name)}</h3><span class="badge ${rule.enabled ? 'ok' : 'gray'}">
+        ${rule.enabled ? '已启用' : '已停用'}</span></div>
+      <p><b>${esc(rule.channels.join('、'))}</b></p>
+      <p class="tip">${esc(start)} → ${esc(rule.end.join(' / '))}</p>
+      <p class="tip">${esc(rule.note)}</p>
+      ${stat ? `<div class="trajectory-counts">
+        <span><b>${fmt(stat.late)}</b> 节点超时</span><span><b>${fmt(stat.missing)}</b> 超时未见节点</span>
+        <span><b>${fmt(stat.unverified)}</b> 待轨迹核对</span>
+        ${stat.unknown_clock ? `<span><b>${fmt(stat.unknown_clock)}</b> 时区待确认</span>` : ''}</div>` : ''}
+      ${ME.can_edit ? `<button type="button" class="btn ghost sm" data-edit-track-rule="${esc(rule.key)}">编辑规则</button>` : ''}
+    </article>`;
+  }).join('') || '<p class="tip">暂无规则</p>';
+}
+
+async function loadTrackExceptions(page = 1) {
+  const status = $('#trackExceptionStatus');
+  status.textContent = '正在核对轨迹…';
+  let data;
+  try {
+    if (!trajectorySettings) {
+      trajectorySettings = await api(trajectoryPath);
+      renderTrackRuleOptions();
+    }
+    const filters = {days: $('#trackExceptionDays').value, rule: $('#trackExceptionRule').value,
+      state: $('#trackExceptionState').value, q: $('#trackExceptionSearch').value.trim()};
+    data = await latest('trackExceptions', '/api/channel-track-exceptions?' + qs(filters, page, 40),
+      {signal: AbortSignal.timeout(20_000)});
+  } catch (error) {
+    if (VIEW === 'channels' && channelMode === 'exceptions') status.textContent = error.message;
+    return;
+  }
+  if (!data || VIEW !== 'channels' || channelMode !== 'exceptions') return;
+  if (!data.rows.length && data.total && page > 1) return loadTrackExceptions(Math.ceil(data.total / data.size));
+  renderTrackRuleCards(data.counts);
+  status.textContent = `出库自 ${data.from} 起 · 截至 ${syncTime(data.asof)} · 共 ${fmt(data.total)} 条`;
+  $('#trackExceptionBody').innerHTML = data.rows.map(row => `<tr>
+    <td>${orderButton(row.order_no, row.waybill)}</td>
+    <td><b>${esc(row.name)}</b><small class="cell-sub"><span class="badge ${row.state === 'late' ? 'h' : 'm'}">
+      ${row.state === 'late' ? '节点超时' : '超时未见节点'}</span></small></td>
+    <td>${esc([row.warehouse, row.site].filter(Boolean).join(' · ') || '—')}
+      <small class="cell-sub">${esc(row.channel || row.lastmile || '—')}</small></td>
+    <td class="mono">${esc(eventWallClock(row.anchor_at))}<small class="cell-sub">${esc(row.anchor_text)}</small></td>
+    <td class="mono">${esc(row.due)} 日终<small class="cell-sub">${esc(row.deadline.slice(-6))}</small></td>
+    <td class="mono">${esc(eventWallClock(row.event_at))}<small class="cell-sub">${row.event_text ? esc(row.event_text) :
+      `最近核对 ${esc(syncTime(row.checked_at))}`}</small></td></tr>`).join('') || blankRow(6, '没有符合条件的轨迹异常');
+  pager($('#trackExceptionPager'), data.total, data.page, data.size, next => run(() => loadTrackExceptions(next)));
+}
+
+function addTrackRuleSite(site = {name: '', warehouses: [], cutoff: '14:30'}) {
+  const row = el('div', 'track-rule-site', `
+    <label>地点<input data-site="name" value="${esc(site.name)}" maxlength="70" required></label>
+    <label>仓库代码<input data-site="warehouses" value="${esc(site.warehouses.join(', '))}" placeholder="用逗号分隔"></label>
+    <label>截单时间<input type="time" data-site="cutoff" value="${esc(site.cutoff)}" required></label>
+    <button type="button" class="btn ghost sm" aria-label="移除地点">移除</button>`);
+  row.lastElementChild.onclick = () => row.remove();
+  $('#trackRuleSites').append(row);
+}
+
+function refreshTrackRuleForm() {
+  const form = $('#trackRuleForm');
+  const event = form.elements.anchor.value === 'event';
+  $('#trackRuleStart').hidden = !event;
+  form.elements.start.required = event;
+  $('#trackRuleSiteFields').hidden = event;
+  $('#trackRuleSites').querySelectorAll('input').forEach(input => { input.disabled = event; });
+  $('#trackRuleBeforeTitle').textContent = event ? '起始后第几天' : '截单前';
+  $('#trackRuleAfterTitle').hidden = event;
+  $('#trackRuleSchedule').querySelectorAll('[data-after]').forEach(cell => { cell.hidden = event; });
+  const options = META.filterOptions[{lastmile: 'lastmile', current: 'channel', group: 'channel_group'}[form.elements.scope.value]] || [];
+  $('#trackRuleChannelPick').replaceChildren(new Option('选择渠道…', ''), ...options.map(row => new Option(row.t, row.v)));
+}
+
+async function openTrackRule(key) {
+  await loadMeta();
+  if (!trajectorySettings) trajectorySettings = await api(trajectoryPath);
+  const rule = trajectorySettings.rules.find(row => row.key === key);
+  editingTrackRule = rule?.key || null;
+  const form = $('#trackRuleForm');
+  form.reset();
+  $('#trackRuleError').textContent = '';
+  $('#trackRuleFormTitle').textContent = rule ? `编辑规则 · ${rule.name}` : '新增轨迹异常规则';
+  $('#trackRuleRemove').hidden = !rule;
+  if (rule) {
+    for (const name of ['name', 'scope', 'anchor', 'carrier', 'note']) form.elements[name].value = rule[name] ?? '';
+    for (const name of ['channels', 'start', 'end']) form.elements[name].value = rule[name].join('\n');
+    form.elements.enabled.checked = rule.enabled;
+  }
+  $('#trackRuleSites').replaceChildren();
+  (rule?.sites?.length ? rule.sites : [undefined]).forEach(addTrackRuleSite);
+  $('#trackRuleSchedule').innerHTML = trajectoryWeekdays.map((day, index) => `<tr>
+    <th scope="row">${day}</th><td><input type="number" min="0" max="14" value="${rule?.before[index] ?? ''}"
+      data-slot="before" aria-label="${day} 截单前或起始后"></td>
+    <td data-after><input type="number" min="0" max="14" value="${rule?.after?.[index] ?? ''}"
+      data-slot="after" aria-label="${day} 截单时及之后"></td></tr>`).join('');
+  refreshTrackRuleForm();
+  $('#trackRuleDialog').showModal();
+}
+
+async function saveTrackRule(remove) {
+  const form = $('#trackRuleForm');
+  const {elements} = form;
+  let items = trajectorySettings.rules.filter(rule => rule.key !== editingTrackRule);
+  if (!remove) {
+    const shipped = elements.anchor.value === 'shipped';
+    const value = name => elements[name].value.trim();
+    const schedule = slot => [...$('#trackRuleSchedule').querySelectorAll(`[data-slot="${slot}"]`)]
+      .map(input => input.value === '' ? null : Number(input.value));
+    const sites = [...$('#trackRuleSites').children].map(row => ({
+      name: row.querySelector('[data-site=name]').value.trim(),
+      warehouses: row.querySelector('[data-site=warehouses]').value.split(/[,，\s]+/).filter(Boolean),
+      cutoff: row.querySelector('[data-site=cutoff]').value,
+    }));
+    const rule = {key: editingTrackRule || crypto.randomUUID(), name: value('name'), enabled: elements.enabled.checked,
+      scope: value('scope'), channels: readTrackWords(value('channels')), carrier: Number(value('carrier')) || null,
+      anchor: value('anchor'), start: shipped ? [] : readTrackWords(value('start')), end: readTrackWords(value('end')),
+      before: schedule('before'), after: shipped ? schedule('after') : null, sites: shipped ? sites : [], note: value('note')};
+    items = editingTrackRule ? trajectorySettings.rules.map(item => item.key === editingTrackRule ? rule : item) : [...items, rule];
+  }
+  const save = $('#trackRuleSave');
+  const error = $('#trackRuleError');
+  save.disabled = $('#trackRuleRemove').disabled = true;
+  error.textContent = '';
+  try {
+    trajectorySettings = await api(trajectoryPath, {method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({revision: trajectorySettings.revision, rules: items})});
+    $('#trackRuleDialog').close();
+    invalidatePages();
+    renderTrackRuleOptions();
+    toast(remove ? '已删除规则' : '已保存规则');
+    await loadTrackExceptions();
+  } catch (failure) {
+    error.textContent = failure.message;
+  } finally {
+    save.disabled = $('#trackRuleRemove').disabled = false;
+  }
+}
+
+function setupTrackExceptionControls() {
+  $('#channelTabs').onclick = event => {
+    const button = event.target.closest('[data-pane]');
+    if (!button) return;
+    setChannelMode(button.dataset.pane);
+    showView('channels');
+  };
+  $('#addTrackRule').hidden = !ME.can_edit;
+  $('#addTrackRule').onclick = () => run(() => openTrackRule(null));
+  $('#trackRuleCards').onclick = event => {
+    const target = event.target.closest('[data-edit-track-rule]');
+    if (target) run(() => openTrackRule(target.dataset.editTrackRule));
+  };
+  for (const id of ['trackExceptionDays', 'trackExceptionRule', 'trackExceptionState']) {
+    document.getElementById(id).onchange = () => run(loadTrackExceptions);
+  }
+  let searchTimer;
+  $('#trackExceptionSearch').oninput = () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => run(loadTrackExceptions), 250);
+  };
+  $('#refreshTrackExceptions').onclick = () => run(async () => {
+    trajectorySettings = null;
+    invalidatePages();
+    await loadTrackExceptions();
+  });
+  const form = $('#trackRuleForm');
+  form.elements.anchor.onchange = form.elements.scope.onchange = refreshTrackRuleForm;
+  $('#trackRuleChannelPick').onchange = event => {
+    const value = event.target.value;
+    if (!value) return;
+    form.elements.channels.value = [...new Set([...readTrackWords(form.elements.channels.value), value])].join('\n');
+    event.target.value = '';
+  };
+  $('#addTrackRuleSite').onclick = () => addTrackRuleSite();
+  $('#trackRuleClose').onclick = () => $('#trackRuleDialog').close();
+  $('#trackRuleRemove').onclick = () => run(() => saveTrackRule(true));
+  form.onsubmit = event => { event.preventDefault(); run(() => saveTrackRule(false)); };
+}
+
 /* ================= 美国分析 ================= */
 
 let UF = null;
@@ -2313,7 +2525,7 @@ run(async function boot() {
   $('#logout').hidden = ME.preview || ME.openTest;
   if (!ME.preview) $('#currentChannelTip').textContent += ' · 点击渠道查看履约单';
   if (ME.preview) {
-    for (const selector of ['[data-v="rules"]', '[data-v="us"]', '#openPending',
+    for (const selector of ['[data-v="rules"]', '[data-v="us"]', '#channelTabs', '#openPending',
       '#trackTabs', '#showDetailed', '#exportTrack', '#trackAlertHeading']) {
       $(selector).hidden = true;
     }
@@ -2325,6 +2537,7 @@ run(async function boot() {
   $('#applyBatch').hidden = !ME.can_edit;
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => showView(b.dataset.v));
   setupUsControls();
+  setupTrackExceptionControls();
   const periods = [...document.querySelectorAll('#dailyPeriod button')];
   periods.forEach(button => button.onclick = () => {
     if (trend.span === Number(button.dataset.days)) return;
@@ -2369,7 +2582,7 @@ run(async function boot() {
     const button = event.target.closest('[data-order]');
     if (button) openOrder(button.dataset.order, button).catch(error => toast(error.message));
   };
-  for (const list of [$('#trackBody'), $('#alertBody')]) {
+  for (const list of [$('#trackBody'), $('#alertBody'), $('#trackExceptionBody')]) {
     list.onclick = orderClick;
     list.addEventListener('pointerover', watchOrderIntent);
     list.addEventListener('focusin', watchOrderIntent);
@@ -2486,8 +2699,10 @@ run(async function boot() {
   $('#logout').onclick = () => run(async () => { await api('/api/logout', { method: 'POST' }); location.href = '/login'; });
   const v = (location.hash || '').replace('#', '');
   if (v === 'alerts' || v === 'archive') setTrackMode(v);
+  if (v === 'channel-exceptions') setChannelMode('exceptions');
   if (v === 'detailed') openTracking({ coverage: 'detailed', sort: '逐条事件数' });
-  else showView(v === 'alerts' || v === 'archive' ? 'track' : VIEW_META[v] ? v : 'dash');
+  else showView(v === 'alerts' || v === 'archive' ? 'track' :
+    v === 'channel-exceptions' ? 'channels' : VIEW_META[v] ? v : 'dash');
   if (!ME.preview && v !== 'rules') run(loadActivity);
   window.addEventListener('resize', resizeVisibleCharts);
 });

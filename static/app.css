@@ -587,6 +587,26 @@ button.rank-row:hover { background: #f4f7fc; }
 #channelGroupOptions .multi-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; padding: 7px 10px; }
 #channelGroupOptions label:has(input:disabled) { opacity: .55; }
 #channelGroupRemove { margin-inline-end: auto; }
+.trajectory-rule-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr)); gap:10px; }
+.trajectory-rule { background:var(--bg); border:1px solid var(--line); border-radius:9px; display:grid; gap:7px; padding:11px; }
+.trajectory-rule .ct { margin:0; }
+.trajectory-rule .btn { justify-self:start; }
+.trajectory-rule p, .track-rule-note { overflow-wrap:anywhere; line-height:1.55; }
+.trajectory-counts { display:flex; flex-wrap:wrap; gap:5px 12px; font-size:12px; color:var(--ink2); }
+.trajectory-counts b { color:var(--ink); }
+.track-rule-note { margin-block-start:10px; }
+.track-exception-filters select { padding:7px 9px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink); }
+.track-exception-table td { min-width:112px; }
+.track-rule-dialog { width:min(720px,calc(100vw - 24px)); }
+.track-rule-dialog .settings-fields { gap:12px; }
+.track-rule-dialog .settings-fields textarea { color:var(--ink); border:1px solid var(--line);
+  background:var(--bg); padding:7px 8px; border-radius:7px; width:100%; font:inherit; resize:vertical; }
+.track-rule-wide { grid-column:1 / -1; }
+.track-rule-sites { display:grid; gap:8px; }
+.track-rule-site { display:grid; grid-template-columns:minmax(85px,1fr) minmax(100px,1.3fr) auto auto;
+  align-items:end; gap:8px; margin:6px 0; }
+.track-rule-schedule input { width:75px; }
+.track-rule-dialog .settings-fields .settings-check { grid-column:auto; }
 .toast-undo { margin-inline-start: 12px; color: inherit; border: 1px solid #9db3df; border-radius: 5px;
   background: transparent; padding: 3px 9px; cursor: pointer; pointer-events: auto; }
 .us-basis, .us-basis > div, .us-map-controls, .us-focus {
@@ -650,6 +670,7 @@ button.rank-row:hover { background: #f4f7fc; }
   .plot-card { padding: 14px 12px; }
   #cDaily { height: 225px; }
   .us-map { height: clamp(190px, 54vw, 290px); }
+  .track-rule-site { grid-template-columns:minmax(85px,1fr) minmax(100px,1fr); }
   .date-tag { white-space: normal; text-align: right; }
   .kpi { padding: 9px; }
   .kpi .val { font-size: 21px; }

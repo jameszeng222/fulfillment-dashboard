@@ -15,6 +15,7 @@ from .ops_gateway import GatewayError
 from .api import router
 from .pages_api import router as pages_router
 from .tracking_sync import router as tracking_sync_router
+from .trajectory_rules import router as trajectory_rules_router
 
 ROOT = Path(__file__).resolve().parent.parent
 TPL = ROOT / "templates"
@@ -30,6 +31,7 @@ def protect_site_mutations(request: Request):
 
 app.include_router(router, dependencies=[Depends(protect_site_mutations)])
 app.include_router(pages_router, dependencies=[Depends(protect_site_mutations)])
+app.include_router(trajectory_rules_router, dependencies=[Depends(protect_site_mutations)])
 app.include_router(tracking_sync_router)
 app.include_router(ops_auth.router)
 app.include_router(ops_assistant.router)
