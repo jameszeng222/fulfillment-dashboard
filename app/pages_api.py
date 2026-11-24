@@ -12,11 +12,11 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 import pandas as pd
 
-from . import alert_history, channel_groups, core, public_preview, rules, us_analysis, track_lookup
+from . import alert_history, analytics_snapshot, channel_groups, core, public_preview, rules, us_analysis, track_lookup
 from .carrier_delivery import (
     DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts, transport_minutes,
 )
-from .channel_timing import ONLINE_START, TimingBasis, online_scan_join, timing_start, transport_archive_version
+from .channel_timing import ONLINE_START, TimingBasis, timing_start, transport_archive_version
 from .filter_time import DATE_BASIS_FIELDS, DEFAULT_DATE_BASIS, DateBasis, time_bounds, week_filter
 from .order_time import delivery_facts
 from .tracking_archive import fill_local_times
@@ -111,6 +111,20 @@ def _warehouse_shipping_mix(con):
 
 
 def _order_split_mix(con, active_orders, filtered):
+    if core.columns(con, analytics_snapshot.SPLIT_TABLE):
+        result = con.execute(f"""
+            WITH kinds AS (
+                SELECT g.kind FROM {analytics_snapshot.SPLIT_TABLE} g SEMI JOIN (
+                    SELECT DISTINCT coalesce(trim(平台),'') AS platform,trim(订单号) AS order_no
+                    FROM overview_timing WHERE nullif(trim(订单号),'') IS NOT NULL
+                ) matched USING (platform,order_no)
+            ) SELECT count(*) AS total,count(*) FILTER (WHERE kind<>'single') AS split,
+                count(*) FILTER (WHERE kind='same') AS same,count(*) FILTER (WHERE kind='cross') AS cross,
+                count(*) FILTER (WHERE kind='unknown') AS unknown,
+                (SELECT count(*) FROM overview_timing WHERE nullif(trim(订单号),'') IS NULL) AS missingFulfillments
+            FROM kinds
+        """)
+        return dict(zip((column[0] for column in result.description), result.fetchone()))
     if filtered:
         # Use the entire order to classify splits, even if only one fulfillment matches.
         order_source = f"""{active_orders} o SEMI JOIN (
@@ -218,7 +232,7 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
         all_orders = core.order_facts(con)
         active_orders = core.active_facts(all_orders)
         order_facts = delivery_facts(con, active_orders)
-        facts = reporting_facts(con, order_facts)
+        facts = analytics_snapshot.facts(con)
         tracking = track_lookup.source(con)
         con.execute(f"""
             CREATE TEMP TABLE overview_timing AS
@@ -576,20 +590,20 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis):
     con = core.duck()
     try:
         raw_facts = core.active_facts(core.order_facts(con))
-        facts = reporting_facts(con, delivery_facts(con, raw_facts))
+        facts = analytics_snapshot.facts(con)
         asof = con.execute(f"SELECT max(创建日期) FROM {raw_facts}").fetchone()[0]
         field = DATE_BASIS_FIELDS[date_basis]
         date_asof = con.execute(f"SELECT CAST(max({field}) AS DATE) FROM {raw_facts}").fetchone()[0]
         slas = rules.current_channel_slas(con, raw_facts, json.loads(saved))
         sla_sql, sla_values = rules.sla_table(slas)
         sla_scans = any(config["basis"] == "online" for config in slas.values())
-        scan_join = online_scan_join(con) if basis == "online" or sla_scans else ""
+        scan_join, online_start = analytics_snapshot.scan_source(con, _archive) if basis == "online" or sla_scans else ("", ONLINE_START)
         minutes = {
             "paid": elapsed_minutes("o.支付时间", f"o.{DELIVERED_BJ}"),
             "shipped": "o.物流分钟",
-            "online": elapsed_minutes(ONLINE_START, f"o.{DELIVERED_BJ}"),
+            "online": elapsed_minutes(online_start, f"o.{DELIVERED_BJ}"),
         }[basis]
-        sla_start = timing_start("tgt.basis", sla_scans)
+        sla_start = timing_start("tgt.basis", sla_scans, online_start)
         active = f"o.已签收=0 AND o.{DELIVERED_UTC} IS NULL AND (o.状态 IS DISTINCT FROM '已完成' OR o.签收时间 IS NOT NULL) AND o.签出时间 IS NOT NULL"
         scoped = f"""SELECT coalesce(nullif(o.C端承运商,''),'__empty__') AS key,
                             coalesce(o.目的国中文,o.目的国) AS ctry,
@@ -665,13 +679,13 @@ def rules_api(request: Request):
     con = core.duck()
     try:
         raw_facts = core.active_facts(core.order_facts(con))
-        facts = reporting_facts(con, delivery_facts(con, raw_facts))
+        facts = analytics_snapshot.facts(con)
         asof = con.execute(f"SELECT max(创建日期) FROM {raw_facts}").fetchone()[0]
         slas = rules.current_channel_slas(con, raw_facts, sla_overrides)
         sla_sql, sla_values = rules.sla_table(slas)
         have_online = any(config["basis"] == "online" for config in slas.values())
-        scan_join = online_scan_join(con) if have_online else ""
-        start_at = timing_start("tgt.basis", have_online)
+        scan_join, online_start = analytics_snapshot.scan_source(con, transport_archive_version()) if have_online else ("", ONLINE_START)
+        start_at = timing_start("tgt.basis", have_online, online_start)
         usable = "duration_min>0"
         perf = con.execute(f"""
             WITH tgt(ch, days, basis) AS ({sla_sql}), scoped AS (

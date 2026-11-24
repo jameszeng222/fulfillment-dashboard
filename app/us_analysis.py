@@ -8,7 +8,7 @@ from typing import Literal
 
 import pandas as pd
 
-from . import core
+from . import core, analytics_snapshot
 from .carrier_delivery import DELIVERED_BJ, DELIVERY_SOURCE, elapsed_minutes, reporting_facts
 from .order_time import delivery_facts
 from .regional_pickup import build_pickups
@@ -23,8 +23,8 @@ US_COUNTRIES = "('united states', 'united states of america', 'us', 'usa')"
 SEGMENTS = {
     "paid_create": ("o.支付时间", "o.创建时间"),
     "create_ship": ("o.创建时间", "o.签出时间"),
-    "ship_pickup": ("o.签出时间", "p.pickup"),
-    "pickup_delivered": ("p.pickup", f"o.{DELIVERED_BJ}"),
+    "ship_pickup": ("o.签出时间", "o.analytics_pickup"),
+    "pickup_delivered": ("o.analytics_pickup", f"o.{DELIVERED_BJ}"),
     "shipped": ("o.签出时间", f"o.{DELIVERED_BJ}"),
     "created": ("o.创建时间", f"o.{DELIVERED_BJ}"),
     "paid": ("o.支付时间", f"o.{DELIVERED_BJ}"),
@@ -73,13 +73,31 @@ def _address_sql(con):
     return state, postal
 
 
+def geography_sql(con, orders):
+    _register_reference(con)
+    state_field, postal_field = _address_sql(con)
+    sql = f"""WITH zipcodes AS (
+            SELECT postal_code,min(region_code) AS code FROM read_csv(?, all_varchar=true)
+            WHERE region_code IN (SELECT code FROM us_state_names)
+            GROUP BY postal_code HAVING count(DISTINCT region_code)=1
+        ), address AS (
+            SELECT d.履约单号,
+               CASE WHEN count(DISTINCT s.code)=1 THEN min(s.code)
+                    WHEN count(DISTINCT s.code)=0 AND count(DISTINCT z.code)=1 THEN min(z.code) END AS code
+            FROM 履约单明细 d SEMI JOIN {orders} u USING (履约单号)
+            LEFT JOIN us_state_aliases s ON s.alias={state_field}
+            LEFT JOIN zipcodes z ON z.postal_code={postal_field}
+            GROUP BY d.履约单号
+        ) SELECT o.履约单号,coalesce(a.code,'') AS geo_state,coalesce(s.region,?) AS geo_region
+          FROM {orders} o LEFT JOIN address a USING (履约单号)
+          LEFT JOIN us_state_names s ON s.code=a.code"""
+    return sql, [str(REFERENCE / "us-postal-timezones.csv"), UNKNOWN]
+
+
 def _build_scope(con, market, dimension, cond, args, settings, level="all", place="", focus=""):
-    orders = delivery_facts(con, core.active_facts(core.order_facts(con)))
+    stored = analytics_snapshot.available(con)
+    orders = analytics_snapshot.TABLE if stored else delivery_facts(con, core.active_facts(core.order_facts(con)))
     country_filter = f"lower(trim(o.目的国)) {'IN' if market == 'us' else 'NOT IN'} {US_COUNTRIES}"
-    con.execute(f"""
-        CREATE TEMP TABLE regional_orders AS SELECT o.* FROM {orders} o
-        WHERE {country_filter} AND nullif(trim(o.目的国),'') IS NOT NULL {cond}
-    """, args)
     group_join = ""
     if dimension == "group":
         group_rows = [(key, group["name"]) for group in json.loads(settings) for key in group["channels"]]
@@ -90,37 +108,24 @@ def _build_scope(con, market, dimension, cond, args, settings, level="all", plac
         channel = "coalesce(nullif(trim(o.当前渠道),''), '未填写当前渠道')"
     else:
         channel = "coalesce(nullif(trim(o.C端承运商),''), '未填写 C 端渠道')"
-    params = []
-    if market == "us":
-        states = _register_reference(con)
-        state_field, postal_field = _address_sql(con)
-        scope = f"""WITH zipcodes AS (
-                SELECT postal_code,min(region_code) AS code FROM read_csv(?, all_varchar=true)
-                WHERE region_code IN (SELECT code FROM us_state_names)
-                GROUP BY postal_code HAVING count(DISTINCT region_code)=1
-            ), address AS (
-                SELECT d.履约单号,
-                   CASE WHEN count(DISTINCT s.code)=1 THEN min(s.code)
-                        WHEN count(DISTINCT s.code)=0 AND count(DISTINCT z.code)=1 THEN min(z.code) END AS code
-                FROM 履约单明细 d SEMI JOIN regional_orders u USING (履约单号)
-                LEFT JOIN us_state_aliases s ON s.alias={state_field}
-                LEFT JOIN zipcodes z ON z.postal_code={postal_field}
-                GROUP BY d.履约单号
-            )
-                SELECT o.*, coalesce(a.code,'') AS geo_state, coalesce(s.region,?) AS geo_region, {channel} AS geo_channel
-                FROM regional_orders o LEFT JOIN address a USING (履约单号)
-                LEFT JOIN us_state_names s ON s.code=a.code {group_join}
-        """
-        params.extend([str(REFERENCE / "us-postal-timezones.csv"), UNKNOWN])
+    params = list(args) if stored else []
+    if stored:
+        state, region = ("o.analytics_state", "o.analytics_region") if market == "us" else ("o.目的国", "o.目的国")
+        scope = f"""SELECT o.履约单号,o.目的国,o.目的国中文,o.支付时间,o.创建时间,o.签出时间,
+                         o.{DELIVERED_BJ},o.{DELIVERY_SOURCE},o.analytics_pickup,
+                         {state} AS geo_state,{region} AS geo_region,{channel} AS geo_channel
+                    FROM {orders} o {group_join}
+                    WHERE {country_filter} AND nullif(trim(o.目的国),'') IS NOT NULL {cond}"""
     else:
-        countries = con.execute("""
-            SELECT 目的国,coalesce(max(nullif(目的国中文,'')),目的国) FROM regional_orders GROUP BY 1
-        """).fetchall()
-        states = {country: {"code": country, "name": WORLD_ALIASES.get(country, country),
-                            "label": "北马其顿" if country == "North Macedonia" else label, "region": "其他国家"}
-                  for country, label in countries}
-        scope = f"""SELECT o.*, o.目的国 AS geo_state, o.目的国 AS geo_region, {channel} AS geo_channel
-                    FROM regional_orders o {group_join}"""
+        con.execute(f"""CREATE TEMP TABLE regional_orders AS SELECT o.* FROM {orders} o
+            WHERE {country_filter} AND nullif(trim(o.目的国),'') IS NOT NULL {cond}""", args)
+        if market == "us":
+            geo, params = geography_sql(con, "regional_orders")
+            scope = f"""SELECT o.*,g.geo_state,g.geo_region,{channel} AS geo_channel FROM regional_orders o
+                LEFT JOIN ({geo}) g USING (履约单号) {group_join}"""
+        else:
+            scope = f"""SELECT o.*, o.目的国 AS geo_state, o.目的国 AS geo_region, {channel} AS geo_channel
+                        FROM regional_orders o {group_join}"""
     clauses = []
     if level != "all":
         clauses.append("geo_region=?" if level == "regions" else "geo_state=?")
@@ -130,17 +135,26 @@ def _build_scope(con, market, dimension, cond, args, settings, level="all", plac
         params.append(focus)
     where = " WHERE " + " AND ".join(clauses) if clauses else ""
     con.execute(f"CREATE TEMP TABLE regional_scope AS SELECT * FROM ({scope}) geography{where}", params)
-    return states
+    if market == "us":
+        return _state_reference()[0]
+    countries = con.execute("""
+        SELECT 目的国,coalesce(max(nullif(目的国中文,'')),目的国) FROM regional_scope GROUP BY 1
+    """).fetchall()
+    return {country: {"code": country, "name": WORLD_ALIASES.get(country, country),
+                      "label": "北马其顿" if country == "North Macedonia" else label, "region": "其他国家"}
+            for country, label in countries}
 
 
 def _metric_sources(con, keys):
     delivery = any(SEGMENTS[key][1] == f"o.{DELIVERED_BJ}" for key in keys)
     pickup = any(key in ("ship_pickup", "pickup_delivered") for key in keys)
+    if analytics_snapshot.available(con):
+        return "regional_scope", "", f"o.{DELIVERY_SOURCE}" if delivery else "NULL"
     facts = reporting_facts(con, "regional_scope", page_only=True) if delivery else "regional_scope"
     pickup_join = ""
     if pickup:
         build_pickups(con)
-        pickup_join = "LEFT JOIN regional_pickups p USING (履约单号)"
+        facts = f"(SELECT o.*,p.pickup AS analytics_pickup FROM {facts} o LEFT JOIN regional_pickups p USING (履约单号))"
     return facts, pickup_join, f"o.{DELIVERY_SOURCE}" if delivery else "NULL"
 
 

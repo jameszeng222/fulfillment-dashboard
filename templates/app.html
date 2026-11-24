@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261124-track-repair">
+<link rel="stylesheet" href="/static/app.css?v=20261124-analytics-cache">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -55,7 +55,7 @@
   <div class="main">
     <div class="top">
       <div class="crumb">履约监控系统 <span>/</span> <b id="crumb">数据总览</b></div>
-      <div class="date-tag" id="topMeta">正在读取数据</div>
+      <div class="top-data-status"><span id="reportCacheStatus" class="report-cache-status" role="status" hidden></span><div class="date-tag" id="topMeta">正在读取数据</div></div>
     </div>
 
     <div class="content">
@@ -603,6 +603,6 @@
       <button type="submit" class="btn" id="trackRuleSave">保存规则</button></footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261124-track-repair" defer></script>
+<script src="/static/app.js?v=20261124-analytics-cache" defer></script>
 </body>
 </html>

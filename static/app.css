@@ -238,6 +238,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .top { position: static; min-height: 38px; padding: 7px clamp(16px, 3vw, 48px); background: var(--bg); }
 .top .crumb { font-size: 11px; }
 .top .crumb span { color: var(--ink3); margin-inline: 4px; }
+.top-data-status { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex-wrap: wrap; }
+.report-cache-status { font-size: 11px; color: var(--ink3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.report-cache-status[hidden] { display: none; }
 .date-tag {
   color: var(--ink2);
   font-size: 11px;

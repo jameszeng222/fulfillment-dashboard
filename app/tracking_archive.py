@@ -226,6 +226,9 @@ def main():
         parser.error("履约数据库不存在")
     with closing(duckdb.connect(str(args.facts))) as con:
         _, summaries = refresh_archive(con, path_for(args.facts))
+        from . import analytics_snapshot, track_lookup
+        track_lookup.build(con)
+        analytics_snapshot.build(con)
         for state, packages, count in summaries:
             print(f"{state}: {packages:,} 个运单，{count:,} 条事件")
 

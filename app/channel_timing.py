@@ -20,8 +20,8 @@ ONLINE_START = "CASE WHEN scan.start_at>=o.创建时间 THEN scan.start_at END"
 _archive_cache_lock = Lock()
 
 
-def timing_start(basis, with_scans):
-    online = f"WHEN 'online' THEN {ONLINE_START}" if with_scans else ""
+def timing_start(basis, with_scans, online_start=ONLINE_START):
+    online = f"WHEN 'online' THEN {online_start}" if with_scans else ""
     return f"""CASE coalesce({basis},'shipped')
                WHEN 'paid' THEN o.支付时间
                WHEN 'shipped' THEN o.签出时间
@@ -69,8 +69,8 @@ def _archive_version(path):
     return hashlib.sha256(repr((1, stat.st_ino, stat.st_size, stat.st_mtime_ns, journal)).encode()).hexdigest()
 
 
-def transport_archive_version():
-    archive = core.DUCK_DB.with_name("17TRACK历史轨迹.sqlite3")
+def transport_archive_version(facts_path=None):
+    archive = Path(facts_path or core.DUCK_DB).with_name("17TRACK历史轨迹.sqlite3")
     try:
         return _archive_version(archive)
     except FileNotFoundError:

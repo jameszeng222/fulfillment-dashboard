@@ -36,7 +36,7 @@ const jsonPost = (path, body) => api(path, {
 let ME = null, META = null, RULES = null;
 let lastImportAt = null;
 let snapshotAt = null;
-let metaFetch = null;
+let metaFetch = null, metaFetchRevision = '';
 let chartsFetch = null;
 const charts = {};
 const pendingRequests = new Map();
@@ -44,6 +44,11 @@ const pageResponses = new Map();
 const cachedPages = new Set(['activity', 'dash', 'health', 'track', 'trackSummary', 'drawer', 'channels', 'us', 'regionSegments', 'rules', 'trackExceptions']);
 let readGeneration = 0;
 let dataRevision = '', revisionCheckedAt = -Infinity;
+const reportMemory = new Map();
+const reportInflight = new Map();
+const reportCacheBase = 'fulfillment-report-v2:';
+const reportTtl = 120_000;
+const reportTimers = new Map();
 let resizeFrame = 0;
 let toastTimer;
 const chartTheme = {
@@ -107,20 +112,192 @@ async function api(path, opts = {}) {
   return d;
 }
 
-function loadMeta() {
-  if (!metaFetch) metaFetch = api('/api/meta', {signal: AbortSignal.timeout(12_000)}).then(data => {
-    META = data;
-    setTopMeta(META.range.end);
-    for (const filter of [DF?.channel_group, TF?.channel_group, AF?.channel_group, CF?.channel_group,
-      UF?.channel_group, slaGroupFilter]) {
-      filter?.setOptions(META.filterOptions.channel_group || [], META.range.orders, false);
+function reportPath(path) {
+  const url = new URL(path, location.origin);
+  for (const [key, value] of url.searchParams) {
+    if (value.startsWith('[')) {
+      try { const parsed = JSON.parse(value); if (Array.isArray(parsed)) url.searchParams.set(key, JSON.stringify([...parsed].sort())); }
+      catch { /* Keep an unrecognized parameter unchanged. */ }
     }
-    return META;
-  }).catch(error => {
-    metaFetch = null;
-    throw error;
-  });
+  }
+  url.searchParams.sort();
+  return url.pathname + url.search;
+}
+
+function reportStorageKey(path) {
+  return reportCacheBase + encodeURIComponent(`${ME?.username || 'preview'}:${ME?.role || 'preview'}:${ME?.preview ? 'preview' : 'full'}`) + ':' + path;
+}
+
+function reportRecord(path) {
+  if (reportMemory.has(path)) return reportMemory.get(path);
+  try {
+    const raw = localStorage.getItem(reportStorageKey(path));
+    if (raw) {
+      const record = JSON.parse(raw);
+      if (record.data && Number.isFinite(record.at)) { reportMemory.set(path, record); return record; }
+    }
+  } catch { /* The memory cache remains available when storage is disabled. */ }
+  return null;
+}
+
+function persistReport(path, record) {
+  reportMemory.set(path, record);
+  if (reportMemory.size > 40) reportMemory.delete(reportMemory.keys().next().value);
+  const save = () => {
+    try {
+      const key = reportStorageKey(path);
+      const prefix = reportCacheBase;
+      const keys = Object.keys(localStorage).filter(item => item.startsWith(prefix) && item !== key);
+      // Keep the most recent aggregate reports within the browser's storage budget.
+      const sorted = keys.map(item => [item, (() => { try { return JSON.parse(localStorage.getItem(item)).at || 0; } catch { return 0; } })()])
+        .sort((a,b) => a[1] - b[1]);
+      while (sorted.length >= 24) localStorage.removeItem(sorted.shift()[0]);
+      const value = JSON.stringify(record);
+      while (true) {
+        try { localStorage.setItem(key, value); break; }
+        catch { if (!sorted.length) break; localStorage.removeItem(sorted.shift()[0]); }
+      }
+    } catch { /* No storage: use in-memory data. */ }
+  };
+  if ('requestIdleCallback' in window) requestIdleCallback(save, {timeout: 1000});
+  else setTimeout(save, 0);
+}
+
+function reportFresh(record) {
+  return record && dataRevision && record.revision === dataRevision &&
+    performance.now() - revisionCheckedAt < 40_000 && Date.now() - record.at < reportTtl;
+}
+
+function fetchReport(path, options = {}, force = false) {
+  const saved = reportRecord(path);
+  if (!force && reportFresh(saved)) return Promise.resolve(saved);
+  const revision = dataRevision;
+  const pending = reportInflight.get(path);
+  if (pending?.revision === revision) return pending.promise;
+  const promise = api(path, {signal: AbortSignal.timeout(22_000), ...options}).then(data => {
+    // Preserve chart and table identity when the calculated data did not change.
+    const previous = reportRecord(path);
+    if (previous && JSON.stringify(previous.data) === JSON.stringify(data)) data = previous.data;
+    const record = {data, at: Date.now(), revision};
+    if (reportInflight.get(path)?.promise === promise) persistReport(path, record);
+    return record;
+  }).finally(() => { if (reportInflight.get(path)?.promise === promise) reportInflight.delete(path); });
+  reportInflight.set(path, {revision, promise});
+  return promise;
+}
+
+const cacheKeyView = {dash: 'dash', channels: 'channels', us: 'us', health: 'rules', rules: 'rules',
+  trackSync: 'rules', channelGroups: 'rules', trackExceptions: 'channels'};
+function reportStatus(key, text) {
+  if (cacheKeyView[key] !== VIEW) return;
+  if (key === 'channels' && channelMode !== 'timing') return;
+  if (VIEW === 'rules') {
+    const pane = {health:'data', trackSync:'sync', channelGroups:'channel-groups'}[key];
+    if ((pane && $('#rules-' + pane).hidden) || (key === 'rules' && $('#rules-sla').hidden && $('#rules-business').hidden)) return;
+  }
+  const status = $('#reportCacheStatus');
+  status.hidden = !text;
+  status.textContent = text || '';
+}
+
+function cacheClock(at) {
+  return new Date(at).toLocaleString('zh-CN', {timeZone:'Asia/Shanghai', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
+}
+
+async function presentReport(key, path, render, options = {}, {force = false, oldVisible = false} = {}) {
+  path = reportPath(path);
+  const id = Symbol(), generation = readGeneration;
+  pendingRequests.set(key, id);
+  const current = () => pendingRequests.get(key) === id && generation === readGeneration;
+  const cached = reportRecord(path);
+  if (cached) {
+    render(cached.data);
+    reportStatus(key, reportFresh(cached) && !force ? `更新于 ${cacheClock(cached.at)}` : `更新于 ${cacheClock(cached.at)} · 正在同步`);
+  } else reportStatus(key, oldVisible ? '正在更新筛选 · 下方为上次结果' : '正在读取数据');
+  try {
+    const record = await fetchReport(path, options, force);
+    if (!current()) return null;
+    if (!cached || cached.data !== record.data) render(record.data);
+    reportStatus(key, `更新于 ${cacheClock(record.at)}`);
+    return record.data;
+  } catch (error) {
+    if (!current()) return null;
+    if (!cached) {
+      reportStatus(key, oldVisible ? '上次结果 · 更新失败' : '数据读取失败');
+      throw error;
+    }
+    reportStatus(key, `缓存 ${cacheClock(cached.at)} · 暂未更新`);
+    if (key === 'regionSegments' && VIEW === 'us') $('#regionalSegmentStatus').textContent += ' · 缓存结果，暂未更新';
+    return cached.data;
+  }
+}
+
+function scheduleReport(key, refresh) {
+  pendingRequests.delete(key);
+  clearTimeout(reportTimers.get(key));
+  reportTimers.set(key, setTimeout(() => {
+    if (cacheKeyView[key] === VIEW) run(refresh);
+  }, 180));
+}
+
+async function warmReports() {
+  const base = {date_basis: 'shipped'};
+  const paths = ['/api/overview?' + qs(base), '/api/channels?' + qs({...base,basis:'shipped'}),
+    '/api/regional-analysis?' + qs({...base,market:'us',basis:'paid',dimension:'lastmile'}),
+    '/api/regional-analysis?' + qs({...base,market:'us',dimension:'lastmile',detail:'segments',level:'all'}),
+    '/api/regional-analysis?' + qs({...base,market:'other',basis:'paid',dimension:'lastmile'}),
+    '/api/regional-analysis?' + qs({...base,market:'other',dimension:'lastmile',detail:'segments',level:'all'}),
+    '/api/health','/api/rules','/api/overview/channel-groups','/api/17track/sync-status'];
+  for (const path of paths) {
+    if (document.hidden) break;
+    try { await fetchReport(reportPath(path), {priority:'low'}); } catch { /* Warmup never blocks normal navigation. */ }
+    await new Promise(resolve => setTimeout(resolve, 120));
+  }
+  if (!document.hidden) for (const market of ['us','other']) {
+    try { await prepareUsMap(market); } catch { /* Load again on the user's next visit. */ }
+  }
+}
+
+function applyMeta(data) {
+  if (META === data) return data;
+  META = data;
+  setTopMeta(META.range.end);
+  for (const filters of [DF, TF, AF, CF, UF]) {
+    if (!filters) continue;
+    for (const [key, options] of Object.entries(META.filterOptions)) {
+      if (!filters[key]?.setOptions || ['month','week'].includes(key)) continue;
+      const values = filters === UF && key === 'cn' ? options.filter(option =>
+        !['us','usa','united states','united states of america'].includes(option.v.toLowerCase().trim())) :
+        filters === AF && key === 'channel' ? (META.alertChannels || []) : options;
+      filters[key].setOptions(values, values.reduce((sum,row) => sum + row.n, 0), key !== 'channel_group');
+    }
+    if (filters.date_basis) updateDateOptions(filters, filters.date_basis.value);
+  }
+  slaGroupFilter?.setOptions(META.filterOptions.channel_group || [], META.range.orders, false);
+  return data;
+}
+
+function revalidateMeta(force = false) {
+  if (!metaFetch || metaFetchRevision !== dataRevision) {
+    const revision = dataRevision;
+    const request = fetchReport('/api/meta', {signal: AbortSignal.timeout(12_000)}, force)
+      .then(record => metaFetch === request ? applyMeta(record.data) : META || record.data)
+      .finally(() => { if (metaFetch === request) metaFetch = null; });
+    metaFetch = request;
+    metaFetchRevision = revision;
+  }
   return metaFetch;
+}
+
+function loadMeta() {
+  const saved = reportRecord('/api/meta');
+  if (saved) {
+    applyMeta(saved.data);
+    if (!reportFresh(saved)) revalidateMeta().catch(() => {});
+    return Promise.resolve(META);
+  }
+  return revalidateMeta();
 }
 
 function loadChartLibrary() {
@@ -171,12 +348,20 @@ async function refreshDataRevision() {
   try {
     const {revision} = await api('/api/data-revision', {cache: 'no-store', signal: AbortSignal.timeout(10_000)});
     if (!revision) return;
-    if (dataRevision && revision !== dataRevision) {
+    const changed = Boolean(dataRevision && revision !== dataRevision);
+    if (changed) {
       pageResponses.clear();
       trackSummaryUntil = 0;
     }
     dataRevision = revision;
     revisionCheckedAt = performance.now();
+    if (changed && !document.querySelector('dialog[open]')) {
+      revalidateMeta(true).catch(() => {});
+      const refresh = {dash: loadDash, channels: channelMode === 'timing' ? loadChannels : loadTrackExceptions,
+        us: loadUs, rules: loadRules}[VIEW];
+      if (refresh) run(refresh);
+      if (VIEW === 'us' && usReport && currentSegmentScope) run(() => loadRegionSegments(currentSegmentScope));
+    }
   } catch {
     revisionCheckedAt = -Infinity;
   }
@@ -184,6 +369,9 @@ async function refreshDataRevision() {
 
 function invalidatePages() {
   pageResponses.clear();
+  reportInflight.clear();
+  metaFetch = null;
+  revisionCheckedAt = -Infinity;
   readGeneration++;
 }
 
@@ -232,6 +420,7 @@ function showView(v) {
   if (ME.preview && ['rules', 'us'].includes(v)) v = 'dash';
   if (VIEW === 'us' && v !== 'us') segmentPath = '';
   VIEW = v;
+  $('#reportCacheStatus').hidden = true;
   document.querySelectorAll('.view').forEach(s => s.classList.toggle('on', s.id === 'v-' + v));
   document.querySelectorAll('#nav button').forEach(b => {
     b.classList.toggle('on', b.dataset.v === v);
@@ -540,9 +729,11 @@ let channelGroups;
 let chosenChannels = new Set();
 
 async function loadChannelGroups() {
+  return presentReport('channelGroups', channelGroupPath, renderChannelGroups);
+}
+
+function renderChannelGroups(data) {
   const host = $('#channelGroupRulesBody');
-  const data = await latest('channelGroups', channelGroupPath);
-  if (!data) return;
   host.innerHTML = data.groups.map(group => `<tr><td><b>${esc(group.name)}</b></td>
     <td><ul class="channel-group-members">${group.channels.map(channel => `<li>${esc(channel)}</li>`).join('')}</ul></td>
     ${ME.can_edit ? `<td><button type="button" class="btn ghost sm" data-edit-group="${esc(group.name)}">编辑</button></td>` : ''}</tr>`)
@@ -631,7 +822,7 @@ async function saveChannelGroup(remove) {
   invalidatePages();
   metaFetch = null;
   toast(remove ? '已删除分组' : '已保存渠道分组');
-  await Promise.all([loadMeta(), loadChannelGroups()]);
+  await Promise.all([revalidateMeta(true), loadChannelGroups()]);
 }
 function drawWeekCalendar() {
   const body = $('#weekCalendarBody');
@@ -673,13 +864,17 @@ function commonDateFilters() {
 }
 
 async function loadDash() {
+  if (!DF) fetchReport(reportPath('/api/overview?date_basis=shipped')).catch(() => {});
   await Promise.all([loadMeta(), loadChartLibrary()]);
   if (VIEW !== 'dash') return;
-  if (!DF) DF = makeFilters($('#dashFilters'), commonDateFilters(), () => run(loadDash));
+  if (!DF) DF = makeFilters($('#dashFilters'), commonDateFilters(), () => scheduleReport('dash',loadDash));
   const f = readF(DF);
   updateDateOptions(DF, f.date_basis);
-  const d = await latest('dash', '/api/overview?' + qs(f));
-  if (!d || VIEW !== 'dash' || renderedDash === d) return;
+  return presentReport('dash', '/api/overview?' + qs(f), d => renderDash(d, f), {}, {oldVisible: Boolean(renderedDash)});
+}
+
+function renderDash(d, f) {
+  if (VIEW !== 'dash' || renderedDash === d) return;
   renderedDash = d;
   const dateBasis = d.dateBasis || (d.snapshotAt ? 'created' : f.date_basis);
   $('#monthlyScope').textContent = `按${dateBasisLabel[dateBasis]}所属月份统计 · 物流时效为出库到妥投`;
@@ -1360,7 +1555,7 @@ async function loadChannelFilters() {
   CF = makeFilters(host, [
     ...commonDateFilters(),
     { type: 'select', label: '最少单量（默认 100）', key: 'min_n', options: [1, 10, 30, 100, 500] },
-  ], () => run(loadChannels));
+  ], () => scheduleReport('channels',loadChannels));
   updateDateOptions(CF, CF.date_basis.value);
   if (renderedChannels) showChannelDataDate(renderedChannels);
 }
@@ -1439,25 +1634,24 @@ function renderChannelComparison(data, rows) {
 }
 
 async function loadChannels() {
-  if (!CF) run(loadChannelFilters);
+  if (!CF) fetchReport(reportPath('/api/channels?' + qs({date_basis:'shipped',basis:channelBasis}))).catch(() => {});
+  if (!CF) await loadChannelFilters();
+  if (!CF || VIEW !== 'channels') return;
   const basis = channelBasis;
   const filters = readF(CF || {});
   if (CF) updateDateOptions(CF, filters.date_basis);
   const loading = $('#channelLoading');
   const results = $('#channelResults');
   const currentResult = Boolean(renderedChannels);
-  loading.hidden = false;
-  loading.classList.toggle('channel-refresh', currentResult);
-  loading.textContent = currentResult ?
-    `正在更新「${TIMING_BASIS[basis].label}」 · 下方为上次的「${TIMING_BASIS[renderedChannels.basis].label}」结果` :
-    '正在读取渠道时效…';
-  results.inert = currentResult;
+  loading.hidden = currentResult;
+  loading.textContent = '正在读取渠道时效…';
   results.setAttribute('aria-busy', 'true');
-  let d;
   try {
-    d = await latest('channels', '/api/channels?' + qs({ ...filters, basis }), {signal: AbortSignal.timeout(12_000)});
+    await presentReport('channels', '/api/channels?' + qs({...filters,basis}),
+      d => renderChannels(d, filters), {signal: AbortSignal.timeout(18_000)}, {oldVisible: currentResult});
   } catch (error) {
     if (VIEW === 'channels') {
+      loading.hidden = false;
       loading.textContent = error.name === 'TimeoutError' ? '渠道时效读取超时。' : '渠道时效读取失败。' + error.message;
       if (currentResult) loading.append(` 下方为上次的「${TIMING_BASIS[renderedChannels.basis].label}」结果。`);
       const retry = el('button', 'btn ghost sm', '重试');
@@ -1467,7 +1661,11 @@ async function loadChannels() {
     }
     return;
   }
-  if (!d || VIEW !== 'channels') return;
+}
+
+function renderChannels(d, filters) {
+  if (VIEW !== 'channels' || channelMode !== 'timing') return;
+  const loading = $('#channelLoading'), results = $('#channelResults');
   loading.hidden = true;
   results.hidden = false;
   results.inert = false;
@@ -1747,10 +1945,12 @@ const usPercent = value => value > 0 && value < 0.1 ? '&lt;0.1%' : measure(value
 const usShare = (part, total) => total > 0 ? 100 * part / total : null;
 
 async function loadUs() {
+  if (!UF) fetchReport(reportPath('/api/regional-analysis?' + qs({date_basis:'shipped',market:usView.market,
+    basis:usView.basis,dimension:usView.dimension}))).catch(() => {});
   await loadMeta();
   if (VIEW !== 'us') return;
   if (!UF) {
-    UF = makeFilters($('#usFilters'), commonDateFilters(), () => run(loadUs));
+    UF = makeFilters($('#usFilters'), commonDateFilters(), () => scheduleReport('us',loadUs));
     const others = (META.filterOptions.cn || []).filter(option =>
       !['us', 'usa', 'united states', 'united states of america'].includes(option.v.trim().toLowerCase()));
     UF.cn.setOptions(others, others.reduce((sum, option) => sum + option.n, 0), false);
@@ -1760,13 +1960,13 @@ async function loadUs() {
   const filters = readF(UF);
   updateDateOptions(UF, filters.date_basis);
   const status = $('#usStatus');
-  status.textContent = usReport ? '正在更新…' : '正在读取区域履约数据…';
-  if (usReport && usReport.market !== usView.market) $('#usResults').hidden = true;
-  let report;
+  const path = '/api/regional-analysis?' + qs({...filters, market: usView.market, basis: usView.basis, dimension: usView.dimension});
+  const saved = reportRecord(reportPath(path));
+  if (!saved) status.textContent = usReport ? '正在更新…' : '正在读取区域履约数据…';
+  if (!saved && usReport && usReport.market !== usView.market) $('#usResults').hidden = true;
   try {
-    report = await latest('us', '/api/regional-analysis?' + qs({...filters, market: usView.market,
-      basis: usView.basis, dimension: usView.dimension}),
-      {signal: AbortSignal.timeout(18_000)});
+    return await presentReport('us', path, report => renderRegionalData(report, filters),
+      {signal: AbortSignal.timeout(18_000)}, {oldVisible: Boolean(usReport && usReport.market === usView.market)});
   } catch (error) {
     if (VIEW !== 'us') return;
     const retry = el('button', 'btn ghost sm', '重试');
@@ -1775,12 +1975,17 @@ async function loadUs() {
     status.replaceChildren('区域履约数据暂时无法加载。 ', retry);
     return;
   }
+}
+
+function renderRegionalData(report, filters) {
   if (!report || VIEW !== 'us' || report.market !== usView.market ||
       report.basis !== usView.basis || report.dimension !== usView.dimension) return;
+  const prior = usReport;
   usReport = report;
   regionalFilters = filters;
-  status.textContent = `筛选按${dateBasisLabel[report.dateBasis]}（北京时间） · 时效按${usTimingLabel[report.basis]}`;
+  $('#usStatus').textContent = `筛选按${dateBasisLabel[report.dateBasis]}（北京时间） · 时效按${usTimingLabel[report.basis]}`;
   $('#usResults').hidden = false;
+  if (prior === report) return;
   const selector = $('#usMapChannel');
   selector.replaceChildren(new Option('全部渠道', ''), ...report.channels.map(row => new Option(row.label, row.label)));
   selector.value = usView.channel;
@@ -1879,21 +2084,37 @@ function renderUsReport() {
 }
 
 async function loadRegionSegments(scope) {
+  currentSegmentScope = scope;
   const filters = {...regionalFilters, market: usReport.market, dimension: usReport.dimension, detail: 'segments',
     level: usView.place === null ? 'all' : usView.level, place: usView.place || '', focus: usView.channel};
   const path = '/api/regional-analysis?' + qs(filters);
   const generation = readGeneration;
-  if (segmentPath === path && segmentGeneration === generation) return;
+  if (segmentPath === path && segmentGeneration === generation && reportFresh(reportRecord(reportPath(path)))) return;
   segmentPath = path;
   segmentGeneration = generation;
   const status = $('#regionalSegmentStatus');
   const selection = scope + ' · ' + (usView.channel || '全部渠道');
-  status.textContent = selection + ' · 正在统计各阶段…';
-  $('#regionalSegmentContent').replaceChildren();
+  if (!reportRecord(reportPath(path))) status.textContent = selection + ' · 正在统计各阶段…' +
+    ($('#regionalSegmentContent').children.length ? '（下方为上次范围）' : '');
   try {
-    const report = await latest('regionSegments', path, {signal: AbortSignal.timeout(25_000)});
+    return await presentReport('regionSegments', path, report => renderRegionSegments(report, path, selection),
+      {signal: AbortSignal.timeout(25_000)});
+  } catch (error) {
+    if (segmentPath !== path || VIEW !== 'us') return;
+    segmentPath = '';
+    const retry = el('button', 'btn ghost sm', '重试');
+    retry.type = 'button';
+    retry.onclick = () => loadRegionSegments(scope);
+    status.replaceChildren(selection + ' · 分段数据暂时无法加载。 ', retry);
+  }
+}
+
+let renderedSegments = null, currentSegmentScope = '';
+function renderRegionSegments(report, path, selection) {
     if (!report || segmentPath !== path || VIEW !== 'us' || usView.market !== report.market) return;
-    status.textContent = selection + ' · ' + fmt(report.total) + ' 单';
+    $('#regionalSegmentStatus').textContent = selection + ' · ' + fmt(report.total) + ' 单';
+    if (renderedSegments === report) return;
+    renderedSegments = report;
     const byKey = new Map(report.segments.map(row => [row.key, row]));
     $('#regionalSegmentContent').innerHTML = [
       ['接单与物流交接', earlySegments], ['运输与全链路', lateSegments],
@@ -1912,14 +2133,6 @@ async function loadRegionSegments(scope) {
             <small class="cell-sub">${usPercent(usShare(row.samples, report.total))}</small></span></div>`).join('')}
       </section>`;
     }).join('');
-  } catch (error) {
-    if (segmentPath !== path || VIEW !== 'us') return;
-    segmentPath = '';
-    const retry = el('button', 'btn ghost sm', '重试');
-    retry.type = 'button';
-    retry.onclick = () => loadRegionSegments(scope);
-    status.replaceChildren(selection + ' · 分段数据暂时无法加载。 ', retry);
-  }
 }
 
 function regionMapName(market) {
@@ -1964,14 +2177,13 @@ function drawUsMap() {
   resizeVisibleCharts();
 }
 
-async function loadUsMap(market = usReport?.market) {
-  if (!market) return;
+function prepareUsMap(market) {
   const mapName = regionMapName(market);
   if (!usMapLoads.has(market)) {
     const asset = market === 'us' ? '/static/us-states.geojson' : '/static/world-countries.geojson';
     usMapLoads.set(market, Promise.all([
       loadChartLibrary(),
-      fetch(asset + '?v=1', {signal: AbortSignal.timeout(12_000)}).then(response => {
+      fetch(asset + '?v=1', {signal: AbortSignal.timeout(12_000), priority:'low'}).then(response => {
         if (!response.ok) throw new Error('地图读取失败');
         return response.json();
       }),
@@ -1982,6 +2194,13 @@ async function loadUsMap(market = usReport?.market) {
       } : undefined);
     }).catch(error => { usMapLoads.delete(market); throw error; }));
   }
+  return usMapLoads.get(market);
+}
+
+async function loadUsMap(market = usReport?.market) {
+  if (!market) return;
+  const mapName = regionMapName(market);
+  const ready = prepareUsMap(market);
   if (!window.echarts || !echarts.getMap(mapName)) {
     charts.usMap?.clear();
     $('#usLegend').replaceChildren();
@@ -1989,7 +2208,7 @@ async function loadUsMap(market = usReport?.market) {
     $('#usMapStatus').textContent = '正在加载地图…';
   }
   try {
-    await usMapLoads.get(market);
+    await ready;
   } catch {
     if (usView.market !== market) return;
     const retry = el('button', 'btn ghost sm', '重试地图');
@@ -2117,8 +2336,11 @@ const sourceRows = rows => rows.map(([label, value]) =>
   `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('');
 
 async function loadSyncStatus() {
-  const state = await latest('trackSync', '/api/17track/sync-status', { cache: 'no-store' });
-  if (!state) return;
+  return presentReport('trackSync', '/api/17track/sync-status', renderSyncStatus,
+    {cache: 'no-store'}, {force: true, oldVisible: Boolean($('#pollSummary').children.length)});
+}
+
+function renderSyncStatus(state) {
   const { poll, webhook } = state;
   const run = poll.runs[0];
   let pollBadge = run ? syncRunStates[run.status] : ['gray', '等待首次同步'];
@@ -2197,13 +2419,17 @@ function updateActivity(pending, importedAt, through) {
 }
 
 async function loadActivity() {
-  const d = await latest('activity', '/api/activity');
-  if (d) updateActivity(d.pendingOrders, d.lastImportAt, META?.range.end);
+  return presentReport('activity', '/api/activity', d => updateActivity(d.pendingOrders, d.lastImportAt, META?.range.end));
 }
 
+let renderedHealth = null;
 async function loadHealth() {
-  const d = await latest('health', '/api/health');
-  if (!d) return;
+  return presentReport('health', '/api/health', renderHealth, {}, {oldVisible: Boolean($('#dataKpi').children.length)});
+}
+
+function renderHealth(d) {
+  if (renderedHealth === d) return;
+  renderedHealth = d;
   updateActivity(d.pendingOrders, d.recentImports[0]?.ingested_at, d.range.end);
   const t = d.tracking;
   $('#dataKpi').innerHTML = [
@@ -2231,6 +2457,7 @@ function setRulePane(pane) {
     $('#rules-' + button.dataset.rulePane).hidden = !selected;
   });
   $('#refreshRules').hidden = pane === 'definitions';
+  $('#reportCacheStatus').hidden = true;
   run(loadRules);
 }
 
@@ -2258,8 +2485,11 @@ async function loadRules() {
       $('#slaGroupFilter').append(slaGroupFilter.root);
     }
   }
-  const d = await latest('rules', '/api/rules');
-  if (!d || RULES === d) return;
+  return presentReport('rules', '/api/rules', renderRules, {}, {oldVisible: Boolean(RULES)});
+}
+
+function renderRules(d) {
+  if (RULES === d) return;
   RULES = d;
   $('#ruleAsof').textContent = `数据截止 ${d.asof} · 工作日：${d.workdayRule}`;
   $('#ruleList').innerHTML = (d.rules || []).map(r => `
@@ -2309,7 +2539,12 @@ function renderSLATable() {
     </tr>`).join('') || blankRow(10, '没有符合条件的当前渠道');
 }
 
-function openConfiguration(kind, key) {
+async function openConfiguration(kind, key) {
+  if (ME.role !== 'admin') return;
+  if (!reportFresh(reportRecord('/api/rules'))) {
+    const record = await fetchReport('/api/rules', {}, true);
+    renderRules(record.data);
+  }
   const isRule = kind === 'rule';
   const item = isRule ? RULES.rules.find(row => row.key === key) : RULES.channels.find(row => row.ch === key);
   if (!item || ME.role !== 'admin') return;
@@ -2730,9 +2965,12 @@ run(async function boot() {
   document.querySelectorAll('#ruleTabs [data-rule-pane]').forEach(btn => btn.onclick = () => setRulePane(btn.dataset.rulePane));
   setInterval(() => {
     if (VIEW === 'rules' && !$('#rules-sync').hidden && !document.hidden) refreshSyncStatus();
-    if (!ME.preview && !document.hidden) refreshDataRevision();
   }, 30_000);
-  if (!ME.preview) refreshDataRevision();
+  setInterval(() => { if (!ME.preview && !document.hidden) refreshDataRevision(); }, 15_000);
+  if (!ME.preview) {
+    refreshDataRevision();
+    setTimeout(() => warmReports(), 1500);
+  }
   $('#openPending').onclick = () => run(async () => {
     await loadMeta();
     prepareAlerts();
@@ -2783,7 +3021,7 @@ run(async function boot() {
   };
   $('#ruleList').onclick = event => {
     const config = event.target.closest('[data-config-rule]');
-    if (config) return openConfiguration('rule', config.dataset.configRule);
+    if (config) return run(() => openConfiguration('rule', config.dataset.configRule));
     const button = event.target.closest('[data-rule-track]');
     if (button) run(async () => {
       await loadMeta();
@@ -2796,7 +3034,7 @@ run(async function boot() {
   $('#slaSearch').oninput = renderSLATable;
   $('#slaBody').onclick = event => {
     const config = event.target.closest('[data-config-sla]');
-    if (config) openConfiguration('sla', config.dataset.configSla);
+    if (config) run(() => openConfiguration('sla', config.dataset.configSla));
   };
   $('#settingsForm').onsubmit = saveConfiguration;
   $('#openChannelGroups').onclick = event => {

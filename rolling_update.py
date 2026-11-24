@@ -18,7 +18,7 @@ import alerts
 import build_orders
 import ingest
 import track17
-from app import core, rules, tracking_archive, tracking_freshness, tracking_sync, track_lookup
+from app import analytics_snapshot, core, rules, tracking_archive, tracking_freshness, tracking_sync, track_lookup
 from app.tracking_clock import ensure_display_columns
 from backfill_tracking import REGISTRY_BATCH, ReadOnlyClient, RetryableRequestError, chunks, fetch_batch
 
@@ -254,6 +254,7 @@ def prepare(stage, folder, track_limit=None, import_archive=False, repair=False)
                     tracking_sync.finish_pushes(ops, outcomes)
                 return 3
         track_lookup.build(con)
+        analytics_snapshot.build(con)
         con.execute("CHECKPOINT")
     stage.with_suffix(".json").write_text(json.dumps({
         "source_stamp": original_stamp, "started": started, "exports": imported,

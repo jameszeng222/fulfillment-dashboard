@@ -131,11 +131,12 @@ def build(con):
 
 
 if __name__ == "__main__":
-    from app import track_lookup
+    from app import analytics_snapshot, track_lookup
     con = duckdb.connect(str(DB))
     try:
         build(con)
         track_lookup.build(con)
+        analytics_snapshot.build(con)
         print("完成。")
     finally:
         con.close()

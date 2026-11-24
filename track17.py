@@ -705,9 +705,10 @@ def main() -> int:
         result = {"plan": cmd_plan, "poll": cmd_poll,
                   "status": cmd_status, "selftest": cmd_selftest}[args.cmd](con, args)
         if args.cmd == "poll":
-            from app import core, track_lookup
+            from app import analytics_snapshot, core, track_lookup
             if core.columns(con, "fct_order"):
                 track_lookup.build(con)
+                analytics_snapshot.build(con)
         return result or 0
     finally:
         con.close()
