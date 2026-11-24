@@ -43,13 +43,14 @@ def scope(con):
     """
 
 
-def candidates(con, limit):
-    return con.execute(scope(con) + """
+def candidates(con, limit, *, repair=False):
+    due = "outcome='carrier_conflict'" if repair else """checked_at IS NULL OR checked_at <= now - CASE WHEN outcome='read_error'
+              THEN INTERVAL '6 hours' ELSE INTERVAL '12 hours' END"""
+    return con.execute(scope(con) + f"""
         SELECT number, 物流商, C端承运商, carrier, last_event, last_status,
                count(DISTINCT nullif(lower(trim(C端承运商)),'')) OVER (PARTITION BY number)>1 AS conflict
         FROM scope
-        WHERE checked_at IS NULL OR checked_at <= now - CASE WHEN outcome='read_error'
-              THEN INTERVAL '6 hours' ELSE INTERVAL '12 hours' END
+        WHERE {due}
         QUALIFY row_number() OVER (PARTITION BY number ORDER BY shipped_at DESC, order_no)=1
         ORDER BY checked_at NULLS FIRST, shipped_at DESC, number LIMIT ?
     """, [limit]).fetchall()
@@ -62,20 +63,24 @@ def save_checks(con, rows):
             verified_at TIMESTAMP, outcome VARCHAR NOT NULL, error_code INTEGER
         )
     """)
+    con.execute(f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS registered_codes VARCHAR")
     con.executemany(f"""
-        INSERT INTO {TABLE} VALUES (?,?,?,?,?,?)
+        INSERT INTO {TABLE} (number,carrier,checked_at,verified_at,outcome,error_code,registered_codes) VALUES (?,?,?,?,?,?,?)
         ON CONFLICT (number) DO UPDATE SET carrier=excluded.carrier, checked_at=excluded.checked_at,
             verified_at=CASE WHEN excluded.carrier IS DISTINCT FROM {TABLE}.carrier THEN excluded.verified_at
                              ELSE coalesce(excluded.verified_at,{TABLE}.verified_at) END,
-            outcome=excluded.outcome, error_code=excluded.error_code
+            outcome=excluded.outcome, error_code=excluded.error_code,
+            registered_codes=coalesce(excluded.registered_codes,{TABLE}.registered_codes)
     """, rows)
 
 
 def order_check(con, number):
     if not number or not core.columns(con, TABLE):
         return None
+    registration = "registered_codes" if "registered_codes" in core.columns(con, TABLE) else "NULL::VARCHAR"
     result = con.execute(f"""
-        SELECT checked_at AS lastAttempt, verified_at AS lastVerified, outcome, error_code AS errorCode
+        SELECT checked_at AS lastAttempt, verified_at AS lastVerified, outcome, error_code AS errorCode,
+               carrier AS carrierCode, {registration} AS registeredCodes
         FROM {TABLE} WHERE number=?
     """, [number])
     row = result.fetchone()
@@ -98,3 +103,23 @@ def coverage(con=None):
         FROM scope
     """)
     return dict(zip((column[0] for column in result.description), result.fetchone()))
+
+
+def carrier_conflicts(con):
+    if not core.columns(con, TABLE):
+        return []
+    codes = "v.registered_codes" if "registered_codes" in core.columns(con, TABLE) else "NULL::VARCHAR"
+    rows = con.execute(f"""
+        SELECT o.物流商 AS provider, o.C端承运商 AS channel, v.carrier AS expectedCarrier,
+               {codes} AS registeredCodes, count(*) AS orders, count(DISTINCT v.number) AS waybills
+        FROM fct_order o JOIN {TABLE} v ON o.单号归一=v.number
+        WHERE {core.active_order()} AND v.outcome='carrier_conflict'
+        GROUP BY 1,2,3,4 ORDER BY orders DESC,provider,channel
+    """)
+    fields = [column[0] for column in rows.description]
+    result = [dict(zip(fields,row)) for row in rows.fetchall()]
+    from track17 import carrier_lookup
+    for row in result:
+        if row["expectedCarrier"] is None:
+            row["expectedCarrier"], _ = carrier_lookup(row["provider"], row["channel"], None, False)
+    return result

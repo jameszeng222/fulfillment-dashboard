@@ -76,7 +76,12 @@ C_END_CARRIER_CODES = {
 
 # WYT-USPS 的已登记记录也会使用后台承运商或物流产品代码。
 WYT_CARRIER_CODES = {"dhl ecommerce": 7047}
-WYT_REGISTRATION_FALLBACKS = {"usps": 190284, "ups": 100398}
+WYT_REGISTRATION_FALLBACKS = {"usps": 190284, "ups": 100398, "yanwen": 191278}
+REGISTRATION_ALIASES = {
+    ("xs_express", "xs express"): 191281,  # XUANSI
+    ("hete-logistics", "3pe"): 190008,
+    ("hete-logistics", "3pe express"): 190008,  # Existing YunExpress registration
+}
 
 STATUS_CN = {
     "NotFound": "查无此单",
@@ -305,7 +310,7 @@ def carrier_lookup(channel, c_end, previous_code, has_event):
 
     name = (c_end or "").strip().casefold()
     mapped_code = C_END_CARRIER_CODES.get(name)
-    fallback = None
+    fallback = REGISTRATION_ALIASES.get((channel, name))
     if channel == "wyt-usps":
         mapped_code = mapped_code or WYT_CARRIER_CODES.get(name)
         fallback = WYT_REGISTRATION_FALLBACKS.get(name)
@@ -697,8 +702,13 @@ def main() -> int:
 
     con = connect(args.db)
     try:
-        return {"plan": cmd_plan, "poll": cmd_poll,
-                "status": cmd_status, "selftest": cmd_selftest}[args.cmd](con, args) or 0
+        result = {"plan": cmd_plan, "poll": cmd_poll,
+                  "status": cmd_status, "selftest": cmd_selftest}[args.cmd](con, args)
+        if args.cmd == "poll":
+            from app import core, track_lookup
+            if core.columns(con, "fct_order"):
+                track_lookup.build(con)
+        return result or 0
     finally:
         con.close()
 

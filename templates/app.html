@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261124-regional-analysis">
+<link rel="stylesheet" href="/static/app.css?v=20261124-track-repair">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -386,6 +386,10 @@
           </div>
           <p class="tip sync-observed" id="syncObserved" role="status"></p>
           <div class="card table-card">
+            <div class="ct table-head"><div><h2>承运商匹配异常</h2><p class="tip">按 ERP 渠道及 17TRACK 实际登记代码汇总尚待核对的履约单。</p></div><button type="button" class="btn ghost sm" id="openCarrierConflicts">查看履约单</button></div>
+            <div class="tblwrap"><table class="tbl"><thead><tr><th>后台物流商</th><th>C 端渠道</th><th>预期代码</th><th>实际登记代码</th><th>履约单数</th></tr></thead><tbody id="carrierConflicts"></tbody></table></div>
+          </div>
+          <div class="card table-card">
             <div class="ct table-head"><h2>最近同步批次</h2></div>
             <div class="tblwrap"><table class="tbl"><thead><tr><th>开始时间</th><th>结束时间</th><th>结果</th><th>查询运单</th><th>取回逐条轨迹</th><th>登记未匹配</th></tr></thead><tbody id="pollHistory"></tbody></table></div>
           </div>
@@ -412,7 +416,7 @@
                 <tr><th scope="row">创建履约单</th><td>ERP 创建时间</td><td>取同一履约单最早的有效创建时间。</td></tr>
                 <tr><th scope="row">出库</th><td>ERP / WMS 签出时间</td><td>取同一履约单最早的有效签出时间，按北京时间显示。分配和打包时间取各自在明细中最后一次记录，供查看库内节点。</td></tr>
                 <tr><th scope="row">物流上网</th><td>17TRACK 首条有效揽收或运输扫描</td><td>按归一运单号，从关键节点、近期轨迹与可匹配的历史轨迹取最早的一条揽收、起运、到达、清关或其他有效运输扫描。面单创建、电子信息预报、等待收件等记录不计。最早扫描换算后早于建单，或没有可用扫描时，该单不计上网时效。</td></tr>
-                <tr><th scope="row">物流妥投</th><td>优先 17TRACK，缺失时用 ERP / WMS 补算</td><td>统计使用有效签收记录。国内仓（如 JY01、XC01）按原值北京时间处理，WINIT 仓按目的地时区及夏令时换算。时区不明确或时间顺序异常的 WMS 记录不用于补算。轨迹时间线保留承运商当地时间。</td></tr>
+                <tr><th scope="row">物流妥投</th><td>优先 17TRACK，缺失时用 ERP / WMS 补算</td><td>国内仓按原值北京时间处理。WINIT 仓按承运商区分，YANWEN、SpeedX、VEHO、FedEx、OnTrac、DHL eCommerce 等已验证渠道按北京时间，其他按目的地当地时区及夏令时换算。早于出库、晚于导出时刻或时区无法确认的 WMS 签收记录不计入时效。轨迹时间线保留承运商当地时间。</td></tr>
               </tbody>
             </table></div>
           </section>
@@ -464,7 +468,7 @@
             <div class="tblwrap"><table class="tbl">
               <thead><tr><th scope="col">项目</th><th scope="col">怎么判断</th></tr></thead>
               <tbody>
-                <tr><th scope="row">轨迹覆盖状态</th><td>「已签收 · 轨迹未入库」表示 ERP 有签收记录，本地还没有匹配的承运商轨迹。「已查询 · 未返回轨迹」表示查询已完成且承运商暂无轨迹。「API 账号登记未匹配」表示未在当前 API 账号下匹配到该运单。</td></tr>
+                <tr><th scope="row">轨迹覆盖状态</th><td>17TRACK 官方状态以承运商实际返回为准。「WMS 已签收 · 待核实」表示 ERP 有有效签收记录但暂无承运商结果；「WMS 签收时间异常」表示签收时间未通过校验；「承运商待核对」表示实际登记渠道与可确认渠道不匹配。「已查询 · 未返回轨迹」表示暂无逐条轨迹；「API 账号登记未匹配」表示当前账号未匹配到该运单。</td></tr>
                 <tr><th scope="row">物流未上网</th><td>已出库且未妥投，超过配置天数，17TRACK 仍显示「已收到信息」，且关键节点和逐条轨迹均没有有效揽收或运输扫描。「查无此单」和无查询结果归入轨迹覆盖。</td></tr>
                 <tr><th scope="row">主预警与待处理</th><td>一单可命中多条规则，按规则优先级展示主预警。待处理数字按仍需处理的履约单去重，Postnet 暂缓显示。</td></tr>
                 <tr><th scope="row">历史预警</th><td>重算后不再命中的预警留在履约单历史中。手动解决记录可在「运单轨迹 → 处理结果 → 已标记解决」筛选，归档记录集中在归档列表。两种操作都支持撤销，仍命中时回到待处理，已自然消除时保留原预警历史。处理人由系统记录。</td></tr>
@@ -599,6 +603,6 @@
       <button type="submit" class="btn" id="trackRuleSave">保存规则</button></footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261124-regional-analysis" defer></script>
+<script src="/static/app.js?v=20261124-track-repair" defer></script>
 </body>
 </html>

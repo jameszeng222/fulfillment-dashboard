@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 import duckdb
-from app.order_time import build_delivery_clock
+from app.order_time import build_delivery_clock, wms_clock_basis
 from app.waybill import key_sql, shipped_waybill_sql
 
 ROOT = Path(__file__).resolve().parent
@@ -21,6 +21,7 @@ DB = ROOT / "履约单.duckdb"
 
 DDL = """
 CREATE OR REPLACE TABLE fct_order AS
+WITH base AS (
 SELECT
     履约单号,
     any_value(出库单号)                     AS 出库单号,
@@ -42,6 +43,7 @@ SELECT
     coalesce(max(clock.signed_local), max(签收时间_ts)) AS 签收时间,
     max(clock.signed_beijing)               AS 签收北京时间,
     any_value(clock.zone)                   AS 签收时区,
+    {export_cutoff}                         AS 签收校验截止,
     min(创建日期)                           AS 创建日期,
     any_value(创建月份)                     AS 创建月份,
     sum(数量)::BIGINT                       AS 件数,
@@ -53,6 +55,23 @@ SELECT
 FROM 履约单明细
 LEFT JOIN fct_delivery_clock clock USING (履约单号)
 GROUP BY 履约单号
+), normalized AS (
+    SELECT b.*, CASE {clock_basis} WHEN '北京时间' THEN b.签收时间
+                       WHEN '目的地当地时间' THEN b.签收北京时间 END AS signed_candidate
+    FROM base b
+), checked AS (
+    SELECT n.*, CASE WHEN signed_candidate>=coalesce(签出时间,创建时间,支付时间)
+                     AND signed_candidate<=least(coalesce(签收校验截止,timezone('Asia/Shanghai',current_timestamp)),
+                                                  timezone('Asia/Shanghai',current_timestamp))
+                     THEN signed_candidate END AS signed_valid
+    FROM normalized n
+)
+SELECT * EXCLUDE (signed_candidate,signed_valid) REPLACE (
+    signed_valid AS 签收北京时间,
+    date_diff('minute',签出时间,signed_valid) AS 物流分钟,
+    CASE WHEN signed_valid IS NOT NULL THEN 1 ELSE 0 END AS 已签收),
+    签收时间 IS NOT NULL AND signed_valid IS NULL AS WMS签收异常
+FROM checked
 """
 
 
@@ -63,7 +82,9 @@ def build(con):
     try:
         build_delivery_clock(con)
         waybill = shipped_waybill_sql()
-        con.execute(DDL.format(current_channel=channel, waybill=waybill, waybill_key=key_sql(waybill)))
+        cutoff = "max(try_strptime(regexp_extract(快照批次,'[0-9]{4}(_[0-9]{2}){4}'),'%Y_%m_%d_%H_%M'))" if "快照批次" in columns else "NULL::TIMESTAMP"
+        con.execute(DDL.format(current_channel=channel, waybill=waybill, waybill_key=key_sql(waybill),
+                               export_cutoff=cutoff, clock_basis=wms_clock_basis('b')))
         con.execute("COMMIT")
     except Exception:
         con.execute("ROLLBACK")
@@ -110,9 +131,11 @@ def build(con):
 
 
 if __name__ == "__main__":
+    from app import track_lookup
     con = duckdb.connect(str(DB))
     try:
         build(con)
+        track_lookup.build(con)
         print("完成。")
     finally:
         con.close()

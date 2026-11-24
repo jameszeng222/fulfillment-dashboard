@@ -12,24 +12,19 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 import pandas as pd
 
-from . import alert_history, channel_groups, core, public_preview, rules, us_analysis
+from . import alert_history, channel_groups, core, public_preview, rules, us_analysis, track_lookup
 from .carrier_delivery import (
     DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts, transport_minutes,
 )
 from .channel_timing import ONLINE_START, TimingBasis, online_scan_join, timing_start, transport_archive_version
 from .filter_time import DATE_BASIS_FIELDS, DEFAULT_DATE_BASIS, DateBasis, time_bounds, week_filter
 from .order_time import delivery_facts
-from .tracking_archive import fill_local_times, sources as tracking_sources
+from .tracking_archive import fill_local_times
 from .waybill import key_sql, normalized as normalize_waybill
 
 router = APIRouter(prefix="/api")
 
-TRACK_STATUS_LABEL = """coalesce(t.状态中文, CASE
-    WHEN m.单号 IS NOT NULL THEN 'API 账号登记未匹配'
-    WHEN h.回补状态='empty' THEN '已查询 · 未返回轨迹'
-    WHEN o.已签收=1 THEN '已签收 · 轨迹未入库'
-    WHEN o.签出时间 IS NOT NULL THEN '已出库 · 待同步轨迹'
-    ELSE '其他履约单 · 无本地结果' END)"""
+TRACK_STATUS_LABEL = "t.状态标签"
 
 
 # ---------------------------------------------------------------- 公共
@@ -224,7 +219,7 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
         active_orders = core.active_facts(all_orders)
         order_facts = delivery_facts(con, active_orders)
         facts = reporting_facts(con, order_facts)
-        tracking, missing, archive = tracking_sources(con)
+        tracking = track_lookup.source(con)
         con.execute(f"""
             CREATE TEMP TABLE overview_timing AS
             SELECT o.创建月份,o.仓内分钟,o.物流分钟,o.件数,o.仓库,o.物流商,o.目的国中文,
@@ -286,9 +281,7 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
         track_states = con.execute(f"""
             SELECT {TRACK_STATUS_LABEL} k, count(*) n
             FROM {order_facts} o
-            LEFT JOIN {tracking} t ON t.单号=o.单号归一
-            LEFT JOIN {missing} m ON m.单号=o.单号归一
-            LEFT JOIN {archive} h ON h.履约单号=o.履约单号 AND h.单号=o.单号归一
+            LEFT JOIN {tracking} t ON t.履约单号=o.履约单号
             WHERE 1=1{cond}
             GROUP BY 1 ORDER BY 2 DESC
         """, args).df().to_dict("records")
@@ -384,17 +377,16 @@ def track(request: Request,
             args.extend(vals)
     if coverage == "canceled_unstored":
         cond += " AND FALSE"
-    if coverage in ("tracked", "unmatched", "queried_empty", "unknown", "signed_unstored",
-                    "shipped_unstored", "other_unstored"):
-        cond += {
-            "tracked": " AND (t.单号 IS NOT NULL OR h.回补状态='empty')",
-            "unmatched": " AND t.单号 IS NULL AND m.单号 IS NOT NULL",
-            "queried_empty": " AND t.单号 IS NULL AND m.单号 IS NULL AND h.回补状态='empty'",
-            "unknown": " AND t.单号 IS NULL AND m.单号 IS NULL AND h.回补状态 IS NULL",
-            "signed_unstored": " AND t.单号 IS NULL AND m.单号 IS NULL AND h.回补状态 IS NULL AND o.已签收=1",
-            "shipped_unstored": " AND t.单号 IS NULL AND m.单号 IS NULL AND h.回补状态 IS NULL AND o.已签收=0 AND o.签出时间 IS NOT NULL",
-            "other_unstored": " AND t.单号 IS NULL AND m.单号 IS NULL AND h.回补状态 IS NULL AND o.已签收=0 AND o.签出时间 IS NULL",
-        }[coverage]
+    if coverage == "tracked":
+        cond += " AND t.覆盖 IN ('tracked','queried_empty')"
+    elif coverage == "unknown":
+        cond += " AND t.单号 IS NULL AND NOT t.未注册 AND t.回补状态 IS NULL"
+    elif coverage == "carrier_conflict":
+        cond += " AND t.核对结果='carrier_conflict'"
+    elif coverage == "detailed":
+        cond += " AND t.逐条事件数>0"
+    elif coverage in track_lookup.LABELS:
+        cond += " AND t.覆盖=?"; args.append(coverage)
     if signed in ("0", "1"):
         cond += " AND o.已签收 = ?"; args.append(int(signed))
 
@@ -417,12 +409,32 @@ def track(request: Request,
             facts = f"""(SELECT f.*, r.解决时间 FROM {facts} f
                          INNER JOIN resolved_alerts r USING (履约单号))"""
         order_only = not any((tstat, sub, rule, coverage))
-        fast_page = part == "rows" and order_only and sc in ("o.签出时间", "o.创建时间", "o.履约单号", "o.解决时间")
+        tracking = track_lookup.source(con)
+        order_sort = sc in ("o.签出时间", "o.创建时间", "o.履约单号", "o.解决时间")
+        fast_page = part == "rows" and not rule and (order_sort or sc in ("t.停滞天数", "逐条事件数"))
         search_total = None
         if fast_page:
             # Select the visible orders before joining carrier status and alerts.
             page_cond, page_args = cond, args
-            if q.strip():
+            if not order_only or not order_sort:
+                sort_value = "t.逐条事件数" if sc == "逐条事件数" else sc
+                con.execute(f"""
+                    CREATE TEMP TABLE matching_track_orders AS
+                    SELECT o.履约单号,{sort_value} AS sort_value FROM {facts} o
+                    JOIN {tracking} t ON t.履约单号=o.履约单号 WHERE 1=1{cond}
+                """, args)
+                search_total = con.execute("SELECT count(*) FROM matching_track_orders").fetchone()[0]
+                if off >= search_total:
+                    return {"total": search_total, "page": page, "size": size, "rows": [],
+                            "statusSummary": [], "ruleSummary": []}
+                con.execute(f"""
+                    CREATE TEMP TABLE selected_track_orders AS
+                    SELECT o.* FROM {facts} o SEMI JOIN (
+                        SELECT 履约单号 FROM matching_track_orders
+                        ORDER BY sort_value {direction} NULLS LAST,履约单号 LIMIT ? OFFSET ?
+                    ) selected USING (履约单号)
+                """, [size, off])
+            elif q.strip():
                 con.execute(f"""
                     CREATE TEMP TABLE matching_track_orders AS
                     SELECT o.履约单号 FROM {facts} o WHERE 1=1{cond}
@@ -432,14 +444,13 @@ def track(request: Request,
                     return {"total": search_total, "page": page, "size": size, "rows": [],
                             "statusSummary": [], "ruleSummary": []}
                 page_cond, page_args = " AND o.履约单号 IN (SELECT 履约单号 FROM matching_track_orders)", []
-            con.execute(f"""
-                CREATE TEMP TABLE selected_track_orders AS
-                SELECT o.* FROM {facts} o WHERE 1=1{page_cond}
-                ORDER BY {sc} {direction} NULLS LAST, o.履约单号
-                LIMIT ? OFFSET ?
-            """, [*page_args, size, off])
-        numbers = "SELECT 单号归一 FROM selected_track_orders" if fast_page else None
-        tracking, missing, archive = tracking_sources(con, numbers)
+            if order_only and order_sort:
+                con.execute(f"""
+                    CREATE TEMP TABLE selected_track_orders AS
+                    SELECT o.* FROM {facts} o WHERE 1=1{page_cond}
+                    ORDER BY {sc} {direction} NULLS LAST, o.履约单号
+                    LIMIT ? OFFSET ?
+                """, [*page_args, size, off])
         alert_where, alert_args = rules.visible_alerts(), []
         if fast_page:
             alert_args = [row[0] for row in con.execute("SELECT 履约单号 FROM selected_track_orders").fetchall()]
@@ -460,18 +471,7 @@ def track(request: Request,
             summaries, columns=["履约单号", "主预警名称", "主预警规则", "主预警级别", "预警数"]
         ).astype({"履约单号": "string", "主预警名称": "string", "主预警规则": "string",
                   "主预警级别": "string", "预警数": "int64"}))
-        event_columns = core.columns(con, "trk_event")
-        event_key = "e.单号=o.单号归一"
-        if "运输商代码" in event_columns:
-            event_key += " AND (e.运输商代码 = coalesce(t.carrier, 0) OR e.运输商代码 IS NULL)"
-        if coverage == "detailed":
-            native = f" OR EXISTS (SELECT 1 FROM trk_event e WHERE {event_key})" if event_columns else ""
-            cond += f" AND (h.事件数>0{native})"
-        native_count = f"(SELECT count(*) FROM trk_event e WHERE {event_key})" if event_columns else "0"
-        event_count = f"coalesce(nullif(h.事件数,0),{native_count})"
-        joins = (f"LEFT JOIN {tracking} t ON t.单号 = o.单号归一 "
-                f"LEFT JOIN {missing} m ON m.单号 = o.单号归一 "
-                f"LEFT JOIN {archive} h ON h.履约单号=o.履约单号 AND h.单号=o.单号归一 "
+        joins = (f"LEFT JOIN {tracking} t ON t.履约单号 = o.履约单号 "
                 "LEFT JOIN live_alerts a ON a.履约单号 = o.履约单号")
         joined = joins + " WHERE 1=1" + cond
         if part != "rows":
@@ -501,10 +501,6 @@ def track(request: Request,
             args, off = [], 0
         timing_columns = f"o.{DELIVERED_UTC}, o.{DELIVERED_BJ}, o.{DELIVERY_SOURCE}, o.{WMS_CLOCK}," if timed_sort else ""
         resolution_column = "o.解决时间," if sc == "o.解决时间" else ""
-        # Counting native events for all matching orders is only required when
-        # that count determines the sort order. Otherwise count the chosen page.
-        order_by_count = sc == "逐条事件数"
-        projected_events = f"{event_count} AS 逐条事件数" if order_by_count else "h.事件数 AS archive_events"
         page_query = f"""
             SELECT o.履约单号, o.订单号, o.快递单号, o.单号归一, o.平台, o.仓库, o.物流商, o.C端承运商, o.当前渠道,
                    o.目的国中文, o.状态, o.支付时间, o.创建时间, o.签出时间, o.签收时间,
@@ -514,28 +510,17 @@ def track(request: Request,
                    o.物流分钟, o.已签收,
                    t.状态 AS 轨迹状态, t.状态中文 AS 轨迹状态中文, t.子状态 AS 轨迹子状态,
                    t.最新事件时间, t.最新事件当地时间, t.最新描述, t.地点, t.停滞天数,
-                   h.carrier AS 回补运输商代码,
-                   t.carrier AS 运输商代码, coalesce(t.查询时间,h.查询时间) AS 查询时间, h.回补状态,
-                   {projected_events},
+                   t.回补运输商代码,
+                   t.carrier AS 运输商代码, t.查询时间, t.回补状态,
+                   t.逐条事件数,t.状态标签,t.核对结果,
                    a.主预警名称, a.主预警规则, a.主预警级别, a.预警数,
-                   (t.单号 IS NULL AND m.单号 IS NOT NULL) AS 未注册
+                   t.未注册
             FROM {page_facts} o {joined}
             ORDER BY {sc} {direction} NULLS LAST, o.履约单号
             LIMIT ? OFFSET ?
         """
-        if not order_by_count:
-            native_on_page = "0"
-            if event_columns:
-                match = "e.单号=p.单号归一"
-                if "运输商代码" in event_columns:
-                    match += " AND (e.运输商代码=coalesce(p.运输商代码,0) OR e.运输商代码 IS NULL)"
-                native_on_page = f"(SELECT count(*) FROM trk_event e WHERE {match})"
         measured = "page_rows" if timed_sort else reporting_facts(con, "page_rows", page_only=True)
         excluded = [DELIVERED_UTC, DELIVERED_BJ, "tracked_delivery", "tracked_delivery_local"]
-        event_projection = ""
-        if not order_by_count:
-            excluded.append("archive_events")
-            event_projection = f", coalesce(nullif(p.archive_events,0),{native_on_page}) AS 逐条事件数"
         sort_field = sc.split(".")[-1]
         page_query = f"""
             WITH page_rows AS MATERIALIZED ({page_query})
@@ -543,7 +528,6 @@ def track(request: Request,
                    p.{DELIVERED_UTC} AS 承运商签收时间,
                    CASE WHEN p.tracked_delivery=p.{DELIVERED_UTC} THEN p.tracked_delivery_local END AS 签收当地时间,
                    {transport_minutes('p', "p.轨迹状态 IS NOT DISTINCT FROM 'Delivered'")} AS 运输分钟
-                   {event_projection}
             FROM {measured} p ORDER BY p."{sort_field}" {direction} NULLS LAST, p.履约单号
         """
         rows = con.execute(page_query, args + [size, off]).df().to_dict("records")
@@ -606,7 +590,7 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis):
             "online": elapsed_minutes(ONLINE_START, f"o.{DELIVERED_BJ}"),
         }[basis]
         sla_start = timing_start("tgt.basis", sla_scans)
-        active = f"o.已签收=0 AND o.{DELIVERED_UTC} IS NULL AND o.状态 IS DISTINCT FROM '已完成' AND o.签出时间 IS NOT NULL"
+        active = f"o.已签收=0 AND o.{DELIVERED_UTC} IS NULL AND (o.状态 IS DISTINCT FROM '已完成' OR o.签收时间 IS NOT NULL) AND o.签出时间 IS NOT NULL"
         scoped = f"""SELECT coalesce(nullif(o.C端承运商,''),'__empty__') AS key,
                             coalesce(o.目的国中文,o.目的国) AS ctry,
                             o.{DELIVERED_BJ} AS delivered, o.{DELIVERY_SOURCE} AS delivery_source,

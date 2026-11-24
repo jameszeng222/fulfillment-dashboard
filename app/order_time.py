@@ -8,8 +8,11 @@ from . import core
 
 def wms_clock_basis(alias):
     warehouse = f"upper(trim({alias}.仓库))"
+    carrier = f"lower(trim({alias}.C端承运商))"
     return f"""CASE
         WHEN {warehouse} IN ('JY01','JY02','JY03','XC01','XCWH01','WH01','ZBJ','MGZYTH01') THEN '北京时间'
+        WHEN contains({warehouse},'WINIT') AND {carrier} IN
+            ('yanwen','speedx','veho','fedex','fedex smartpost','ontrac','dhl ecommerce','dhl ecommerce us') THEN '北京时间'
         WHEN contains({warehouse},'WINIT') THEN '目的地当地时间'
     END"""
 

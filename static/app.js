@@ -43,6 +43,7 @@ const pendingRequests = new Map();
 const pageResponses = new Map();
 const cachedPages = new Set(['activity', 'dash', 'health', 'track', 'trackSummary', 'drawer', 'channels', 'us', 'regionSegments', 'rules', 'trackExceptions']);
 let readGeneration = 0;
+let dataRevision = '', revisionCheckedAt = -Infinity;
 let resizeFrame = 0;
 let toastTimer;
 const chartTheme = {
@@ -146,10 +147,15 @@ function loadChartLibrary() {
 
 function readPage(path, options) {
   const current = pageResponses.get(path);
-  if (current && (!current.until || current.until > performance.now())) return current.result;
+  const now = performance.now();
+  const revisionFresh = dataRevision && now - revisionCheckedAt < 40_000;
+  if (current && (!current.until || (current.until > now &&
+      (now - current.receivedAt < 25_000 || (revisionFresh && current.revision === dataRevision))))) return current.result;
   const entry = { until: 0 };
   entry.result = api(path, options).then(data => {
-    entry.until = performance.now() + 25_000;
+    entry.receivedAt = performance.now();
+    entry.revision = dataRevision;
+    entry.until = entry.receivedAt + (revisionFresh ? 120_000 : 25_000);
     return data;
   }, error => {
     if (pageResponses.get(path) === entry) pageResponses.delete(path);
@@ -159,6 +165,21 @@ function readPage(path, options) {
   pageResponses.set(path, entry);
   if (pageResponses.size > 32) pageResponses.delete(pageResponses.keys().next().value);
   return entry.result;
+}
+
+async function refreshDataRevision() {
+  try {
+    const {revision} = await api('/api/data-revision', {cache: 'no-store', signal: AbortSignal.timeout(10_000)});
+    if (!revision) return;
+    if (dataRevision && revision !== dataRevision) {
+      pageResponses.clear();
+      trackSummaryUntil = 0;
+    }
+    dataRevision = revision;
+    revisionCheckedAt = performance.now();
+  } catch {
+    revisionCheckedAt = -Infinity;
+  }
 }
 
 function invalidatePages() {
@@ -925,7 +946,9 @@ const coverageOptions = [
   ['tracked', '有 17TRACK 查询记录'],
   ['unmatched', 'API 账号登记未匹配'],
   ['queried_empty', '已查询 · 未返回轨迹'],
-  ['signed_unstored', '已签收 · 轨迹未入库'],
+  ['signed_unstored', 'WMS 已签收 · 待核实'],
+  ['signed_time_invalid', 'WMS 签收时间异常'],
+  ['carrier_conflict', '承运商待核对'],
   ['shipped_unstored', '已出库 · 待同步轨迹'],
   ['other_unstored', '其他履约单 · 无本地结果'],
 ];
@@ -978,6 +1001,7 @@ function monitoringFilterDefs(alerts = false) {
   ];
 }
 
+let trackFilterTimer;
 function prepareTrack() {
   if (TF) return;
   if (ME.preview) {
@@ -995,7 +1019,11 @@ function prepareTrack() {
   ], (_, action) => {
     updateDateOptions(TF, TF.date_basis.value);
     updateSubstates(TF);
-    run(() => loadTrack(1, action === 'search'));
+    clearTimeout(trackFilterTimer);
+    if (action === 'search') run(() => loadTrack(1, true));
+    else trackFilterTimer = setTimeout(() => {
+      if (VIEW === 'track' && trackMode === 'tracking') run(() => loadTrack(1));
+    }, 250);
   });
   updateDateOptions(TF, TF.date_basis.value);
   updateSubstates(TF);
@@ -1055,8 +1083,7 @@ function trackRowsOnly(filters) {
 }
 
 function trackRowsPath(filters, page) {
-  const part = page > 1 || trackRowsOnly(filters) ? 'rows' : 'all';
-  return '/api/track?' + qs({...filters, part}, page, 40);
+  return '/api/track?' + qs({...filters, part: 'rows'}, page, 40);
 }
 
 async function loadTrackSummary(filters, available = null) {
@@ -1142,7 +1169,7 @@ async function loadTrack(page = 1, fromSearch = false) {
   status.textContent = ME.preview && !query ? '' :
     `${d.snapshotFiltersSkipped ? '离线快照暂不可应用当前筛选 · ' :
       clearedFilters ? '已切换至全部履约单搜索 · ' : ''}共 ${fmt(d.total)} 单`;
-  if (!ME.preview) run(() => loadTrackSummary(f, (d.page === 1 && !trackRowsOnly(f)) || !d.total ? d : null));
+  if (!ME.preview) run(() => loadTrackSummary(f, !d.total ? d : null));
   pager($('#trackPager'), d.total, d.page, d.size, p => run(() => loadTrack(p)));
   if (renderedTrack === d) return;
   renderedTrack = d;
@@ -1151,10 +1178,11 @@ async function loadTrack(page = 1, fromSearch = false) {
     <tr><td>${orderButton(r.履约单号, r.快递单号)}</td>
       <td>${esc(r.当前渠道 || '—')}<small class="cell-sub">${esc(r.物流商 || '—')} / ${esc(r.C端承运商 || '—')}</small></td>
       <td>${esc(r.仓库 || '—')}<small class="cell-sub">${esc(r.目的国中文 || '—')} · <span data-platform="${esc(r.平台 || '')}">${esc(r.平台名称 || platformName(r.平台))}</span></small></td>
-      <td>${trackBadge(r.轨迹状态, r.轨迹状态中文, r.轨迹子状态, r.未注册,
+      <td>${trackBadge(r.轨迹状态, r.轨迹状态中文, r.轨迹子状态, r.未注册 && !r.状态标签,
+        r.状态标签 || (
         r.回补状态 === 'empty' ? '已查询 · 未返回轨迹' :
-        r.已签收 ? '已签收 · 轨迹未入库' :
-        r.签出时间 ? '已出库 · 待同步轨迹' : undefined)}</td>
+        r.已签收 ? 'WMS 已签收 · 待核实' :
+        r.签出时间 ? '已出库 · 待同步轨迹' : undefined))}</td>
       ${ME.preview ? '' : `<td>${trackingAlerts(r)}</td>`}
       <td class="mono">${dt(r.签出时间)}</td>
       <td>${durationText(r.运输分钟)}</td>
@@ -2137,6 +2165,10 @@ async function loadSyncStatus() {
   $('#webhookHelp').textContent = !webhook.url ?
     '需要将公网 HTTPS 回调地址配置到 17TRACK 后台。' : '验签通过后入队，本机每 5 分钟检查待入库的推送。';
   $('#syncObserved').textContent = `状态读取于 ${syncTime(state.now)} · 此页每 30 秒刷新 · 北京时间`;
+  $('#carrierConflicts').innerHTML = (poll.carrierConflicts || []).map(row =>
+    `<tr><td>${esc(row.provider || '—')}</td><td>${esc(row.channel || '—')}</td><td>${esc(String(row.expectedCarrier ?? '—'))}</td><td>${esc(row.registeredCodes === '' ? '账号无登记' : row.registeredCodes ?? '尚未记录')}</td><td>${fmt(row.orders)}</td></tr>`
+  ).join('') || blankRow(5, '暂无承运商匹配异常');
+  $('#openCarrierConflicts').onclick = () => openTracking({coverage: 'carrier_conflict'});
   $('#pollHistory').innerHTML = poll.runs.map(row => {
     const [tone, label] = syncRunStates[row.status] || ['gray', '状态待确认'];
     return `<tr><td>${syncTime(row.started_at)}</td><td>${syncTime(row.finished_at)}</td>
@@ -2421,9 +2453,10 @@ function orderFields(fields) {
 }
 
 function orderTrackStatus(order) {
-  return order.轨迹状态中文 || (order.未注册 ? 'API 账号登记未匹配' :
+  return order.状态标签 || order.轨迹状态中文 || (order.核对结果 === 'carrier_conflict' ? '承运商待核对' :
+    order.WMS签收异常 ? 'WMS 签收时间异常' : order.未注册 ? 'API 账号登记未匹配' :
     order.回补状态 === 'empty' ? '已查询 · 未返回轨迹' :
-    order.已签收 ? '已签收 · 轨迹未入库' : order.签出时间 ? '已出库 · 待同步轨迹' : '无本地查询结果');
+    order.已签收 ? 'WMS 已签收 · 待核实' : order.签出时间 ? '已出库 · 待同步轨迹' : '无本地查询结果');
 }
 
 function setDrawerOrderLink(no) {
@@ -2520,6 +2553,7 @@ async function loadOrderDetail(no, path, refresh = false) {
     ['当前库内节点', o.签出时间 ? '已出库' : o.状态],
     ['ERP 出库单状态', o.状态],
     ...(!ME.preview ? [[`ERP / WMS 妥投（${o.WMS时间口径 || '原始值'}）`, dt(o.WMS妥投时间 || o.签收时间)]] : []),
+    ...(!ME.preview && o.WMS签收异常 ? [['WMS 签收校验', '时间异常 · 不计入时效']] : []),
     ['17TRACK 妥投', o.签收当地时间 || o.承运商签收时间 ?
       trackTime(o.签收当地时间, o.承运商签收时间) : '—'],
     ['C 端承运商', o.C端承运商],
@@ -2696,7 +2730,9 @@ run(async function boot() {
   document.querySelectorAll('#ruleTabs [data-rule-pane]').forEach(btn => btn.onclick = () => setRulePane(btn.dataset.rulePane));
   setInterval(() => {
     if (VIEW === 'rules' && !$('#rules-sync').hidden && !document.hidden) refreshSyncStatus();
+    if (!ME.preview && !document.hidden) refreshDataRevision();
   }, 30_000);
+  if (!ME.preview) refreshDataRevision();
   $('#openPending').onclick = () => run(async () => {
     await loadMeta();
     prepareAlerts();

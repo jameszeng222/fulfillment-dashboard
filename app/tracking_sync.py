@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import closing
 from datetime import datetime, timedelta
 from functools import lru_cache
 import hashlib
@@ -250,7 +251,11 @@ def sync_status(request: Request):
             run["detail"] = json.loads(run["detail"] or "null")
         except ValueError:
             run["detail"] = None
+    coverage, conflicts = None, []
+    if core.DUCK_DB.is_file():
+        with closing(core.duck()) as con:
+            coverage, conflicts = tracking_freshness.coverage(con), tracking_freshness.carrier_conflicts(con)
     return {"now": core.now_iso(), "poll": {"schedule": windows_schedule(int(time.monotonic() // 30)),
-                                           "coverage": tracking_freshness.coverage() if core.DUCK_DB.is_file() else None,
+                                           "coverage": coverage, "carrierConflicts": conflicts,
                                            "lastSuccess": success[0] if success else None, "runs": runs},
             "webhook": {**totals, "url": public_url(), "ready": bool(webhook_key()), "pushes": pushes}}

@@ -18,7 +18,7 @@ def elapsed_minutes(start, end):
 
 def transport_minutes(alias, delivered):
     end = f"""CASE WHEN {alias}.{DELIVERED_BJ} IS NOT NULL THEN {alias}.{DELIVERED_BJ}
-                    WHEN {alias}.已签收=0 AND {alias}.状态 IS DISTINCT FROM '已完成'
+                    WHEN {alias}.已签收=0 AND ({alias}.状态 IS DISTINCT FROM '已完成' OR {alias}.签收时间 IS NOT NULL)
                          AND NOT ({delivered})
                     THEN timezone('Asia/Shanghai', current_timestamp) END"""
     return elapsed_minutes(f"{alias}.签出时间", end)
@@ -62,11 +62,13 @@ def reporting_facts(con, facts, *, page_only=False):
                {elapsed_minutes("f.签出时间", f"coalesce(f.{DELIVERED_UTC} + INTERVAL '8 hours',f.wms_valid)")} AS 物流分钟
         FROM (
             SELECT j.* EXCLUDE (carrier_instant, wms_instant),
-                   CASE WHEN coalesce(j.支付时间,j.创建时间) IS NULL OR
-                             j.carrier_instant + INTERVAL '8 hours'>=coalesce(j.支付时间,j.创建时间)
+                   CASE WHEN (coalesce(j.支付时间,j.创建时间) IS NULL OR
+                             j.carrier_instant + INTERVAL '8 hours'>=coalesce(j.支付时间,j.创建时间))
+                             AND j.carrier_instant + INTERVAL '8 hours'<=timezone('Asia/Shanghai',current_timestamp)
                         THEN j.carrier_instant END AS {DELIVERED_UTC},
-                   CASE WHEN coalesce(j.签出时间,j.创建时间,j.支付时间) IS NULL OR
-                             j.wms_instant>=coalesce(j.签出时间,j.创建时间,j.支付时间)
+                   CASE WHEN j.已签收=1 AND (coalesce(j.签出时间,j.创建时间,j.支付时间) IS NULL OR
+                             j.wms_instant>=coalesce(j.签出时间,j.创建时间,j.支付时间))
+                             AND j.wms_instant<=timezone('Asia/Shanghai',current_timestamp)
                         THEN j.wms_instant END AS wms_valid
             FROM (
                 SELECT classified.*,

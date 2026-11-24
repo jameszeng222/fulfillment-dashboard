@@ -39,7 +39,7 @@ import duckdb
 import pandas as pd
 
 from app import alert_history, core, rules
-from app.carrier_delivery import DELIVERED_UTC, reporting_facts
+from app.carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts
 from app.channel_timing import ONLINE_START, online_scan_join, timing_start
 from app.order_time import delivery_facts
 from app.tracking_archive import sources as tracking_sources
@@ -116,9 +116,11 @@ def calculate(con, asof: str | None, rule_overrides, sla_overrides):
     con.execute(f"""
     CREATE OR REPLACE TEMP TABLE base AS
     WITH target(ch, days, basis) AS ({sla_sql})
-    SELECT o.履约单号, o.状态 AS 出库单状态, o.物流商 AS 物流服务商, o.当前渠道,
+    SELECT o.履约单号, CASE WHEN o.状态='已完成' AND o.签收时间 IS NOT NULL AND o.{DELIVERED_BJ} IS NULL
+                            THEN '待收货' ELSE o.状态 END AS 出库单状态,
+           o.物流商 AS 物流服务商, o.当前渠道,
            o.仓库 AS 仓库代码, o.目的国, o.单号归一 AS 快递单号,
-           o.支付时间, o.创建时间, o.签出时间, o.签收时间, o.创建日期,
+           o.支付时间, o.创建时间, o.签出时间, o.{DELIVERED_BJ} AS 签收时间, o.创建日期,
            t.状态 AS 轨迹状态, t.子状态 AS 轨迹子状态, t.最新事件时间, t.停滞天数,
            {scanned} AS 已有有效运输扫描,
            o.{DELIVERED_UTC} AS 承运商签收时间,

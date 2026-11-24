@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import date, datetime, timedelta
 from functools import lru_cache
+from hashlib import sha256
 from typing import Any, Literal, Optional
 from unicodedata import normalize
 
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from . import alert_history, channel_groups, cloud_login, core, ops_auth, ops_assistant, public_preview
 from .carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts, transport_minutes
+from . import track_lookup
 from .filter_time import DATE_BASIS_FIELDS, DEFAULT_DATE_BASIS, REPORTING_WEEKS, DateBasis, time_bounds, week_filter
 from .order_time import delivery_facts
 from . import tracking_archive, tracking_freshness
@@ -21,6 +23,19 @@ from .waybill import normalized as normalize_waybill
 
 router = APIRouter(prefix="/api")
 ALERT_CHANNEL_VALUE = "coalesce(nullif(a.current_channel,''),'__empty__')"
+
+
+@router.get("/data-revision")
+def data_revision(request: Request):
+    core.require_reader(request)
+    stamps = [core.snapshot_key()]
+    for path in (core.OPS_DB, core.OPS_DB.with_name(core.OPS_DB.name + "-wal")):
+        try:
+            stat = path.stat()
+            stamps.append((stat.st_size,stat.st_mtime_ns))
+        except FileNotFoundError:
+            stamps.append(None)
+    return {"revision": sha256(repr(stamps).encode()).hexdigest()}
 
 # ---------------------------------------------------------------- 认证
 
@@ -289,6 +304,10 @@ def order_detail(order_no: str, request: Request, q: str = ""):
             raise HTTPException(status_code=404, detail="履约单不存在")
         cols = [d[0] for d in con.description]
         detail = dict(zip(cols, row))
+        if core.columns(con, track_lookup.TABLE):
+            status = con.execute(f"SELECT 状态标签,核对结果 FROM {track_lookup.TABLE} WHERE 履约单号=?", [order_no]).fetchone()
+            if status:
+                detail["状态标签"], detail["核对结果"] = status
 
         fields = core.columns(con, "履约单明细")
         detail_fields = [

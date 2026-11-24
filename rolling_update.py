@@ -18,7 +18,7 @@ import alerts
 import build_orders
 import ingest
 import track17
-from app import core, rules, tracking_archive, tracking_freshness, tracking_sync
+from app import core, rules, tracking_archive, tracking_freshness, tracking_sync, track_lookup
 from app.tracking_clock import ensure_display_columns
 from backfill_tracking import REGISTRY_BATCH, ReadOnlyClient, RetryableRequestError, chunks, fetch_batch
 
@@ -153,7 +153,8 @@ def refresh_tracks(con, candidates, token):
                             totals["with_events"] += 1
                         outcome = "verified" if has_events and latest is not None else "empty"
                 totals[outcome] += 1
-                checks.append((number, carrier_code, checked, checked if outcome == "verified" else None, outcome, error))
+                registration = ",".join(map(str, sorted(registered_codes))) if pending is not None else None
+                checks.append((number, carrier_code, checked, checked if outcome == "verified" else None, outcome, error, registration))
             tracking_freshness.save_checks(con, checks)
 
     return {"queried": len(by_number), **{name: totals[name] for name in (
@@ -212,7 +213,7 @@ def apply_pushes(con, pushes):
     return outcomes
 
 
-def prepare(stage, folder, track_limit=None, import_archive=False):
+def prepare(stage, folder, track_limit=None, import_archive=False, repair=False):
     source = core.DUCK_DB
     started = core.now_iso()
     token = os.environ.get("TRACK17_TOKEN", "").strip()
@@ -221,8 +222,8 @@ def prepare(stage, folder, track_limit=None, import_archive=False):
     pushes = tracking_sync.ready_pushes() if track_limit is None else []
     with closing(core.duck()) as con:
         exports = new_exports(con, folder) if track_limit is None else []
-        candidates = tracking_freshness.candidates(con, track_limit) if track_limit is not None else []
-        if not exports and not candidates and not pushes and not import_archive:
+        candidates = tracking_freshness.candidates(con, track_limit, repair=repair) if track_limit is not None else []
+        if not exports and not candidates and not pushes and not import_archive and not repair:
             return 3
         if source.with_suffix(source.suffix + ".wal").exists():
             raise RuntimeError("履约数据库正在写入，下次重试")
@@ -231,7 +232,7 @@ def prepare(stage, folder, track_limit=None, import_archive=False):
     with closing(duckdb.connect(str(stage))) as con:
         tracking = None
         imported = import_exports(con, exports)
-        if imported:
+        if imported or repair or "WMS签收异常" not in core.columns(con, "fct_order"):
             build_orders.build(con)
         archive_count = None
         if import_archive:
@@ -248,10 +249,11 @@ def prepare(stage, folder, track_limit=None, import_archive=False):
             con.execute("BEGIN TRANSACTION")
             outcomes = apply_pushes(con, pushes)
             con.execute("COMMIT")
-            if not imported and not import_archive and not any(row[1] == "applied" for row in outcomes):
+            if not imported and not import_archive and not repair and not any(row[1] == "applied" for row in outcomes):
                 with core.ops() as ops:
                     tracking_sync.finish_pushes(ops, outcomes)
                 return 3
+        track_lookup.build(con)
         con.execute("CHECKPOINT")
     stage.with_suffix(".json").write_text(json.dumps({
         "source_stamp": original_stamp, "started": started, "exports": imported,
@@ -320,6 +322,7 @@ def main():
     cli.add_argument("--folder", type=Path, default=INPUT)
     cli.add_argument("--track-limit", type=int, help="查询近期运单的已登记轨迹，每次最多 4,000 个")
     cli.add_argument("--import-archive", action="store_true", help="复制历史轨迹到快照，不调用 17TRACK")
+    cli.add_argument("--repair", action="store_true", help="重建签收统计和轨迹筛选表，并仅重查承运商匹配异常")
     args = cli.parse_args()
     if args.action == "poll-start":
         print(tracking_sync.begin_poll())
@@ -342,7 +345,7 @@ def main():
     if args.import_archive and (args.action != "prepare" or args.track_limit is not None):
         cli.error("历史轨迹导入须单独准备，不与 17TRACK 查询同批运行")
     if args.action == "prepare":
-        return prepare(args.stage, args.folder, args.track_limit, args.import_archive)
+        return prepare(args.stage, args.folder, args.track_limit, args.import_archive, args.repair)
     return publish(args.stage, args.run_id)
 
 
