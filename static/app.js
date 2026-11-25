@@ -764,12 +764,43 @@ function qs(o, page, size) {
   return p.toString();
 }
 
-function pager(host, total, page, size, go) {
+function pager(host, total, page, size, go, {sizes, changeSize} = {}) {
   const pages = Math.max(1, Math.ceil(total / size));
   host.innerHTML = `<span>第 ${page} / ${pages} 页 · 共 ${fmt(total)} 条</span><span class="sp"></span>`;
-  const mk = (t, p, dis) => { const b = el('button', '', t); b.disabled = dis; b.onclick = () => go(p); return b; };
+  const mk = (t, p, dis) => { const b = el('button', '', t); b.type = 'button'; b.disabled = dis; b.onclick = () => go(p); return b; };
+  if (sizes) {
+    const perPage = el('label', 'pager-field', '每页');
+    const select = el('select');
+    select.setAttribute('aria-label', '每页显示数量');
+    select.replaceChildren(...sizes.map(n => new Option(`${n} 条`, n)));
+    select.value = String(size);
+    select.onchange = () => changeSize(Number(select.value));
+    perPage.append(select);
+    host.append(perPage);
+  }
   host.appendChild(mk('‹ 上一页', page - 1, page <= 1));
   host.appendChild(mk('下一页 ›', page + 1, page >= pages));
+  if (sizes) {
+    host.append(mk('末页', pages, page >= pages));
+    const jump = el('form', 'pager-field');
+    const field = el('input');
+    field.type = 'number';
+    field.min = 1;
+    field.max = pages;
+    field.required = true;
+    field.placeholder = '页码';
+    field.setAttribute('aria-label', '跳转页码');
+    field.disabled = pages === 1;
+    const submit = el('button', '', '跳转');
+    submit.type = 'submit';
+    submit.disabled = field.disabled;
+    jump.append(field, submit);
+    jump.onsubmit = event => {
+      event.preventDefault();
+      if (field.valueAsNumber !== page) go(field.valueAsNumber);
+    };
+    host.append(jump);
+  }
 }
 
 /* ================= 数据总览 ================= */
@@ -1177,6 +1208,7 @@ let AF = null;
 const alertFiltersByMode = {};
 let trackRows = [];
 let trackPage = 1;
+let trackPageSize = 40;
 let renderedTrack = null;
 let alertRows = [];
 let alertPage = 1;
@@ -1346,8 +1378,8 @@ function trackRowsOnly(filters) {
     ['签出时间', '创建时间', '履约单号', '解决时间'].includes(filters.sort);
 }
 
-function trackRowsPath(filters, page) {
-  return '/api/track?' + qs({...filters, part: 'rows'}, page, 40);
+function trackRowsPath(filters, page, size) {
+  return '/api/track?' + qs({...filters, part: 'rows'}, page, size);
 }
 
 async function loadTrackSummary(filters, available = null) {
@@ -1379,7 +1411,7 @@ async function loadTrackSummary(filters, available = null) {
   }
 }
 
-async function loadTrack(page = 1, fromSearch = false) {
+async function loadTrack(page = 1, fromSearch = false, size = trackPageSize) {
   if (!TF && !ME.preview && defaultFilterPreset('tracking')) {
     await loadTrackFilters();
     if (!TF || VIEW !== 'track' || trackMode !== 'tracking') return;
@@ -1391,17 +1423,17 @@ async function loadTrack(page = 1, fromSearch = false) {
   const status = $('#trackListStatus');
   const retry = $('#retryTrack');
   retry.hidden = true;
-  retry.onclick = () => run(() => loadTrack(page, fromSearch));
+  retry.onclick = () => run(() => loadTrack(page, fromSearch, size));
   status.textContent = page > 1 ? `正在加载第 ${page} 页…` : query ? '正在搜索…' : ME.preview ? '' : '正在读取履约单…';
   const pageLabel = $('#trackPager > span');
   if (pageLabel && page > 1) pageLabel.textContent = status.textContent;
-  const fetchRows = (filters, number) => latest('track', trackRowsPath(filters, number),
+  const fetchRows = (filters, number) => latest('track', trackRowsPath(filters, number, size),
     {signal: AbortSignal.timeout(18_000)});
   let d, clearedFilters = false;
   try {
     if (ME.preview && !query) {
       pendingRequests.delete('track');
-      d = {rows: [], total: 0, page: 1, size: 40};
+      d = {rows: [], total: 0, page: 1, size};
     } else {
       d = await fetchRows(f, page);
     }
@@ -1428,17 +1460,21 @@ async function loadTrack(page = 1, fromSearch = false) {
     }
     return;
   }
-  if (f.resolved_only && !d.rows.length && d.total && page > 1) {
-    return loadTrack(Math.ceil(d.total / d.size));
+  const lastPage = Math.max(1, Math.ceil(d.total / d.size));
+  if (d.page > lastPage) {
+    return loadTrack(lastPage, false, d.size);
   }
   trackRows = d.rows;
   trackPage = d.page;
+  trackPageSize = d.size;
   lastTrackingQuery = query || '';
   status.textContent = ME.preview && !query ? '' :
     `${d.snapshotFiltersSkipped ? '离线快照暂不可应用当前筛选 · ' :
       clearedFilters ? '已切换至全部履约单搜索 · ' : ''}共 ${fmt(d.total)} 单`;
   if (!ME.preview) run(() => loadTrackSummary(f, !d.total ? d : null));
-  pager($('#trackPager'), d.total, d.page, d.size, p => run(() => loadTrack(p)));
+  pager($('#trackPager'), d.total, d.page, d.size, p => run(() => loadTrack(p)), {
+    sizes:[20, 40, 100, 200], changeSize:n => run(() => loadTrack(1, false, n)),
+  });
   if (renderedTrack === d) return;
   renderedTrack = d;
 
@@ -1472,7 +1508,7 @@ async function loadTrack(page = 1, fromSearch = false) {
   if (!ME.preview && !query && trackRowsOnly(f) && d.page * d.size < d.total) {
     const selection = pendingRequests.get('track');
     const generation = readGeneration;
-    const next = trackRowsPath(f, d.page + 1);
+    const next = trackRowsPath(f, d.page + 1, d.size);
     setTimeout(() => {
       if (VIEW === 'track' && trackMode === 'tracking' && !document.hidden &&
           selection === pendingRequests.get('track') && generation === readGeneration) {
@@ -2101,6 +2137,7 @@ function renderChannelRates(d, rows) {
 let trajectorySettings;
 let editingTrackRule = null;
 let exceptionFilters;
+let exceptionPageSize = 40;
 let exceptionSearchTimer;
 const trajectoryPath = '/api/channel-track-rules';
 const trajectoryWeekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -2122,7 +2159,6 @@ function renderTrackRuleOptions() {
     .map(rule => new Option(rule.name, rule.key)));
   select.value = current;
   if (select.selectedIndex < 0) select.value = '';
-  syncFilterPreset(exceptionFilters);
 }
 
 function renderTrackRuleCards(counts) {
@@ -2145,7 +2181,7 @@ function renderTrackRuleCards(counts) {
   }).join('') || '<p class="tip">暂无规则</p>';
 }
 
-async function loadTrackExceptions(page = 1) {
+async function loadTrackExceptions(page = 1, size = exceptionPageSize) {
   const status = $('#trackExceptionStatus');
   status.textContent = '正在核对轨迹…';
   let data;
@@ -2157,20 +2193,18 @@ async function loadTrackExceptions(page = 1) {
     if (!exceptionFilters) {
       exceptionFilters = {days:$('#trackExceptionDays'), rule:$('#trackExceptionRule'),
         state:$('#trackExceptionState'), q:$('#trackExceptionSearch')};
-      attachFilterPresets('exceptions', '轨迹异常', $('.track-exception-filters'), exceptionFilters, {
-        before:$('#refreshTrackExceptions'),
-        onApply:() => { clearTimeout(exceptionSearchTimer); run(loadTrackExceptions); },
-      });
     }
     const filters = {...readF(exceptionFilters), q:exceptionFilters.q.value.trim()};
-    data = await latest('trackExceptions', '/api/channel-track-exceptions?' + qs(filters, page, 40),
+    data = await latest('trackExceptions', '/api/channel-track-exceptions?' + qs(filters, page, size),
       {signal: AbortSignal.timeout(20_000)});
   } catch (error) {
     if (VIEW === 'channels' && channelMode === 'exceptions') status.textContent = error.message;
     return;
   }
   if (!data || VIEW !== 'channels' || channelMode !== 'exceptions') return;
-  if (!data.rows.length && data.total && page > 1) return loadTrackExceptions(Math.ceil(data.total / data.size));
+  const lastPage = Math.max(1, Math.ceil(data.total / data.size));
+  if (data.page > lastPage) return loadTrackExceptions(lastPage, data.size);
+  exceptionPageSize = data.size;
   renderTrackRuleCards(data.counts);
   status.textContent = `出库自 ${data.from} 起 · 截至 ${syncTime(data.asof)} · 共 ${fmt(data.total)} 条`;
   $('#trackExceptionBody').innerHTML = data.rows.map(row => `<tr>
@@ -2183,7 +2217,9 @@ async function loadTrackExceptions(page = 1) {
     <td class="mono">${esc(row.due)} 日终<small class="cell-sub">${esc(row.deadline.slice(-6))}</small></td>
     <td class="mono">${esc(eventWallClock(row.event_at))}<small class="cell-sub">${row.event_text ? esc(row.event_text) :
       `最近核对 ${esc(syncTime(row.checked_at))}`}</small></td></tr>`).join('') || blankRow(6, '没有符合条件的轨迹异常');
-  pager($('#trackExceptionPager'), data.total, data.page, data.size, next => run(() => loadTrackExceptions(next)));
+  pager($('#trackExceptionPager'), data.total, data.page, data.size, next => run(() => loadTrackExceptions(next)), {
+    sizes:[20, 40, 100], changeSize:n => run(() => loadTrackExceptions(1, n)),
+  });
 }
 
 function addTrackRuleSite(site = {name: '', warehouses: [], cutoff: '14:30'}) {
@@ -2290,12 +2326,10 @@ function setupTrackExceptionControls() {
   };
   for (const id of ['trackExceptionDays', 'trackExceptionRule', 'trackExceptionState']) {
     document.getElementById(id).onchange = () => {
-      syncFilterPreset(exceptionFilters);
       run(loadTrackExceptions);
     };
   }
   $('#trackExceptionSearch').oninput = () => {
-    syncFilterPreset(exceptionFilters);
     clearTimeout(exceptionSearchTimer);
     exceptionSearchTimer = setTimeout(() => run(loadTrackExceptions), 250);
   };
