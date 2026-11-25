@@ -431,15 +431,16 @@
         </div>
         <div class="workspace-stack" id="rules-definitions" hidden>
           <section class="card table-card definitions-card">
-            <div class="ct"><h2>时间字段与取值</h2><p class="tip">按履约单统计。ERP、WMS 与承运商的时间在计算时统一到同一时区。</p></div>
+            <div class="ct"><h2>时间字段与取值</h2><p class="tip">按履约单统计，时效统一使用北京时间计算。</p></div>
             <div class="tblwrap"><table class="tbl">
               <thead><tr><th scope="col">字段</th><th scope="col">来源</th><th scope="col">取值及显示</th></tr></thead>
               <tbody>
                 <tr><th scope="row">客户下单</th><td>ERP 支付时间</td><td>同一履约单取明细中最早的有效支付时间，按北京时间显示。</td></tr>
                 <tr><th scope="row">创建履约单</th><td>ERP 创建时间</td><td>取同一履约单最早的有效创建时间。</td></tr>
                 <tr><th scope="row">出库</th><td>ERP / WMS 签出时间</td><td>取同一履约单最早的有效签出时间，按北京时间显示。分配和打包时间取各自在明细中最后一次记录，供查看库内节点。</td></tr>
+                <tr><th scope="row">17TRACK 时间</th><td>UTC 时间或带时区偏移的时间</td><td><strong>统计时换算成北京时间</strong>，再计算上网、妥投等节点的时效。轨迹明细优先显示承运商当地时间，缺少当地时间时标注 UTC。</td></tr>
                 <tr><th scope="row">物流上网</th><td>17TRACK 首条有效揽收或运输扫描</td><td>按归一运单号，从关键节点、近期轨迹与可匹配的历史轨迹取最早的一条揽收、起运、到达、清关或其他有效运输扫描。面单创建、电子信息预报、等待收件等记录不计。最早扫描换算后早于建单，或没有可用扫描时，该单不计上网时效。</td></tr>
-                <tr><th scope="row">物流妥投</th><td>优先 17TRACK，缺失时用 ERP / WMS 补算</td><td>国内仓按原值北京时间处理。WINIT 仓按承运商区分，YANWEN、SpeedX、VEHO、FedEx、OnTrac、DHL eCommerce 等已验证渠道按北京时间，其他按目的地当地时区及夏令时换算。早于出库、晚于导出时刻或时区无法确认的 WMS 签收记录不计入时效。轨迹时间线保留承运商当地时间。</td></tr>
+                <tr><th scope="row">物流妥投</th><td>优先 17TRACK，缺失时用 ERP / WMS 补算</td><td>国内仓按原值北京时间处理。WINIT 仓按承运商区分，YANWEN、SpeedX、VEHO、FedEx、OnTrac、DHL eCommerce 等已验证渠道按北京时间，其他按目的地当地时区及夏令时换算。早于出库、晚于导出时刻或时区无法确认的 WMS 签收记录不计入时效。</td></tr>
               </tbody>
             </table></div>
           </section>
