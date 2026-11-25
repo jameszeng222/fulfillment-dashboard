@@ -488,9 +488,9 @@ function multiFilter(def, onChange) {
   const root = el('details', 'multi-filter tone-' + filterVisual(def.key)[1]);
   root.dataset.filter = def.key;
   const trigger = el('summary', 'multi-trigger');
-  const name = el('span');
+  const name = el('strong', 'filter-name');
   name.textContent = def.label;
-  const badge = el('strong');
+  const badge = el('span', 'filter-value');
   trigger.append(filterGlyph(def.key), name, badge, el('span', 'multi-caret'));
   const panel = el('div', 'multi-popover');
   const search = el('input');
