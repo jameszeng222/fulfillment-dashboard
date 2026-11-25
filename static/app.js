@@ -933,7 +933,7 @@ function renderDash(d, f) {
   if (VIEW !== 'dash' || renderedDash === d) return;
   renderedDash = d;
   const dateBasis = d.dateBasis || (d.snapshotAt ? 'created' : f.date_basis);
-  $('#monthlyScope').textContent = `按${dateBasisLabel[dateBasis]}所属月份统计 · 物流时效为出库到妥投`;
+  $('#monthlyScope').textContent = `按${dateBasisLabel[dateBasis].replace('时间', '')}月份统计 · 出库 → 妥投`;
   DF._info.hidden = !d.snapshotFiltersSkipped;
   DF._info.textContent = d.snapshotFiltersSkipped ? '实时筛选暂不可用，图表显示全量快照' : '';
   setTopMeta(d.asof);
@@ -1005,7 +1005,7 @@ function drawOverviewMixes(data) {
   const orders = data.orderSplit;
   if (shipping) {
     drawMix('warehouseShippingMix', shipping.overseas, shipping.total,
-      `${fmt(shipping.overseas)} / ${fmt(shipping.total)} 个已出库履约单`,
+      `已出库合计 ${fmt(shipping.total)} 单`,
       [
         ['海外仓', shipping.overseas, 'primary'], ['国内仓', shipping.domestic, 'secondary'],
         ...(shipping.unknown ? [['仓库未归类', shipping.unknown, 'unknown']] : []),
@@ -1019,8 +1019,8 @@ function drawOverviewMixes(data) {
       [
         ['同仓拆单', orders.same, 'teal'], ['异仓拆单', orders.cross, 'primary'],
         ...(orders.unknown ? [['仓库待确认', orders.unknown, 'unknown']] : []),
-      ], orders.split, { note: '拆单构成按拆单订单数计算。' +
-        (orders.missingFulfillments ? `另有 ${fmt(orders.missingFulfillments)} 个履约单缺少订单号。` : '') });
+      ], orders.split, { note: '构成占比以拆单订单为分母' +
+        (orders.missingFulfillments ? ` · ${fmt(orders.missingFulfillments)} 个履约单缺订单号` : '') });
   } else {
     $('#orderSplitMix').textContent = '等待快照同步';
   }
@@ -1603,9 +1603,9 @@ async function applyBatch() {
 
 /* ================= 渠道时效 ================= */
 const TIMING_BASIS = {
-  paid: { label: '支付到签收', note: '从支付时间（北京时间）到妥投。优先 17TRACK，缺失时按仓库时间口径用 WMS 补算。' },
-  shipped: { label: '出库到签收', note: '从签出时间（北京时间）到妥投。优先 17TRACK，缺失时按仓库时间口径用 WMS 补算。' },
-  online: { label: '上网到签收', note: '从 17TRACK 首条有效揽收或运输扫描到妥投。妥投时间优先 17TRACK，缺失时用 WMS 补算。' },
+  paid: { label: '支付到签收', note: '支付 → 妥投' },
+  shipped: { label: '出库到签收', note: '签出 → 妥投' },
+  online: { label: '上网到签收', note: '上网 → 妥投' },
 };
 let CF = null;
 let channelRows = [];
@@ -1971,7 +1971,7 @@ function renderChannelComparison(data, rows) {
   $('#channelChartEmpty').hidden = Boolean(visible.length);
   const label = TIMING_BASIS[data.basis].label;
   $('#channelChartScope').textContent = visible.length ?
-    `${label} · ${isGroup ? '按当前渠道归组 · ' : ''}${visible.length === eligible.length ? '全部' : '单量靠前的'} ${visible.length} 个有样本${isGroup ? '分组' : '渠道'} · P90 表示约 90% 的有效样本在该用时内签收` : label;
+    `${label} · ${visible.length === eligible.length ? '共' : '单量前'} ${visible.length} 个有样本${isGroup ? '分组' : '渠道'}` : label;
   $('#channelComparisonRows').innerHTML = visible.map(row => `<li class="compare-grid compare-row">
     <div class="compare-name">${channelLink(row)}</div>
     <div class="compare-samples"><span class="compare-metric-label">有效样本 / 单量</span>
@@ -2378,7 +2378,7 @@ function renderRegionalData(report, filters) {
   const prior = usReport;
   usReport = report;
   regionalFilters = filters;
-  $('#usStatus').textContent = `筛选按${dateBasisLabel[report.dateBasis]}（北京时间） · 时效按${usTimingLabel[report.basis]}`;
+  $('#usStatus').textContent = `按${dateBasisLabel[report.dateBasis]}筛选（北京时间） · ${usTimingLabel[report.basis]}`;
   $('#usResults').hidden = false;
   if (prior === report) return;
   const selector = $('#usMapChannel');
@@ -2413,7 +2413,7 @@ function renderUsReport() {
     ['有效时效样本', fmt(national.samples), earlySegments.includes(usReport.basis) ?
       `有效覆盖 ${usPercent(usShare(national.samples, national.orders))}` : `含 WMS 补算 ${fmt(national.fallback)} 单`,'check','green'],
     ['平均时效', usDay(national.avg), usTimingLabel[usReport.basis],'clock','cyan'],
-    ['P90 时效', usDay(national.p90), '约 90% 的有效样本在该时长内完成该阶段','history','violet'],
+    ['P90 时效', usDay(national.p90), '约 90% 的有效样本在此时长内完成','history','violet'],
   ].map(row => metricCard(...row)).join('');
 
   $('#usMixTitle').textContent = scope + '渠道构成';
@@ -3344,7 +3344,7 @@ run(async function boot() {
       '#trackTabs', '#showDetailed', '#exportTrack', '#trackAlertHeading']) {
       $(selector).hidden = true;
     }
-    $('#trackIntro').textContent = '输入完整的履约单号、运单号、订单号或平台订单号，查看物流状态和时间线。';
+    $('#trackIntro').textContent = '输入完整单号查看物流状态和时间线';
   }
   $('#who').textContent = ME.preview || ME.openTest ? ME.display_name : `${ME.display_name} · ${ME.role_label}`;
   $('#batchAction').append(...allowedActions().map(([key, label]) => new Option(label, key)));
