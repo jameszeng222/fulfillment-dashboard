@@ -852,6 +852,7 @@ button.rank-row:hover { background: var(--surface-muted); }
 :is(#dashKpi, #channelKpi, #usKpi, #dataKpi) .kpi.tone-warn :is(.lbl,.val) { color: #8b5526; }
 #channelTimingPane .channel-comparison .table-head { padding: 17px 18px 5px; }
 #channelTimingPane .channel-comparison .table-head h2 { font-size: 17px; }
+#channelDayMode { align-self: center; padding: 3px; }
 #exportChannels { display: inline-flex; align-items: center; gap: 5px; }
 #exportChannels .ui-icon { width: 13px; height: 13px; color: var(--ink3); }
 #channelComparisonPeriod { padding: 0 18px 11px; }

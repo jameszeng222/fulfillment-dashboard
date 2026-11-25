@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261125-delivery-rates">
+<link rel="stylesheet" href="/static/app.css?v=20261125-workday-rates">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -226,7 +226,13 @@
           <div class="ct table-head"><div>
             <h2 id="channelComparisonTitle"><span id="channelComparisonName">C 端渠道时效对比</span></h2>
             <p class="tip" id="channelChartScope"></p>
-          </div><button type="button" class="btn ghost sm" id="exportChannels"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg>导出结果</button></div>
+          </div><div class="toolbar">
+            <div class="tabs period-tabs" id="channelDayMode" role="group" aria-label="妥投率计时方式">
+              <button type="button" data-day-mode="calendar" aria-pressed="true">自然日</button>
+              <button type="button" data-day-mode="workday" aria-pressed="false">工作日</button>
+            </div>
+            <button type="button" class="btn ghost sm" id="exportChannels"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg>导出结果</button>
+          </div></div>
           <div class="channel-period" id="channelComparisonPeriod" aria-label="统计时间范围"></div>
           <div class="compare-grid compare-head" id="channelCompareHead" aria-hidden="true">
             <div id="channelCompareLabel">C 端渠道</div><div>有效样本 / 单量</div><div>平均用时</div><div>P90 用时</div>
@@ -237,7 +243,7 @@
           <p class="tip compare-empty" id="channelChartEmpty" hidden>暂无符合条件的渠道。</p>
         </section>
         <div class="card table-card">
-          <div class="ct table-head"><div><h2 id="channelPerformanceTitle">C 端渠道表现对比</h2><p class="tip">妥投率按全部有效单 · SLA 按当前渠道配置及有效签收样本 · 超时占比按可计时在途单</p></div></div>
+          <div class="ct table-head"><div><h2 id="channelPerformanceTitle">C 端渠道表现对比</h2><p class="tip" id="channelDetailedRateScope">自然日妥投率按全部有效单 · SLA 按当前渠道配置及有效签收样本 · 超时占比按可计时在途单</p></div></div>
           <div class="channel-period" id="channelTablePeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:none">
             <table class="tbl">
@@ -251,7 +257,7 @@
           </div>
         </div>
         <div class="card" style="padding:0">
-          <div class="ct" style="padding:12px 14px 0"><h2 id="channelCountryTitle">C 端渠道 × 国家</h2><div class="tip">单量 ≥ 200 的组合</div></div>
+          <div class="ct" style="padding:12px 14px 0"><h2 id="channelCountryTitle">C 端渠道 × 国家</h2><div class="tip" id="channelCountryRateScope">单量 ≥ 200 的组合 · 自然日妥投率</div></div>
           <div class="channel-period" id="channelCountryPeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:460px">
             <table class="tbl">
@@ -450,10 +456,11 @@
               <thead><tr><th scope="col">指标</th><th scope="col">计算方式</th></tr></thead>
               <tbody>
                 <tr><th scope="row">库内处理</th><td>出库时间减创建履约单时间。按分钟计算，取大于 0 的样本平均值，换算为小时。分配、打包节点供核对过程。</td></tr>
-                <tr><th scope="row">下单 / 出库 / 上网到妥投</th><td>妥投时间减所选起点，换算为天。缺有效起点或妥投时间、耗时小于等于 0 的记录不计入平均时效及达成率。</td></tr>
+                <tr><th scope="row">下单 / 出库 / 上网到妥投</th><td>妥投时间减所选起点，换算为天。缺有效起点或妥投时间、耗时小于等于 0 的记录不作为有效时效样本，也不计入按期妥投单数。</td></tr>
                 <tr><th scope="row">妥投覆盖率</th><td>有有效妥投时间的履约单数 ÷ 本次筛选范围内的履约单数。取消单仅计入出库单状态统计。</td></tr>
                 <tr><th scope="row">海外仓发货占比</th><td>海外仓已出库履约单 ÷ 筛选范围内全部已出库履约单。按仓库代码判断，WINIT、NF01 和 MGZYTH01 归为海外仓，未归类仓库单独显示。</td></tr>
-                <tr><th scope="row">2、3、5、6、7 天内妥投率</th><td>在对应天数内确认妥投的履约单数 ÷ 筛选范围内全部有效履约单数。在途（含未满观察期）、超时、缺可用时效的单均计入分母。总览按出库起算，渠道时效按所选起点。每天按实际经过的 24 小时计算。</td></tr>
+                <tr><th scope="row">2、3、5、6、7 天内妥投率</th><td>在对应天数内确认妥投的履约单数 ÷ 筛选范围内全部有效履约单数。在途（含未满观察期）、超时、缺可用时效的单均计入分母。总览按出库起算并用自然日，渠道时效按所选起点，可切换自然日和工作日。</td></tr>
+                <tr><th scope="row">妥投率计时方式</th><td>自然日连续计时。工作日按北京时间只累计周一至周五的实际经过时间，周末暂停计时，法定节假日未单独剔除。每天折合 24 小时。例如周五 10:00 至周一 10:00 为 3 个自然日、1 个工作日。平均时效、P90 与 SLA 按各自原有口径计算。</td></tr>
                 <tr><th scope="row">订单拆单率</th><td>拆单订单数 ÷ 筛选命中的可识别订单数。按平台和 ERP 订单号识别，一张订单有两个或以上有效履约单即为拆单。筛选命中任一履约单即纳入订单，判定类型时看整张订单。同仓指所有履约单仓库相同，异仓指涉及两个或以上仓库。仓库缺失且无法判定时单独显示。</td></tr>
                 <tr><th scope="row">承诺时效达成率</th><td>在承诺天数内妥投的有效样本数 ÷ 有效签收样本数。按每单的「当前渠道」配置确定 SLA 起点与承诺天数，渠道表现按 C 端显示物流渠道对比。</td></tr>
                 <tr><th scope="row">平均时效和 P90</th><td>使用当前选择的时效起点及有效妥投样本。P90 是时效的第 90 百分位，约 90% 的有效样本在这个耗时内妥投。</td></tr>
@@ -649,6 +656,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261125-delivery-rates" defer></script>
+<script src="/static/app.js?v=20261125-workday-rates" defer></script>
 </body>
 </html>

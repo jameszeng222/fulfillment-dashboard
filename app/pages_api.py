@@ -16,7 +16,7 @@ from . import alert_history, analytics_snapshot, channel_groups, core, public_pr
 from .carrier_delivery import (
     DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts, transport_minutes,
 )
-from .channel_timing import ONLINE_START, TimingBasis, timing_start, transport_archive_version
+from .channel_timing import ONLINE_START, TimingBasis, timing_start, transport_archive_version, workday_minutes
 from .filter_time import DATE_BASIS_FIELDS, DEFAULT_DATE_BASIS, DateBasis, time_bounds, week_filter
 from .order_time import delivery_facts
 from .tracking_archive import fill_local_times
@@ -30,9 +30,10 @@ DELIVERY_WINDOWS = (2, 3, 5, 6, 7)
 
 # ---------------------------------------------------------------- 公共
 
-def delivery_window_counts(minutes):
+def delivery_window_counts(minutes, *, prefix="d", include_zero=False):
+    minimum = ">=0" if include_zero else ">0"
     return ", ".join(
-        f"count(*) FILTER (WHERE {minutes}>0 AND {minutes}<={day * 1440}) AS d{day}"
+        f"count(*) FILTER (WHERE {minutes}{minimum} AND {minutes}<={day * 1440}) AS {prefix}{day}"
         for day in DELIVERY_WINDOWS
     )
 
@@ -610,11 +611,8 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
         sla_sql, sla_values = rules.sla_table(slas)
         sla_scans = any(config["basis"] == "online" for config in slas.values())
         scan_join, online_start = analytics_snapshot.scan_source(con, _archive) if basis == "online" or sla_scans else ("", ONLINE_START)
-        minutes = {
-            "paid": elapsed_minutes("o.支付时间", f"o.{DELIVERED_BJ}"),
-            "shipped": "o.物流分钟",
-            "online": elapsed_minutes(online_start, f"o.{DELIVERED_BJ}"),
-        }[basis]
+        report_start = {"paid": "o.支付时间", "shipped": "o.签出时间", "online": online_start}[basis]
+        minutes = "o.物流分钟" if basis == "shipped" else elapsed_minutes(report_start, f"o.{DELIVERED_BJ}")
         sla_start = timing_start("tgt.basis", sla_scans, online_start)
         active = f"o.已签收=0 AND o.{DELIVERED_UTC} IS NULL AND (o.状态 IS DISTINCT FROM '已完成' OR o.签收时间 IS NOT NULL) AND o.签出时间 IS NOT NULL"
         group_join = ""
@@ -627,7 +625,7 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
         scoped = f"""SELECT {key} AS key,
                             coalesce(o.目的国中文,o.目的国) AS ctry,
                             o.{DELIVERED_BJ} AS delivered, o.{DELIVERY_SOURCE} AS delivery_source,
-                            {minutes} AS duration_min, {sla_start} AS sla_start,
+                            {minutes} AS duration_min, {report_start} AS report_start, {sla_start} AS sla_start,
                             coalesce(tgt.days,{rules.DEFAULT_SLA_DAYS}) AS sla_days,
                             {active} AS in_transit
                      FROM {facts} o LEFT JOIN tgt ON tgt.ch=o.当前渠道
@@ -636,7 +634,10 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
         sla_minutes = elapsed_minutes("o.sla_start", "o.delivered")
         sla_usable = f"{sla_minutes}>0"
         grouped = con.execute(f"""
-            WITH tgt(ch, days, basis) AS ({sla_sql}), scoped AS ({scoped})
+            WITH tgt(ch, days, basis) AS ({sla_sql}), scoped AS ({scoped}), measured AS (
+                SELECT *, CASE WHEN duration_min>0 THEN {workday_minutes("report_start", "delivered")} END AS workday_min
+                FROM scoped
+            )
             SELECT grouping(o.ctry) AS channel_total, o.key, o.ctry, count(*) AS orders,
                    count(o.delivered) AS signed,
                    count(*) FILTER (WHERE {usable}) AS samples,
@@ -644,13 +645,14 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
                    round(avg(o.duration_min) FILTER (WHERE {usable}) / 1440.0, 2) AS avgDays,
                    round(quantile_cont(o.duration_min, 0.9) FILTER (WHERE {usable}) / 1440.0, 2) AS p90Days,
                    {delivery_window_counts("o.duration_min")},
+                   {delivery_window_counts("o.workday_min", prefix="w", include_zero=True)},
                    count(*) FILTER (WHERE {sla_usable}) AS sla_samples,
                    count(*) FILTER (WHERE {sla_usable} AND {sla_minutes}<=o.sla_days*1440) AS within_sla,
                    count(*) FILTER (WHERE o.in_transit) AS inTransit,
                    count(*) FILTER (WHERE o.in_transit AND o.sla_start IS NOT NULL) AS slaInTransit,
                    count(*) FILTER (WHERE o.in_transit AND
                       date_diff('second',o.sla_start,?::TIMESTAMP)>o.sla_days*86400) AS overdue
-            FROM scoped o
+            FROM measured o
             GROUP BY GROUPING SETS ((o.key), (o.key, o.ctry))
             HAVING grouping(o.ctry)=1 OR count(*)>=200
             ORDER BY orders DESC,o.key,o.ctry
@@ -664,7 +666,9 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
     records, by_country = [], []
     for row in grouped:
         window_counts = {day: row.pop(f"d{day}") for day in DELIVERY_WINDOWS}
+        workday_counts = {day: row.pop(f"w{day}") for day in DELIVERY_WINDOWS}
         row["deliveryRates"] = delivery_rates(window_counts, row["orders"])
+        row["workdayDeliveryRates"] = delivery_rates(workday_counts, row["orders"])
         name = row["key"]
         if dimension == "group" and name == channel_groups.UNGROUPED:
             name = channel_groups.UNGROUPED_LABEL
@@ -675,6 +679,7 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
                 by_country.append({"key": row["key"], "ch": name, "ctry": row["ctry"], "n": row["orders"],
                                    "avgDays": row["avgDays"], "samples": row["samples"],
                                    "deliveryRates": row["deliveryRates"],
+                                   "workdayDeliveryRates": row["workdayDeliveryRates"],
                                    "rate6": pct(window_counts[6], row["samples"])})
             continue
         row.pop("ctry")

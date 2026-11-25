@@ -129,7 +129,8 @@ function reportPath(path) {
 }
 
 function reportStorageKey(path) {
-  const version = /^\/api\/(?:overview|channels)(?:\?|$)/.test(path) ? 'delivery-rates:' : '';
+  const version = /^\/api\/channels(?:\?|$)/.test(path) ? 'channel-workday-rates:' :
+    /^\/api\/overview(?:\?|$)/.test(path) ? 'delivery-rates:' : '';
   return reportCacheBase + encodeURIComponent(`${ME?.username || 'preview'}:${ME?.role || 'preview'}:${ME?.preview ? 'preview' : 'full'}`) + ':' + version + path;
 }
 
@@ -1615,6 +1616,10 @@ let CF = null;
 let channelRows = [];
 let channelBasis = 'shipped';
 let channelDimension = 'lastmile';
+let channelDayMode = 'calendar';
+const CHANNEL_DAY_LABELS = {calendar:'自然日', workday:'工作日'};
+const channelDeliveryRates = row => channelDayMode === 'workday' ? row.workdayDeliveryRates : row.deliveryRates;
+const channelDeliveryRate = (row, days) => channelDeliveryRates(row)?.[days];
 let channelComparisonExpanded = false;
 const CHANNEL_DIMENSIONS = {lastmile:'C 端渠道',group:'自定义渠道'};
 const CHANNEL_BASE_CRITERIA = {filters:{date_basis:DEFAULT_DATE_BASIS}, basis:'shipped', dimension:'lastmile'};
@@ -1870,6 +1875,8 @@ function syncChannelTimingControls() {
     button.setAttribute('aria-pressed', String(button.dataset.basis === channelBasis)));
   $('#channelDimension').querySelectorAll('button').forEach(button =>
     button.setAttribute('aria-pressed', String(button.dataset.dimension === channelDimension)));
+  $('#channelDayMode').querySelectorAll('button').forEach(button =>
+    button.setAttribute('aria-pressed', String(button.dataset.dayMode === channelDayMode)));
 }
 
 async function loadChannelFilters() {
@@ -1896,14 +1903,18 @@ async function loadChannelFilters() {
   updateDateOptions(CF, CF.date_basis.value);
   attachFilterPresets('channels', '渠道时效', host, CF, {
     onApply:() => scheduleReport('channels',loadChannels),
-    readExtra:() => ({basis:channelBasis, dimension:channelDimension}),
-    writeExtra:({basis, dimension}, base) => {
+    readExtra:() => ({basis:channelBasis, dimension:channelDimension,
+      ...(channelDayMode === 'workday' ? {dayMode:channelDayMode} : {})}),
+    writeExtra:({basis, dimension, dayMode}, base) => {
       channelBasis = Object.hasOwn(TIMING_BASIS, basis) ? basis : base.basis;
       channelDimension = Object.hasOwn(CHANNEL_DIMENSIONS, dimension) ? dimension : base.dimension;
+      channelDayMode = dayMode === 'workday' ? 'workday' : 'calendar';
       channelComparisonExpanded = false;
       syncChannelTimingControls();
+      if (renderedChannels) renderChannelRates(renderedChannels, channelRows);
     },
-    describeExtra:({basis, dimension}) => [CHANNEL_DIMENSIONS[dimension], TIMING_BASIS[basis]?.label].filter(Boolean),
+    describeExtra:({basis, dimension, dayMode}) =>
+      [CHANNEL_DIMENSIONS[dimension], TIMING_BASIS[basis]?.label, CHANNEL_DAY_LABELS[dayMode || 'calendar']].filter(Boolean),
   });
   if (renderedChannels) showChannelDataDate(renderedChannels);
 }
@@ -1912,7 +1923,8 @@ function showChannelDataDate(data) {
   if (!CF) return;
   const date = data.snapshotFiltersSkipped ? '实时筛选暂不可用，表格显示全量快照' :
     `${data.snapshotAt ? '离线快照 · ' : ''}数据截止 ${data.asof}`;
-  CF._info.textContent = date + (data.rows?.some(row => !row.deliveryRates) ? ' · 妥投率待同步' : '');
+  const missing = [...(data.rows || []), ...(data.byCountry || [])].some(row => !channelDeliveryRates(row));
+  CF._info.textContent = date + (missing ? ` · ${CHANNEL_DAY_LABELS[channelDayMode]}妥投率待同步` : '');
 }
 
 function renderChannelPeriod(data, filters) {
@@ -1975,7 +1987,7 @@ function renderChannelComparison(data, rows) {
   $('#channelChartEmpty').hidden = Boolean(visible.length);
   const label = TIMING_BASIS[data.basis].label;
   $('#channelChartScope').textContent = visible.length ?
-    `${label} · ${visible.length === rows.length ? '共' : '单量前'} ${visible.length} 个${isGroup ? '分组' : '渠道'} · 妥投率按全部有效单` : label;
+    `${label} · ${visible.length === rows.length ? '共' : '单量前'} ${visible.length} 个${isGroup ? '分组' : '渠道'} · ${CHANNEL_DAY_LABELS[channelDayMode]}妥投率按全部有效单` : label;
   $('#channelComparisonRows').innerHTML = visible.map(row => `<li class="compare-grid compare-row">
     <div class="compare-name">${channelLink(row)}</div>
     <div class="compare-samples"><span class="compare-metric-label">有效样本 / 单量</span>
@@ -1983,7 +1995,7 @@ function renderChannelComparison(data, rows) {
     </div>
     ${channelMeasure('平均用时', row.avgDays, ' 天', 'average')}
     ${channelMeasure('P90 用时', row.p90Days, ' 天', 'p90')}
-    ${DELIVERY_WINDOWS.map(days => channelMeasure(`${days} 天内妥投`, deliveryRate(row, days), '%', days === 6 ? 'rate-primary' : 'rate', days === 6)).join('')}
+    ${DELIVERY_WINDOWS.map(days => channelMeasure(`${days} 天内妥投`, channelDeliveryRate(row, days), '%', days === 6 ? 'rate-primary' : 'rate', days === 6)).join('')}
   </li>`).join('');
 }
 
@@ -2038,12 +2050,10 @@ function renderChannels(d, filters) {
   $('#channelCountryTitle').textContent = dimensionLabel + ' × 国家';
   $('#channelCountryLabel').textContent = dimensionLabel;
   renderedChannelFilters = d.snapshotFiltersSkipped ? {} : {...filters, date_basis: d.dateBasis || filters.date_basis};
-  showChannelDataDate(d);
   renderChannelPeriod(d, renderedChannelFilters);
 
   const rows = d.rows || [];
   channelRows = rows;
-  renderChannelComparison(d, rows);
   const totalOrders = rows.reduce((a, r) => a + r.orders, 0);
   const signed = rows.reduce((a, r) => a + r.signed, 0);
   const samples = rows.reduce((a, r) => a + r.samples, 0);
@@ -2057,12 +2067,22 @@ function renderChannels(d, filters) {
     ['SLA 在途超时', fmt(overAll), inAll ? `占可计时在途 ${fmt1(100 * overAll / inAll)}%` : '当前范围无可计时的在途单','clock',overAll ? 'warn' : 'green'],
   ].map(row => metricCard(...row)).join('');
 
+  renderChannelRates(d, rows);
+}
+
+function renderChannelRates(d, rows) {
+  showChannelDataDate(d);
+  renderChannelComparison(d, rows);
+  const dayLabel = CHANNEL_DAY_LABELS[channelDayMode];
+  $('#channelDetailedRateScope').textContent =
+    `${dayLabel}妥投率按全部有效单 · SLA 按当前渠道配置及有效签收样本 · 超时占比按可计时在途单`;
+  $('#channelCountryRateScope').textContent = `单量 ≥ 200 的组合 · ${dayLabel}妥投率`;
   $('#channelBody').innerHTML = rows.length ? rows.map(r => {
     return `<tr>
       <td>${channelLink(r)}</td>
       <td>${fmt(r.orders)}</td><td>${fmt(r.signed)}</td><td>${fmt(r.samples)}</td>
       <td>${measure(r.avgDays, ' 天')}</td><td>${measure(r.p90Days, ' 天')}</td>
-      ${DELIVERY_WINDOWS.map(days => `<td>${measure(deliveryRate(r, days), '%')}</td>`).join('')}
+      ${DELIVERY_WINDOWS.map(days => `<td>${measure(channelDeliveryRate(r, days), '%')}</td>`).join('')}
       <td title="SLA 有效签收样本 ${fmt(r.sla_samples)} 单"><b>${measure(r.slaRate, '%')}</b></td>
       <td>${fmt(r.inTransit)}</td>
       <td class="${r.overRate > 20 ? 'neg' : ''}">${fmt(r.overdue)}${r.overRate != null ? ` (${fmt1(r.overRate)}%)` : ''}</td>
@@ -2071,7 +2091,7 @@ function renderChannels(d, filters) {
 
   $('#chanCountryBody').innerHTML = (d.byCountry || []).map(r => `
     <tr><td><b>${esc(r.ch)}</b></td><td>${esc(r.ctry || '—')}</td><td>${fmt(r.n)}</td><td>${fmt(r.samples)}</td>
-    <td>${measure(r.avgDays, ' 天')}</td><td>${measure(deliveryRate(r, 2), '%')}</td><td>${measure(deliveryRate(r, 6), '%')}</td></tr>`).join('')
+    <td>${measure(r.avgDays, ' 天')}</td><td>${measure(channelDeliveryRate(r, 2), '%')}</td><td>${measure(channelDeliveryRate(r, 6), '%')}</td></tr>`).join('')
     || blankRow(7, '当前筛选无达到样本量的渠道组合');
 
 }
@@ -3440,6 +3460,14 @@ run(async function boot() {
     channelComparisonExpanded = !channelComparisonExpanded;
     renderChannelComparison(renderedChannels,channelRows);
   };
+  $('#channelDayMode').onclick = event => {
+    const button = event.target.closest('button[data-day-mode]');
+    if (!button || channelDayMode === button.dataset.dayMode) return;
+    channelDayMode = button.dataset.dayMode;
+    syncChannelTimingControls();
+    syncFilterPreset(CF);
+    if (renderedChannels) renderChannelRates(renderedChannels, channelRows);
+  };
   $('#channelBasis').onclick = event => {
     const button = event.target.closest('button[data-basis]');
     if (!CF || !button || channelBasis === button.dataset.basis) return;
@@ -3532,12 +3560,14 @@ run(async function boot() {
     if (!renderedChannels) return;
     const basis = TIMING_BASIS[renderedChannels.basis].label;
     const dimension = CHANNEL_DIMENSIONS[renderedChannels.dimension || 'lastmile'];
-    exportCsv(`渠道时效-${dimension}-${basis}`, [
+    const dayLabel = CHANNEL_DAY_LABELS[channelDayMode];
+    exportCsv(`渠道时效-${dimension}-${basis}-${dayLabel}`, [
     ['时效口径', () => basis],
+    ['妥投率计时', () => dayLabel],
     [dimension, row => row.channel], ['单量', row => row.orders], ['有妥投时间', row => row.signed],
     ['有效签收样本', row => row.samples], ['WMS 补算样本', row => row.fallbackSamples],
     ['平均时效（天）', row => row.avgDays], ['P90（天）', row => row.p90Days],
-    ...DELIVERY_WINDOWS.map(days => [`${days}天内妥投率（%，按总单量）`, row => deliveryRate(row, days)]),
+    ...DELIVERY_WINDOWS.map(days => [`${days}天内妥投率（${dayLabel}，%，按总单量）`, row => channelDeliveryRate(row, days)]),
     ['SLA 在途超时', row => row.overdue], ['SLA 有效签收样本', row => row.sla_samples], ['SLA达成率（%）', row => row.slaRate],
     ], channelRows);
   };

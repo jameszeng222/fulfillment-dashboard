@@ -28,6 +28,21 @@ def timing_start(basis, with_scans, online_start=ONLINE_START):
                {online} END"""
 
 
+def workday_minutes(start, end):
+    """Elapsed weekday minutes between two timestamps already in Beijing time."""
+    day_us = 86_400_000_000
+
+    def within_week(timestamp):
+        weekday = f"isodow({timestamp})"
+        return f"""(least({weekday}-1,5)*{day_us} +
+                   CASE WHEN {weekday}<=5 THEN
+                       date_diff('microsecond',date_trunc('day',{timestamp}),{timestamp})
+                   ELSE 0 END)"""
+
+    full_weeks = f"date_diff('week',date_trunc('week',{start}),date_trunc('week',{end}))"
+    return f"(({full_weeks}*{5 * day_us} + {within_week(end)} - {within_week(start)}) / 60000000.0)"
+
+
 _TRANSPORT_STAGES = "'PickedUp','Departure','Arrival'"
 _TRANSPORT_SUBSTATUSES = "'InTransit_PickedUp','InTransit_Departure','InTransit_Arrival'," \
     "'InTransit_CustomsProcessing','InTransit_CustomsReleased','InTransit_Other'"
