@@ -273,7 +273,7 @@ function applyMeta(data) {
       const values = filters === UF && key === 'cn' ? options.filter(option =>
         !['us','usa','united states','united states of america'].includes(option.v.toLowerCase().trim())) :
         filters === AF && key === 'channel' ? (META.alertChannels || []) : options;
-      filters[key].setOptions(values, values.reduce((sum,row) => sum + row.n, 0), key !== 'channel_group');
+      filters[key].setOptions(values, values.reduce((sum,row) => sum + row.n, 0), key !== 'channel_group' || filters === CF);
     }
     if (filters.date_basis) updateDateOptions(filters, filters.date_basis.value);
   }
@@ -564,7 +564,12 @@ function multiFilter(def, onChange) {
     set value(value) {
       selected.clear();
       for (const code of Array.isArray(value) ? value : [value]) {
-        if (def.options.some(option => option.v === code)) selected.add(code);
+        if (!code) continue;
+        if (!def.options.some(option => option.v === code)) {
+          if (!def.preserveMissing) continue;
+          def.options = [...def.options, {v:code, t:code, n:0}];
+        }
+        selected.add(code);
       }
       update();
       renderOptions();
@@ -712,6 +717,7 @@ function makeFilters(host, defs, onChange) {
   const info = el('span', '', ''); info.style.cssText = 'font-size:11.5px;color:#8b98ab';
   host.appendChild(info);
   refs._info = info;
+  Object.defineProperty(refs, 'validate', {value: () => !timeRange || timeRange.validate()});
   return refs;
 }
 
@@ -749,6 +755,8 @@ let DF = null;
 let renderedDash = null;
 const DEFAULT_DATE_BASIS = 'shipped';
 const dateBasisLabel = {paid: '支付时间', created: '创建时间', shipped: '出库时间'};
+const commonFilterLabels = {month:'月份', week:'周次', wh:'仓库', pf:'平台', cr:'后台物流商',
+  channel:'当前渠道', channel_group:'自定义渠道', lastmile:'C 端渠道', cn:'国家'};
 const trend = { created: [], shipped: [], paid: [], filters: {}, span: 45, basis: DEFAULT_DATE_BASIS };
 const channelGroupPath = '/api/overview/channel-groups';
 let channelGroups;
@@ -883,8 +891,7 @@ function commonDateFilters() {
   return [
     dateBasisFilter(),
     { type: 'time-range' },
-    ...Object.entries({ month: '月份', week: '周次', wh: '仓库', pf: '平台', cr: '后台物流商',
-      channel: '当前渠道', channel_group: '自定义渠道', lastmile: 'C 端渠道', cn: '国家' }).map(([key, label]) =>
+    ...Object.entries(commonFilterLabels).map(([key, label]) =>
       ({ type: 'multi', key, label, options: META.filterOptions[key] || [] })),
   ];
 }
@@ -1565,10 +1572,192 @@ let channelBasis = 'shipped';
 let channelDimension = 'lastmile';
 let channelComparisonExpanded = false;
 const CHANNEL_DIMENSIONS = {lastmile:'C 端渠道',group:'自定义渠道'};
+const CHANNEL_BASE_CRITERIA = {filters:{date_basis:DEFAULT_DATE_BASIS}, basis:'shipped', dimension:'lastmile'};
 let renderedChannels = null;
 let renderedChannelFilters = {};
+let channelPresetState = {items:[], defaultId:''};
+let channelPresetId = '';
+
+function channelPresetStorageKey() {
+  return 'fulfillment-channel-presets-v1:' + encodeURIComponent(ME.username || 'preview');
+}
+
+function readChannelPresets() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(channelPresetStorageKey()));
+    if (Array.isArray(saved?.items)) {
+      const items = saved.items.filter(item => typeof item?.id === 'string' && typeof item.name === 'string' &&
+        item.criteria?.filters && Object.hasOwn(dateBasisLabel, item.criteria.filters.date_basis) &&
+        Object.hasOwn(TIMING_BASIS, item.criteria.basis) && Object.hasOwn(CHANNEL_DIMENSIONS, item.criteria.dimension));
+      return {items, defaultId: items.some(item => item.id === saved.defaultId) ? saved.defaultId : ''};
+    }
+  } catch { /* A blocked or invalid preference store has no saved combinations. */ }
+  return {items:[], defaultId:''};
+}
+
+function storeChannelPresets(state, selectedId = channelPresetId) {
+  localStorage.setItem(channelPresetStorageKey(), JSON.stringify(state));
+  channelPresetState = state;
+  channelPresetId = selectedId;
+  renderChannelPresetChoices();
+}
+
+function currentChannelCriteria() {
+  return {filters:readF(CF), basis:channelBasis, dimension:channelDimension};
+}
+
+function channelQuery({filters, basis, dimension}) {
+  return reportPath('/api/channels?' + qs({...filters, basis, ...(dimension === 'group' ? {dimension} : {})}));
+}
+
+function syncChannelPresetChoice() {
+  const query = channelQuery(currentChannelCriteria());
+  const selected = channelPresetState.items.find(item => item.id === channelPresetId && channelQuery(item.criteria) === query);
+  $('#channelPresetChoice').value = selected?.id ||
+    (query === channelQuery(CHANNEL_BASE_CRITERIA) ? 'base' : '');
+}
+
+function renderChannelPresetChoices() {
+  if (!CF) return;
+  const temporary = new Option('临时筛选', '');
+  temporary.disabled = true;
+  $('#channelPresetChoice').replaceChildren(temporary, new Option('站点默认', 'base'),
+    ...channelPresetState.items.map(item =>
+      new Option(item.name + (item.id === channelPresetState.defaultId ? ' · 默认' : ''), item.id)));
+  $('#channelPresetManage').disabled = !channelPresetState.items.length;
+  syncChannelPresetChoice();
+}
+
+function syncChannelTimingControls() {
+  $('#channelBasisNote').textContent = TIMING_BASIS[channelBasis].note;
+  $('#channelBasis').querySelectorAll('button').forEach(button =>
+    button.setAttribute('aria-pressed', String(button.dataset.basis === channelBasis)));
+  $('#channelDimension').querySelectorAll('button').forEach(button =>
+    button.setAttribute('aria-pressed', String(button.dataset.dimension === channelDimension)));
+}
+
+function applyChannelCriteria({filters, basis, dimension}) {
+  CF.date_basis.value = filters.date_basis;
+  updateDateOptions(CF, CF.date_basis.value);
+  for (const [key, control] of Object.entries(CF)) {
+    if (key !== '_info' && key !== 'date_basis') control.value = filters[key] ?? '';
+  }
+  CF.validate();
+  channelBasis = basis;
+  channelDimension = dimension;
+  channelComparisonExpanded = false;
+  syncChannelTimingControls();
+  syncChannelPresetChoice();
+}
+
+function channelCriteriaSummary({filters, basis, dimension}) {
+  const summary = [CHANNEL_DIMENSIONS[dimension], TIMING_BASIS[basis].label, '按' + dateBasisLabel[filters.date_basis]];
+  if (filters.start) summary.push('开始 ' + filters.start.replace('T', ' '));
+  if (filters.end) summary.push('结束 ' + filters.end.replace('T', ' '));
+  if (filters.min_n) summary.push('单量 ≥ ' + filters.min_n);
+  for (const [key, label] of Object.entries(commonFilterLabels)) {
+    const values = filters[key];
+    if (!values?.length) continue;
+    const options = META.dateOptions?.[filters.date_basis]?.[key] || META.filterOptions[key] || [];
+    const labels = values.slice(0, 2).map(code => options.find(option => option.v === code)?.t || code);
+    summary.push(label + ' ' + labels.join('、') + (values.length > 2 ? ' 等 ' + values.length + ' 项' : ''));
+  }
+  return summary.join(' · ');
+}
+
+function setupChannelPresets() {
+  channelPresetState = readChannelPresets();
+  const dialog = $('#channelPresetDialog'), form = $('#channelPresetForm');
+  const edit = $('#channelPresetEdit'), name = $('#channelPresetName');
+  const replace = $('#channelPresetReplace'), makeDefault = $('#channelPresetDefault');
+  const error = $('#channelPresetError');
+  const selected = () => channelPresetState.items.find(item => item.id === edit.value);
+  const showSummary = () => {
+    const item = selected();
+    $('#channelPresetSummary').textContent = channelCriteriaSummary(item && !replace.checked ? item.criteria : currentChannelCriteria());
+  };
+  const fill = () => {
+    const item = selected();
+    name.value = item?.name || '';
+    replace.checked = false;
+    makeDefault.checked = Boolean(item && item.id === channelPresetState.defaultId);
+    $('#channelPresetReplaceLabel').hidden = !item;
+    $('#channelPresetDelete').hidden = !item;
+    error.textContent = '';
+    showSummary();
+  };
+  const open = create => {
+    if (create && !CF.validate()) return;
+    channelPresetState = readChannelPresets();
+    renderChannelPresetChoices();
+    if (!create && !channelPresetState.items.length) return;
+    $('#channelPresetTitle').textContent = create ? '保存当前筛选' : '管理筛选组合';
+    $('#channelPresetEditLabel').hidden = create;
+    edit.replaceChildren(new Option('', ''), ...channelPresetState.items.map(item => new Option(item.name, item.id)));
+    const applied = channelPresetState.items.find(item => item.id === $('#channelPresetChoice').value);
+    edit.value = create ? '' : applied?.id || channelPresetState.defaultId || channelPresetState.items[0].id;
+    fill();
+    dialog.showModal();
+    (create ? name : edit).focus();
+  };
+  $('#channelPresetChoice').onchange = event => {
+    const item = channelPresetState.items.find(entry => entry.id === event.target.value);
+    channelPresetId = item?.id || '';
+    applyChannelCriteria(item?.criteria || CHANNEL_BASE_CRITERIA);
+    scheduleReport('channels', loadChannels);
+  };
+  $('#channelPresetAdd').onclick = () => open(true);
+  $('#channelPresetManage').onclick = () => open(false);
+  $('#channelPresetClose').onclick = () => dialog.close();
+  edit.onchange = fill;
+  replace.onchange = showSummary;
+  form.onsubmit = event => {
+    event.preventDefault();
+    const saved = readChannelPresets();
+    const previous = saved.items.find(item => item.id === edit.value);
+    const label = name.value.trim();
+    if (!label) { error.textContent = '请输入组合名称。'; return; }
+    if (edit.value && !previous) {
+      error.textContent = '此组合已在其他标签页删除，请重新打开管理。'; return;
+    }
+    if (saved.items.some(item => item.id !== previous?.id && item.name.toLocaleLowerCase() === label.toLocaleLowerCase())) {
+      error.textContent = '已有同名组合，请换个名称。'; return;
+    }
+    if ((!previous || replace.checked) && !CF.validate()) {
+      error.textContent = '请先修正页面上的筛选时间。'; return;
+    }
+    const id = previous?.id || crypto.getRandomValues(new Uint32Array(4)).join('-');
+    const criteria = previous && !replace.checked ? previous.criteria : currentChannelCriteria();
+    const item = {id, name:label, criteria};
+    const items = previous ? saved.items.map(entry => entry.id === id ? item : entry) : [...saved.items, item];
+    const defaultId = makeDefault.checked ? id : saved.defaultId === id ? '' : saved.defaultId;
+    try {
+      storeChannelPresets({items, defaultId}, !previous || replace.checked ? id : channelPresetId);
+    } catch { error.textContent = '浏览器无法保存组合，请检查站点存储设置。'; return; }
+    dialog.close();
+    toast(makeDefault.checked ? '已保存并设为默认组合' : '已保存筛选组合');
+  };
+  $('#channelPresetDelete').onclick = () => {
+    const item = selected();
+    if (!item || !window.confirm(`删除筛选组合「${item.name}」？`)) return;
+    const saved = readChannelPresets();
+    try {
+      storeChannelPresets({items:saved.items.filter(entry => entry.id !== item.id),
+        defaultId:saved.defaultId === item.id ? '' : saved.defaultId});
+    } catch { error.textContent = '浏览器无法保存这一更改。'; return; }
+    dialog.close();
+    toast('已删除筛选组合');
+  };
+  window.addEventListener('storage', event => {
+    if (event.key !== null && event.key !== channelPresetStorageKey()) return;
+    if (dialog.open) return;
+    channelPresetState = readChannelPresets();
+    renderChannelPresetChoices();
+  });
+}
 
 async function loadChannelFilters() {
+  if (CF) return;
   const host = $('#channelFilters');
   host.textContent = '正在读取筛选项…';
   try {
@@ -1581,10 +1770,18 @@ async function loadChannelFilters() {
   }
   if (CF) return;
   CF = makeFilters(host, [
-    ...commonDateFilters(),
+    ...commonDateFilters().map(def => def.type === 'multi' ? {...def, preserveMissing:true} : def),
     { type: 'select', label: '最少单量（默认 100）', key: 'min_n', options: [1, 10, 30, 100, 500] },
-  ], () => scheduleReport('channels',loadChannels));
-  updateDateOptions(CF, CF.date_basis.value);
+  ], () => {
+    updateDateOptions(CF, CF.date_basis.value);
+    syncChannelPresetChoice();
+    scheduleReport('channels',loadChannels);
+  });
+  const preset = channelPresetState.items.find(item => item.id === channelPresetState.defaultId);
+  channelPresetId = preset?.id || '';
+  applyChannelCriteria(preset?.criteria || CHANNEL_BASE_CRITERIA);
+  renderChannelPresetChoices();
+  $('#channelPresets').hidden = false;
   if (renderedChannels) showChannelDataDate(renderedChannels);
 }
 
@@ -1634,11 +1831,12 @@ function channelLink(row) {
     `<button type="button" class="order-link" data-channel-track="${esc(row.key)}">${esc(row.channel)}</button>`;
 }
 
-function channelMeasure(label, value, unit, scale, tone) {
-  const width = value == null ? 0 : Math.max(0, Math.min(100, value / scale * 100));
+function channelMeasure(label, value, unit, tone, meter = false) {
+  const bar = meter && value != null ?
+    `<span class="compare-bar" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, value))}%"></i></span>` : '';
   return `<div class="compare-metric compare-${tone}">
     <span class="compare-metric-label">${label}</span><b>${measure(value, unit)}</b>
-    <span class="compare-bar" aria-hidden="true"><i style="width:${width}%"></i></span>
+    ${bar}
   </div>`;
 }
 
@@ -1655,27 +1853,26 @@ function renderChannelComparison(data, rows) {
   const label = TIMING_BASIS[data.basis].label;
   $('#channelChartScope').textContent = visible.length ?
     `${label} · ${isGroup ? '按当前渠道归组 · ' : ''}${visible.length === eligible.length ? '全部' : '单量靠前的'} ${visible.length} 个有样本${isGroup ? '分组' : '渠道'} · P90 表示约 90% 的有效样本在该用时内签收` : label;
-  const maxDays = Math.max(1, ...visible.flatMap(row => [row.avgDays || 0, row.p90Days || 0]));
   $('#channelComparisonRows').innerHTML = visible.map(row => `<li class="compare-grid compare-row">
     <div class="compare-name">${channelLink(row)}</div>
     <div class="compare-samples"><span class="compare-metric-label">有效样本 / 单量</span>
       <b>${fmt(row.samples)}</b><small>/ ${fmt(row.orders)}</small>
     </div>
-    ${channelMeasure('平均用时', row.avgDays, ' 天', maxDays, 'average')}
-    ${channelMeasure('90% 签收用时', row.p90Days, ' 天', maxDays, 'p90')}
-    ${[3, 5, 6, 7].map(days => channelMeasure(`${days} 天内签收`, row[`rate${days}`], '%', 100, 'rate')).join('')}
+    ${channelMeasure('平均用时', row.avgDays, ' 天', 'average')}
+    ${channelMeasure('P90 用时', row.p90Days, ' 天', 'p90')}
+    ${[3, 5, 6, 7].map(days => channelMeasure(`${days} 天内签收`, row[`rate${days}`], '%', days === 6 ? 'rate-primary' : 'rate', days === 6)).join('')}
   </li>`).join('');
 }
 
 async function loadChannels() {
-  const queryDimension = channelDimension === 'group' ? {dimension:'group'} : {};
-  if (!CF) fetchReport(reportPath('/api/channels?' + qs({date_basis:'shipped',basis:channelBasis,...queryDimension}))).catch(() => {});
-  if (!CF) await loadChannelFilters();
-  if (!CF || VIEW !== 'channels') return;
-  const basis = channelBasis;
-  const dimension = channelDimension;
-  const filters = readF(CF || {});
-  if (CF) updateDateOptions(CF, filters.date_basis);
+  if (!CF) {
+    const preset = channelPresetState.items.find(item => item.id === channelPresetState.defaultId);
+    fetchReport(channelQuery(preset?.criteria || CHANNEL_BASE_CRITERIA)).catch(() => {});
+    await loadChannelFilters();
+  }
+  if (!CF || VIEW !== 'channels' || channelMode !== 'timing' || !CF.validate()) return;
+  const criteria = currentChannelCriteria();
+  const {dimension, filters} = criteria;
   const loading = $('#channelLoading');
   const results = $('#channelResults');
   const currentResult = Boolean(renderedChannels);
@@ -1683,7 +1880,7 @@ async function loadChannels() {
   loading.textContent = '正在读取渠道时效…';
   results.setAttribute('aria-busy', 'true');
   try {
-    await presentReport('channels', '/api/channels?' + qs({...filters,basis,...(dimension === 'group' ? {dimension} : {})}),
+    await presentReport('channels', channelQuery(criteria),
       d => { if (dimension === channelDimension && (d.dimension || 'lastmile') === dimension) renderChannels(d, filters); },
       {signal: AbortSignal.timeout(18_000)}, {oldVisible: currentResult});
   } catch (error) {
@@ -2988,6 +3185,7 @@ run(async function boot() {
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => showView(b.dataset.v));
   setupUsControls();
   setupTrackExceptionControls();
+  setupChannelPresets();
   const periods = [...document.querySelectorAll('#dailyPeriod button')];
   periods.forEach(button => button.onclick = () => {
     if (trend.span === Number(button.dataset.days)) return;
@@ -3059,11 +3257,12 @@ run(async function boot() {
   };
   $('#channelDimension').onclick = event => {
     const button = event.target.closest('button[data-dimension]');
-    if (!button || channelDimension === button.dataset.dimension) return;
+    if (!CF || !button || channelDimension === button.dataset.dimension) return;
     channelDimension = button.dataset.dimension;
     channelComparisonExpanded = false;
-    $('#channelDimension').querySelectorAll('button').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
-    run(loadChannels);
+    syncChannelTimingControls();
+    syncChannelPresetChoice();
+    scheduleReport('channels', loadChannels);
   };
   $('#channelCompareToggle').onclick = () => {
     if (renderedChannels?.dimension !== 'group') return;
@@ -3072,13 +3271,11 @@ run(async function boot() {
   };
   $('#channelBasis').onclick = event => {
     const button = event.target.closest('button[data-basis]');
-    if (!button || channelBasis === button.dataset.basis) return;
+    if (!CF || !button || channelBasis === button.dataset.basis) return;
     channelBasis = button.dataset.basis;
-    $('#channelBasisNote').textContent = TIMING_BASIS[channelBasis].note;
-    for (const item of $('#channelBasis').querySelectorAll('button')) {
-      item.setAttribute('aria-pressed', String(item === button));
-    }
-    run(loadChannels);
+    syncChannelTimingControls();
+    syncChannelPresetChoice();
+    scheduleReport('channels', loadChannels);
   };
   $('#ruleList').onclick = event => {
     const config = event.target.closest('[data-config-rule]');

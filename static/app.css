@@ -753,3 +753,111 @@ button.rank-row:hover { background: #f4f7fc; }
   .tblwrap { max-height: min(540px, 65vh); }
   .kv { grid-template-columns: repeat(2,minmax(0,1fr)); }
 }
+
+/* 渠道时效 · 暖白内容区、铺开的筛选与连续指标带 */
+#v-channels {
+  --channel-paper: #f7f6f2;
+  --channel-surface: #fffefa;
+  --channel-line: #e1e3dc;
+  --channel-text: #172639;
+  --channel-muted: #566271;
+  --channel-moss: #355643;
+  --channel-selection: #e8efe5;
+}
+.main:has(#v-channels.on) { background: #f7f6f2; }
+#v-channels .page-head h1 { color: var(--channel-text); }
+#v-channels .page-head p { color: var(--channel-muted); }
+#channelTabs {
+  width: 100%; gap: 24px; padding: 0; border: 0; border-radius: 0;
+  border-bottom: 1px solid var(--channel-line); background: transparent;
+}
+#channelTabs button, #channelTabs button[aria-pressed="true"] {
+  padding: 9px 2px 10px; border-radius: 0; box-shadow: none; background: transparent;
+}
+#channelTabs button[aria-pressed="true"] {
+  color: var(--channel-text); box-shadow: inset 0 -2px var(--nav-bg);
+}
+#channelTabs button .ui-icon { color: #667383; }
+.channel-operations, #channelTimingPane .card {
+  border: 1px solid var(--channel-line); border-radius: 12px; background: var(--channel-surface); box-shadow: none;
+}
+.channel-operations { padding: 15px 18px; display: grid; min-width: 0; gap: 13px; }
+.channel-presets { display:flex; flex-wrap:wrap; align-items:center; gap: 7px 9px; min-width: 0; }
+.channel-presets label { font-weight: 650; color: var(--channel-text); }
+.channel-presets select {
+  max-width: 100%; min-width: min(100%, 154px); width: auto; min-height: 33px; padding: 5px 8px;
+  border: 1px solid var(--channel-line); border-radius: 6px; background: var(--channel-surface);
+  color: var(--channel-text); font: inherit; font-size: 12px;
+}
+.channel-presets select:has(option:checked:not([value=""]):not([value="base"])) {
+  background: var(--channel-selection); color: var(--channel-moss);
+}
+.channel-presets .btn { min-height: 32px; }
+#channelFilters { padding: 0; border: 0; border-radius: 0; background: transparent; gap: 8px; box-shadow: none; }
+#channelFilters .filter-select, #channelFilters .date-filter input, #channelFilters .multi-trigger {
+  border-color: var(--channel-line); background: var(--channel-surface);
+}
+#channelFilters .multi-filter.has-selection .multi-trigger,
+#channelFilters .filter-select:has(option:checked:not([value=""])):not([data-filter-key="date_basis"]),
+#channelFilters .filter-select[data-filter-key="date_basis"]:has(option:checked:not([value="shipped"])) {
+  background: var(--channel-selection); color: var(--channel-moss); border-color: #bfcfbd;
+}
+#channelFilters .multi-filter.has-selection .multi-trigger strong { color: var(--channel-moss); background: transparent; }
+#channelTimingPane .channel-basis { padding: 0; gap: 8px 22px; }
+#channelTimingPane .channel-basis .tabs { background: #f0f1ec; border-color: transparent; }
+#channelTimingPane .channel-basis .tabs button { padding: 4px 8px; }
+#channelTimingPane .channel-basis .tabs button .ui-icon { display: none; }
+#channelTimingPane .channel-basis .tabs button[aria-pressed="true"] {
+  color: var(--channel-moss); background: var(--channel-selection); box-shadow: none;
+}
+#channelTimingPane .channel-basis p { color: var(--channel-muted); font-size: 11.5px; }
+.channel-results { gap: 20px; }
+#channelKpi {
+  gap: 0; grid-template-columns: .85fr 1.23fr 1.15fr 1.05fr;
+  padding: 8px 0 5px;
+}
+#channelKpi .kpi {
+  min-width: 0; background: transparent; border-radius: 0; border: 0; box-shadow: none; padding: 0 19px;
+}
+#channelKpi .kpi + .kpi { border-left: 1px solid var(--channel-line); }
+#channelKpi .kpi-label { justify-content: flex-start; }
+#channelKpi .section-icon { display: none; }
+#channelKpi .kpi .val { color: var(--channel-text); font-size: clamp(22px, 2.15vw, 30px); line-height: 1.25; }
+#channelKpi .kpi.tone-warn .section-icon {
+  display: inline-flex; order: -1; width: 16px; height: 16px; border: 0; background: transparent; color: #8b5526;
+}
+#channelKpi .kpi.tone-warn .lbl, #channelKpi .kpi.tone-warn .val { color: #8b5526; }
+#channelKpi .kpi .fl, #channelKpi .kpi .lbl { color: var(--channel-muted); }
+#channelTimingPane .channel-comparison .table-head { padding: 17px 18px 5px; }
+#channelTimingPane .channel-comparison .table-head h2 { font-size: 17px; }
+#exportChannels { display: inline-flex; align-items: center; gap: 5px; }
+#exportChannels .ui-icon { width: 13px; height: 13px; color: var(--channel-muted); }
+#channelComparisonPeriod { padding: 0 18px 11px; }
+#channelComparisonPeriod span { padding: 0; background: transparent; color: var(--channel-muted); }
+#channelComparisonPeriod span + span::before { content: "·"; margin-right: 6px; }
+#channelComparisonPeriod.is-snapshot span { color: #8b5526; }
+#channelTimingPane .compare-head, #channelTimingPane .tbl th { background: #eef0ea; }
+#channelTimingPane .compare-row { background: var(--channel-surface); border-top-color: #edf0e9; min-height: 47px; }
+#channelTimingPane .compare-row:hover { background: #f9faf5; }
+#channelTimingPane .compare-row b { font-weight: 500; }
+#channelTimingPane .compare-rate-primary b { font-weight: 700; }
+#channelTimingPane .compare-bar { height: 4px; background: #e7ece5; }
+#channelTimingPane .compare-bar i { background: #698c72; }
+.channel-preset-dialog .settings-fields { grid-template-columns: minmax(0, 1fr); }
+.channel-preset-summary { overflow-wrap: anywhere; }
+.channel-preset-dialog .settings-check[hidden] { display: none; }
+.channel-preset-dialog #channelPresetDelete { margin-right: auto; }
+@media (min-width: 781px) {
+  #channelTimingPane .compare-grid { padding-inline: 18px; }
+  #channelTimingPane .compare-grid > :not(:first-child) { text-align: right; }
+}
+@media (max-width: 800px) {
+  #channelKpi { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 12px; }
+  #channelKpi .kpi:nth-child(3) { border-left: 0; }
+}
+@media (max-width: 560px) {
+  .channel-operations { padding: 11px; }
+  #channelKpi .kpi { padding: 0 8px; }
+  #channelTimingPane .channel-comparison .table-head { padding-inline: 12px; }
+  #channelComparisonPeriod { padding-inline: 12px; }
+}

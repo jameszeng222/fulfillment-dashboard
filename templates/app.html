@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261124-quiet-controls">
+<link rel="stylesheet" href="/static/app.css?v=20261125-channel-presets">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -19,6 +19,7 @@
   <symbol id="i-warehouse" viewBox="0 0 24 24"><path d="M3 21V8l9-5 9 5v13ZM7 21V11h10v10M7 15h10M7 18h10"/></symbol>
   <symbol id="i-truck" viewBox="0 0 24 24"><path d="M3 17V6h11v11m0-8h4l3 4v4h-2m-8 0h4M3 17h4"/><circle cx="9" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></symbol>
   <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4M4 16v4h16v-4"/></symbol>
   <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a16 16 0 0 1 0 18m0-18a16 16 0 0 0 0 18"/></symbol>
   <symbol id="i-split" viewBox="0 0 24 24"><path d="M12 21v-5a5 5 0 0 0-1.5-3.5L5 7m7 11v-3a4 4 0 0 1 1.2-2.8L19 6M5 11V6h5m4 0h5v5"/></symbol>
   <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5.5 8a7 7 0 0 1 11.3-2L20 9M4 15l3.2 3a7 7 0 0 0 11.3-2"/></symbol>
@@ -196,38 +197,48 @@
 
       <!-- ============ 渠道时效 ============ -->
       <section class="view" id="v-channels">
-        <div class="page-head"><div><h1>渠道时效</h1><p>比较 C 端物流渠道和自定义渠道分组的签收时效。妥投优先用 17TRACK，缺失时按仓库及承运商时间口径用 WMS 补算。</p></div></div>
+        <div class="page-head"><div><h1>渠道时效</h1><p>比较不同渠道的签收时效与承诺达成率。</p></div></div>
         <div class="tabs" id="channelTabs" aria-label="渠道时效分类">
           <button type="button" class="tab-toned tone-blue" data-pane="timing" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg>时效对比</button>
           <button type="button" class="tab-toned tone-warn" data-pane="exceptions" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg>轨迹异常</button>
         </div>
         <div class="workspace-stack" id="channelTimingPane">
+        <section class="channel-operations" aria-label="筛选和对比口径">
+        <div class="channel-presets" id="channelPresets" hidden>
+          <label for="channelPresetChoice">组合筛选</label>
+          <select id="channelPresetChoice"></select>
+          <button type="button" class="btn ghost sm" id="channelPresetAdd">保存当前筛选</button>
+          <button type="button" class="btn ghost sm" id="channelPresetManage">管理组合</button>
+        </div>
         <div class="filters" id="channelFilters"></div>
-        <div class="card channel-basis">
+        <div class="channel-basis">
           <div class="channel-dimension-control"><span>对比维度</span>
             <div class="tabs" id="channelDimension" role="group" aria-label="渠道对比维度">
               <button type="button" class="tab-toned tone-cyan" data-dimension="lastmile" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>C 端渠道</button>
               <button type="button" class="tab-toned tone-green" data-dimension="group" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg>自定义渠道</button>
             </div>
           </div>
+          <div class="channel-dimension-control"><span>时效口径</span>
           <div class="tabs" id="channelBasis" role="group" aria-label="时效统计口径">
             <button type="button" class="tab-toned tone-blue" data-basis="paid" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-wallet"/></svg>支付到签收</button>
             <button type="button" class="tab-toned tone-green" data-basis="shipped" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-warehouse"/></svg>出库到签收</button>
             <button type="button" class="tab-toned tone-cyan" data-basis="online" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-scan"/></svg>上网到签收</button>
           </div>
+          </div>
           <p id="channelBasisNote" aria-live="polite">从出库（北京时间）到妥投。计算时统一时区。</p>
         </div>
+        </section>
         <div id="channelLoading" class="card" role="status">正在读取渠道时效…</div>
         <div id="channelResults" class="channel-results" hidden>
         <div class="kpis" id="channelKpi"></div>
         <section class="card channel-comparison" aria-labelledby="channelComparisonTitle">
           <div class="ct table-head"><div>
-            <h2 id="channelComparisonTitle"><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span><span id="channelComparisonName">C 端渠道时效对比</span></h2>
-            <p class="tip icon-caption" id="channelChartScope"></p>
-          </div></div>
+            <h2 id="channelComparisonTitle"><span id="channelComparisonName">C 端渠道时效对比</span></h2>
+            <p class="tip" id="channelChartScope"></p>
+          </div><button type="button" class="btn ghost sm" id="exportChannels"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg>导出结果</button></div>
           <div class="channel-period" id="channelComparisonPeriod" aria-label="统计时间范围"></div>
           <div class="compare-grid compare-head" id="channelCompareHead" aria-hidden="true">
-            <div id="channelCompareLabel">C 端渠道</div><div>有效样本 / 单量</div><div>平均用时</div><div>90% 签收用时 <small>P90</small></div>
+            <div id="channelCompareLabel">C 端渠道</div><div>有效样本 / 单量</div><div>平均用时</div><div>P90 用时</div>
             <div>3 天内签收</div><div>5 天内签收</div><div>6 天内签收</div><div>7 天内签收</div>
           </div>
           <ul class="compare-list" id="channelComparisonRows" aria-label="渠道时效图与数据"></ul>
@@ -235,7 +246,7 @@
           <p class="tip compare-empty" id="channelChartEmpty" hidden>当前筛选和口径下没有有效签收样本。</p>
         </section>
         <div class="card table-card">
-          <div class="ct table-head"><div><h2 id="channelPerformanceTitle">C 端渠道表现对比</h2><p class="tip">SLA 达成率和超时在途按每单「当前渠道」配置的起点与承诺天数计算。超时占比仅统计可计时的在途单。</p></div><button type="button" class="btn ghost sm" id="exportChannels">导出结果</button></div>
+          <div class="ct table-head"><div><h2 id="channelPerformanceTitle">C 端渠道表现对比</h2><p class="tip">SLA 达成率和超时在途按每单「当前渠道」配置的起点与承诺天数计算。超时占比仅统计可计时的在途单。</p></div></div>
           <div class="channel-period" id="channelTablePeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:none">
             <table class="tbl">
@@ -618,6 +629,27 @@
       <button type="submit" class="btn" id="trackRuleSave">保存规则</button></footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261124-filter-visuals" defer></script>
+<dialog class="settings-dialog channel-preset-dialog" id="channelPresetDialog" aria-labelledby="channelPresetTitle">
+  <form id="channelPresetForm">
+    <header>
+      <h2 id="channelPresetTitle">筛选组合</h2>
+      <button type="button" class="btn ghost sm" id="channelPresetClose">关闭</button>
+    </header>
+    <div class="settings-fields">
+      <label id="channelPresetEditLabel">选择组合<select id="channelPresetEdit"></select></label>
+      <label>组合名称<input id="channelPresetName" maxlength="60" required placeholder="例如 美国海外仓"></label>
+      <label class="settings-check" id="channelPresetReplaceLabel" hidden><input type="checkbox" id="channelPresetReplace">用当前页面的筛选条件覆盖此组合</label>
+      <p class="tip channel-preset-summary" id="channelPresetSummary"></p>
+      <label class="settings-check"><input type="checkbox" id="channelPresetDefault">设为默认组合</label>
+      <p class="tip channel-preset-summary">组合保存在此浏览器。重新打开或刷新页面后，进入渠道时效时自动应用默认组合。</p>
+    </div>
+    <p class="settings-error" id="channelPresetError" role="alert"></p>
+    <footer>
+      <button type="button" class="btn ghost" id="channelPresetDelete" hidden>删除组合</button>
+      <button type="submit" class="btn" id="channelPresetSave">保存组合</button>
+    </footer>
+  </form>
+</dialog>
+<script src="/static/app.js?v=20261125-channel-presets" defer></script>
 </body>
 </html>
