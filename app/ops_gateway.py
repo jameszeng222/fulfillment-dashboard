@@ -28,8 +28,21 @@ def https_url(name):
 
 
 def site_origin():
+    """Public HTTPS origin of this site.
+
+    Falls back to the origin of OPS_REDIRECT_URI so a managed deployment that
+    only injects the OAuth settings still gets Secure cookies and an exact
+    redirect_uri check. The callback path is validated by the caller.
+    """
     value = https_url("OPS_SITE_ORIGIN")
-    return value.rstrip("/") if value and urlsplit(value).path in ("", "/") and not urlsplit(value).query else ""
+    if value:
+        parts = urlsplit(value)
+        return value.rstrip("/") if parts.path in ("", "/") and not parts.query else ""
+    callback = urlsplit(https_url("OPS_REDIRECT_URI") or "")
+    if callback.scheme == "https" and callback.hostname and not (callback.username or callback.password
+                                                                or callback.query or callback.fragment):
+        return f"{callback.scheme}://{callback.netloc}"
+    return ""
 
 
 def required_url(name):

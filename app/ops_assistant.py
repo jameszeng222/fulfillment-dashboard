@@ -120,7 +120,7 @@ class Mcp:
         self.session = ""
         self.version = ""
 
-    def send(self, name, params=None, *, notification=False):
+    def send(self, name, params=None, *, notification=False, timeout=15):
         rpc_id = uuid4().hex
         message = {"jsonrpc": "2.0", "method": name}
         if not notification:
@@ -132,7 +132,7 @@ class Mcp:
             headers["Mcp-Session-Id"] = self.session
         if self.version:
             headers["MCP-Protocol-Version"] = self.version
-        with upstream(self.url, key=self.key, method="POST", headers=headers,
+        with upstream(self.url, key=self.key, method="POST", headers=headers, timeout=timeout,
                       body=json.dumps(message).encode()) as response:
             if response.status >= 300:
                 upstream_error("MCP", response.status)
@@ -152,12 +152,15 @@ class Mcp:
         self.send("notifications/initialized", notification=True)
 
     def tools(self):
+        # The hub decides which tools are authorized for this site. An explicit
+        # whitelist narrows that set for business use; empty means every
+        # authorized tool may be discovered and called.
         allowed = options("OPS_MCP_ALLOWED_TOOLS")
         tools, cursor = [], None
         for _ in range(20):
             result = self.send("tools/list", {"cursor": cursor} if cursor else {})
             for item in result.get("tools", []):
-                if isinstance(item, dict) and item.get("name") in allowed:
+                if isinstance(item, dict) and (not allowed or item.get("name") in allowed):
                     tools.append({key: item[key] for key in ("name", "title", "description", "inputSchema") if key in item})
             cursor = result.get("nextCursor")
             if not cursor:
@@ -344,12 +347,13 @@ def tool_list(request: Request):
 @router.post("/api/mcp/call")
 def tool_call(body: ToolCall, request: Request):
     authorize(request, "mcp")
-    if body.name not in options("OPS_MCP_ALLOWED_TOOLS"):
+    allowed = options("OPS_MCP_ALLOWED_TOOLS")
+    if allowed and body.name not in allowed:
         raise GatewayError("MCP_FORBIDDEN", "此工具未加入本站业务白名单。", 403)
     with mcp_session() as client:
         if not any(item["name"] == body.name for item in client.tools()):
             raise GatewayError("MCP_FORBIDDEN", "该工具未获中枢授权。", 403)
-        result = client.send("tools/call", {"name": body.name, "arguments": body.arguments})
+        result = client.send("tools/call", {"name": body.name, "arguments": body.arguments}, timeout=60)
     text = "\n".join(part["text"] for part in result.get("content", [])
                      if isinstance(part, dict) and isinstance(part.get("text"), str))
     return {"ok": not result.get("isError"), "text": text, "raw": result}

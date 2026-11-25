@@ -48,3 +48,15 @@ node --test test/cloudflare-edge.mjs
 - **`main` 是正式发布分支**。发布相关文件更新后，由 [GitHub Actions](https://github.com/jameszeng222/fulfillment-dashboard/actions/workflows/deploy-fulfillment-monitor.yml) 部署 Cloudflare Pages。
 - 修改本机 Python API 后，同时更新生产电脑上的工作区并重启 Origin 任务。边缘发布与本机数据服务分别验收。
 - 原静态看板已退役。详细的任务配置、备份和故障排查见[交接文档](交接文档.md)。
+
+### 中枢站点部署
+
+站点 `logistics-dashboard` 发布到 `https://biz.htwig.com:18700`，入口是 `deploy/run_site.py`：
+
+~~~bash
+python3 deploy/run_site.py           # 前台启动，监听 $PORT（默认 18700）
+python3 deploy/run_site.py --check   # 只打印配置摘要
+~~~
+
+登录、站点 MCP、AI 与技能都通过后端环境变量接入，密钥不进仓库、不进页面。
+平台托管发布、上传文件清单和验收步骤见 [deploy/README.md](deploy/README.md)。

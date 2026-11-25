@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from app import alert_history, cloud_login, core, ops_auth
+from app import alert_history, cloud_login, core, ops_auth, ops_gateway
 from app.main import app
 from init_ops import SCHEMA, hash_pw
 
@@ -59,7 +59,15 @@ class Browser:
                  "server": ("site.example", 443), "headers": [(k.encode(), v.encode()) for k, v in headers.items()]}
         events = []
 
+        delivered = False
+
         async def receive():
+            nonlocal delivered
+            if delivered:
+                # Streaming responses wait for the client to go away; report the
+                # body once so FileResponse does not wait for a real connection.
+                return {"type": "http.disconnect"}
+            delivered = True
             return {"type": "http.request", "body": body}
 
         async def send(message):
@@ -545,7 +553,37 @@ class OpsTests(unittest.TestCase):
             self.mcp_status = status
             self.assertEqual(json.loads(self.browser.request("/api/mcp/tools")[2])["error"], code)
 
+    def test_origin_is_derived_when_only_oauth_env_is_injected(self):
+        with patch.dict("os.environ", {"OPS_SITE_ORIGIN": ""}):
+            self.assertEqual(ops_gateway.site_origin(), SITE)
+            self.assertTrue(ops_auth.enabled())
+            csrf = self.login()
+            self.assertEqual(self.browser.request("/api/mcp/tools")[0], 200)
+            self.assertIn("x-csrf-token", csrf)
+
+    def test_mcp_without_whitelist_uses_hub_authorization(self):
+        with patch.dict("os.environ", {"OPS_MCP_ALLOWED_TOOLS": ""}):
+            csrf = self.login()
+            status, _, body = self.browser.request("/api/mcp/tools")
+            self.assertEqual(status, 200)
+            self.assertEqual([tool["name"] for tool in json.loads(body)["tools"]],
+                             ["warehouse_summary", "not_allowed"])
+            self.assertEqual(self.browser.request("/api/mcp/call", "POST",
+                                                  {"name": "warehouse_summary"}, csrf)[0], 200)
+
+    def test_first_login_signup_uses_configured_role(self):
+        with core.ops() as db:
+            db.execute("DELETE FROM ops_oauth_identity")
+        with patch.dict("os.environ", {"OPS_ALLOW_VIEWER_SIGNUP": "true",
+                                       "OPS_SIGNUP_ROLE": "logistics"}):
+            status, headers, _ = self.browser.request(self.begin("/"))
+            self.assertEqual((status, headers[b"location"]), (303, b"/"))
+            profile = json.loads(self.browser.request("/api/me")[2])
+            self.assertTrue(profile["username"].startswith("ops:"))
+            self.assertEqual((profile["role"], profile["can_edit"]), ("logistics", True))
+
     def test_models_and_skill(self):
+
         csrf = self.login()
         self.assertEqual(len(json.loads(self.browser.request("/api/ai/models")[2])["models"]), 3)
         self.assertEqual(self.browser.request("/api/skills/sample/instructions")[0], 200)

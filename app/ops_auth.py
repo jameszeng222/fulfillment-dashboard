@@ -124,6 +124,11 @@ def provider_key():
     return https_url("OPS_USERINFO_URL") + "|" + setting("OPS_CLIENT_ID")
 
 
+def signup_role():
+    value = setting("OPS_SIGNUP_ROLE").lower()
+    return value if value in core.ROLES else "viewer"
+
+
 def resolve_user(profile):
     provider, subject = provider_key(), profile["sub"]
     with core.ops() as db:
@@ -139,8 +144,9 @@ def resolve_user(profile):
         username = "ops:" + digest(provider + "\0" + subject)
         display = next((name.strip()[:120] for name in (profile.get("name"), profile.get("preferred_username"))
                         if isinstance(name, str) and name.strip()), "中枢用户")
+        role = signup_role()
         db.execute("""INSERT INTO users(username,password_hash,display_name,role,created_at)
-                      VALUES (?,?,?,'viewer',?)""", (username, "!ops-sso", display, core.now_iso()))
+                      VALUES (?,?,?,?,?)""", (username, "!ops-sso", display, role, core.now_iso()))
         db.execute("INSERT INTO ops_oauth_identity VALUES (?,?,?)", (provider, subject, username))
         return username
 
