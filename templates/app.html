@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261125-compact-copy">
+<link rel="stylesheet" href="/static/app.css?v=20261125-delivery-rates">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -230,20 +230,20 @@
           <div class="channel-period" id="channelComparisonPeriod" aria-label="统计时间范围"></div>
           <div class="compare-grid compare-head" id="channelCompareHead" aria-hidden="true">
             <div id="channelCompareLabel">C 端渠道</div><div>有效样本 / 单量</div><div>平均用时</div><div>P90 用时</div>
-            <div>3 天内签收</div><div>5 天内签收</div><div>6 天内签收</div><div>7 天内签收</div>
+            <div>2 天内妥投</div><div>3 天内妥投</div><div>5 天内妥投</div><div>6 天内妥投</div><div>7 天内妥投</div>
           </div>
           <ul class="compare-list" id="channelComparisonRows" aria-label="渠道时效图与数据"></ul>
           <div class="channel-compare-expand" id="channelCompareExpand" hidden><button type="button" id="channelCompareToggle" class="btn ghost sm"></button></div>
-          <p class="tip compare-empty" id="channelChartEmpty" hidden>暂无有效签收样本。</p>
+          <p class="tip compare-empty" id="channelChartEmpty" hidden>暂无符合条件的渠道。</p>
         </section>
         <div class="card table-card">
-          <div class="ct table-head"><div><h2 id="channelPerformanceTitle">C 端渠道表现对比</h2><p class="tip">SLA 按当前渠道配置 · 超时占比仅计可计时在途单</p></div></div>
+          <div class="ct table-head"><div><h2 id="channelPerformanceTitle">C 端渠道表现对比</h2><p class="tip">妥投率按全部有效单 · SLA 按当前渠道配置及有效签收样本 · 超时占比按可计时在途单</p></div></div>
           <div class="channel-period" id="channelTablePeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:none">
             <table class="tbl">
               <thead><tr>
                 <th id="channelTableLabel">C 端显示物流渠道</th><th>单量</th><th>有妥投时间</th><th>有效样本</th><th>平均时效</th><th>P90</th>
-                <th>3天达成</th><th>5天达成</th><th>6天达成</th><th>7天达成</th><th>SLA 达成率</th>
+                <th>2 天内妥投</th><th>3 天内妥投</th><th>5 天内妥投</th><th>6 天内妥投</th><th>7 天内妥投</th><th>SLA 达成率</th>
                 <th>在途</th><th>超时在途</th>
               </tr></thead>
               <tbody id="channelBody"></tbody>
@@ -255,7 +255,7 @@
           <div class="channel-period" id="channelCountryPeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:460px">
             <table class="tbl">
-              <thead><tr><th id="channelCountryLabel">C 端渠道</th><th>国家</th><th>单量</th><th>有效样本</th><th>平均时效</th><th>6天达成</th></tr></thead>
+              <thead><tr><th id="channelCountryLabel">C 端渠道</th><th>国家</th><th>单量</th><th>有效样本</th><th>平均时效</th><th>2 天内妥投</th><th>6 天内妥投</th></tr></thead>
               <tbody id="chanCountryBody"></tbody>
             </table>
           </div>
@@ -453,7 +453,7 @@
                 <tr><th scope="row">下单 / 出库 / 上网到妥投</th><td>妥投时间减所选起点，换算为天。缺有效起点或妥投时间、耗时小于等于 0 的记录不计入平均时效及达成率。</td></tr>
                 <tr><th scope="row">妥投覆盖率</th><td>有有效妥投时间的履约单数 ÷ 本次筛选范围内的履约单数。取消单仅计入出库单状态统计。</td></tr>
                 <tr><th scope="row">海外仓发货占比</th><td>海外仓已出库履约单 ÷ 筛选范围内全部已出库履约单。按仓库代码判断，WINIT、NF01 和 MGZYTH01 归为海外仓，未归类仓库单独显示。</td></tr>
-                <tr><th scope="row">总览 6 天达成率</th><td>出库后 6 个自然日内签收的履约单数 ÷ 出库到签收的有效样本数。缺少出库或有效签收时间、签收时间不晚于出库的记录不计入样本。按实际经过时间计算，6 天等于 144 小时。</td></tr>
+                <tr><th scope="row">2、3、5、6、7 天内妥投率</th><td>在对应天数内确认妥投的履约单数 ÷ 筛选范围内全部有效履约单数。在途（含未满观察期）、超时、缺可用时效的单均计入分母。总览按出库起算，渠道时效按所选起点。每天按实际经过的 24 小时计算。</td></tr>
                 <tr><th scope="row">订单拆单率</th><td>拆单订单数 ÷ 筛选命中的可识别订单数。按平台和 ERP 订单号识别，一张订单有两个或以上有效履约单即为拆单。筛选命中任一履约单即纳入订单，判定类型时看整张订单。同仓指所有履约单仓库相同，异仓指涉及两个或以上仓库。仓库缺失且无法判定时单独显示。</td></tr>
                 <tr><th scope="row">承诺时效达成率</th><td>在承诺天数内妥投的有效样本数 ÷ 有效签收样本数。按每单的「当前渠道」配置确定 SLA 起点与承诺天数，渠道表现按 C 端显示物流渠道对比。</td></tr>
                 <tr><th scope="row">平均时效和 P90</th><td>使用当前选择的时效起点及有效妥投样本。P90 是时效的第 90 百分位，约 90% 的有效样本在这个耗时内妥投。</td></tr>
@@ -527,7 +527,7 @@
           </table></div>
         </section>
         <div class="card table-card" id="rules-sla" hidden>
-          <div class="ct table-head"><div><h2><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg></span>渠道 SLA 规则</h2><p class="tip icon-caption">按当前渠道配置计时起点与承诺天数</p></div>
+          <div class="ct table-head"><div><h2><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg></span>渠道 SLA 规则</h2><p class="tip icon-caption">按当前渠道配置计时起点与承诺天数 · 目标对照以有效签收样本为分母</p></div>
             <div class="toolbar" id="slaGroupFilter">
               <input type="search" id="slaSearch" class="inline-search" placeholder="搜索当前渠道…" aria-label="搜索当前渠道">
             </div>
@@ -649,6 +649,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261125-compact-copy" defer></script>
+<script src="/static/app.js?v=20261125-delivery-rates" defer></script>
 </body>
 </html>

@@ -12,6 +12,8 @@ const dt = s => s ? String(s).replace('T', ' ').slice(0, 16) : '—';
 const trackTime = (local, utc) => local ||
   (utc && utc !== 'NaT' ? `${String(utc).replace('T', ' ').slice(0, 19)} UTC` : '时间未提供');
 const measure = (value, unit = '') => value == null ? '—' : fmt1(value) + unit;
+const DELIVERY_WINDOWS = [2, 3, 5, 6, 7];
+const deliveryRate = (row, days) => row.deliveryRates?.[days];
 const durationText = value => {
   if (value == null || !Number.isFinite(value) || value < 0) return '—';
   const minutes = Math.floor(value);
@@ -127,7 +129,8 @@ function reportPath(path) {
 }
 
 function reportStorageKey(path) {
-  return reportCacheBase + encodeURIComponent(`${ME?.username || 'preview'}:${ME?.role || 'preview'}:${ME?.preview ? 'preview' : 'full'}`) + ':' + path;
+  const version = /^\/api\/(?:overview|channels)(?:\?|$)/.test(path) ? 'delivery-rates:' : '';
+  return reportCacheBase + encodeURIComponent(`${ME?.username || 'preview'}:${ME?.role || 'preview'}:${ME?.preview ? 'preview' : 'full'}`) + ':' + version + path;
 }
 
 function reportRecord(path) {
@@ -945,7 +948,8 @@ function renderDash(d, f) {
     ['妥投覆盖率', measure(k.signRate, '%'), `含 WMS 补算 ${fmt(k.fallbackSigned)} 单`, 'check', 'green'],
     ['仓内处理', k.inboundHours == null ? '—' : `${fmt1(k.inboundHours)} <small>小时</small>`, '履约单创建 → 出库', 'warehouse', 'violet'],
     ['物流运输', k.transitDays == null ? '—' : `${fmt1(k.transitDays)} <small>天</small>`, `出库 → 妥投 · ${fmt(k.transitSamples)} 单`, 'truck', 'cyan'],
-    ['6 天达成率', measure(k.rate6, '%'), '出库 → 签收 · 有效样本中 ≤6 天', 'clock', 'green'],
+    ['6 天内妥投率', measure(deliveryRate(k, 6), '%'),
+      k.deliveryRates ? `出库起算 · 2 天内 ${measure(deliveryRate(k, 2), '%')}` : '妥投率待同步', 'clock', 'green'],
   ];
   $('#dashKpi').innerHTML = defs.map(row => metricCard(...row)).join('');
 
@@ -1906,8 +1910,9 @@ async function loadChannelFilters() {
 
 function showChannelDataDate(data) {
   if (!CF) return;
-  CF._info.textContent = data.snapshotFiltersSkipped ? '实时筛选暂不可用，表格显示全量快照' :
+  const date = data.snapshotFiltersSkipped ? '实时筛选暂不可用，表格显示全量快照' :
     `${data.snapshotAt ? '离线快照 · ' : ''}数据截止 ${data.asof}`;
+  CF._info.textContent = date + (data.rows?.some(row => !row.deliveryRates) ? ' · 妥投率待同步' : '');
 }
 
 function renderChannelPeriod(data, filters) {
@@ -1961,17 +1966,16 @@ function channelMeasure(label, value, unit, tone, meter = false) {
 
 function renderChannelComparison(data, rows) {
   const isGroup = data.dimension === 'group';
-  const eligible = rows.filter(row => row.samples > 0);
-  const visible = isGroup && channelComparisonExpanded ? eligible : eligible.slice(0, 8);
-  const expand = isGroup && eligible.length > 8;
+  const visible = isGroup && channelComparisonExpanded ? rows : rows.slice(0, 8);
+  const expand = isGroup && rows.length > 8;
   $('#channelCompareExpand').hidden = !expand;
-  $('#channelCompareToggle').textContent = channelComparisonExpanded ? '收起其余分组' : `展开其余 ${eligible.length - 8} 个分组`;
+  $('#channelCompareToggle').textContent = channelComparisonExpanded ? '收起其余分组' : `展开其余 ${rows.length - 8} 个分组`;
   $('#channelCompareToggle').setAttribute('aria-expanded', String(isGroup && channelComparisonExpanded));
   $('#channelCompareHead').hidden = !visible.length;
   $('#channelChartEmpty').hidden = Boolean(visible.length);
   const label = TIMING_BASIS[data.basis].label;
   $('#channelChartScope').textContent = visible.length ?
-    `${label} · ${visible.length === eligible.length ? '共' : '单量前'} ${visible.length} 个有样本${isGroup ? '分组' : '渠道'}` : label;
+    `${label} · ${visible.length === rows.length ? '共' : '单量前'} ${visible.length} 个${isGroup ? '分组' : '渠道'} · 妥投率按全部有效单` : label;
   $('#channelComparisonRows').innerHTML = visible.map(row => `<li class="compare-grid compare-row">
     <div class="compare-name">${channelLink(row)}</div>
     <div class="compare-samples"><span class="compare-metric-label">有效样本 / 单量</span>
@@ -1979,7 +1983,7 @@ function renderChannelComparison(data, rows) {
     </div>
     ${channelMeasure('平均用时', row.avgDays, ' 天', 'average')}
     ${channelMeasure('P90 用时', row.p90Days, ' 天', 'p90')}
-    ${[3, 5, 6, 7].map(days => channelMeasure(`${days} 天内签收`, row[`rate${days}`], '%', days === 6 ? 'rate-primary' : 'rate', days === 6)).join('')}
+    ${DELIVERY_WINDOWS.map(days => channelMeasure(`${days} 天内妥投`, deliveryRate(row, days), '%', days === 6 ? 'rate-primary' : 'rate', days === 6)).join('')}
   </li>`).join('');
 }
 
@@ -2058,18 +2062,17 @@ function renderChannels(d, filters) {
       <td>${channelLink(r)}</td>
       <td>${fmt(r.orders)}</td><td>${fmt(r.signed)}</td><td>${fmt(r.samples)}</td>
       <td>${measure(r.avgDays, ' 天')}</td><td>${measure(r.p90Days, ' 天')}</td>
-      <td>${measure(r.rate3, '%')}</td><td>${measure(r.rate5, '%')}</td>
-      <td><b>${measure(r.rate6, '%')}</b></td><td>${measure(r.rate7, '%')}</td>
+      ${DELIVERY_WINDOWS.map(days => `<td>${measure(deliveryRate(r, days), '%')}</td>`).join('')}
       <td title="SLA 有效签收样本 ${fmt(r.sla_samples)} 单"><b>${measure(r.slaRate, '%')}</b></td>
       <td>${fmt(r.inTransit)}</td>
       <td class="${r.overRate > 20 ? 'neg' : ''}">${fmt(r.overdue)}${r.overRate != null ? ` (${fmt1(r.overRate)}%)` : ''}</td>
     </tr>`;
-  }).join('') : blankRow(13, '没有满足条件的渠道');
+  }).join('') : blankRow(14, '没有满足条件的渠道');
 
   $('#chanCountryBody').innerHTML = (d.byCountry || []).map(r => `
     <tr><td><b>${esc(r.ch)}</b></td><td>${esc(r.ctry || '—')}</td><td>${fmt(r.n)}</td><td>${fmt(r.samples)}</td>
-    <td>${measure(r.avgDays, ' 天')}</td><td>${measure(r.rate6, '%')}</td></tr>`).join('')
-    || blankRow(6, '当前筛选无达到样本量的渠道组合');
+    <td>${measure(r.avgDays, ' 天')}</td><td>${measure(deliveryRate(r, 2), '%')}</td><td>${measure(deliveryRate(r, 6), '%')}</td></tr>`).join('')
+    || blankRow(7, '当前筛选无达到样本量的渠道组合');
 
 }
 
@@ -3534,8 +3537,7 @@ run(async function boot() {
     [dimension, row => row.channel], ['单量', row => row.orders], ['有妥投时间', row => row.signed],
     ['有效签收样本', row => row.samples], ['WMS 补算样本', row => row.fallbackSamples],
     ['平均时效（天）', row => row.avgDays], ['P90（天）', row => row.p90Days],
-    ['3天达成率（%）', row => row.rate3], ['5天达成率（%）', row => row.rate5],
-    ['6天达成率（%）', row => row.rate6], ['7天达成率（%）', row => row.rate7],
+    ...DELIVERY_WINDOWS.map(days => [`${days}天内妥投率（%，按总单量）`, row => deliveryRate(row, days)]),
     ['SLA 在途超时', row => row.overdue], ['SLA 有效签收样本', row => row.sla_samples], ['SLA达成率（%）', row => row.slaRate],
     ], channelRows);
   };

@@ -25,9 +25,21 @@ from .waybill import key_sql, normalized as normalize_waybill
 router = APIRouter(prefix="/api")
 
 TRACK_STATUS_LABEL = "t.状态标签"
+DELIVERY_WINDOWS = (2, 3, 5, 6, 7)
 
 
 # ---------------------------------------------------------------- 公共
+
+def delivery_window_counts(minutes):
+    return ", ".join(
+        f"count(*) FILTER (WHERE {minutes}>0 AND {minutes}<={day * 1440}) AS d{day}"
+        for day in DELIVERY_WINDOWS
+    )
+
+
+def delivery_rates(counts, orders):
+    return {str(day): round(100 * counts[day] / orders, 1) if orders else None for day in DELIVERY_WINDOWS}
+
 
 def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="",
           alias="o", lastmile="", channel="", date_basis=DEFAULT_DATE_BASIS, week="", require_time=False,
@@ -245,12 +257,9 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
                    avg(仓内分钟) FILTER (WHERE 仓内分钟 > 0) hm,
                    avg(物流分钟) FILTER (WHERE 物流分钟 > 0) tm,
                    count(*) FILTER (WHERE 物流分钟 > 0) sgn,
-                   count(*) FILTER (WHERE 物流分钟 > 0 AND 物流分钟 <= 4320) d3,
-                   count(*) FILTER (WHERE 物流分钟 > 0 AND 物流分钟 <= 7200) d5,
-                   count(*) FILTER (WHERE 物流分钟 > 0 AND 物流分钟 <= 8640) d6,
-                   count(*) FILTER (WHERE 物流分钟 > 0 AND 物流分钟 <= 10080) d7,
                    count(*) FILTER (WHERE {DELIVERY_SOURCE}='WMS') fallback_signed,
-                   count(*) FILTER (WHERE {DELIVERY_SOURCE}='WMS' AND 物流分钟>0) fallback_samples
+                   count(*) FILTER (WHERE {DELIVERY_SOURCE}='WMS' AND 物流分钟>0) fallback_samples,
+                   {delivery_window_counts("物流分钟")}
             FROM overview_timing
         """).fetchone()
         warehouse_shipping = _warehouse_shipping_mix(con)
@@ -305,9 +314,8 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
 
     n = k[0] or 0
     sgn = k[5] or 0
-
-    def rate(x):
-        return round(100.0 * x / sgn, 1) if sgn else None
+    window_counts = dict(zip(DELIVERY_WINDOWS, k[8:], strict=True))
+    sample_rates = delivery_rates(window_counts, sgn)
 
     return core.clean({
         "asof": str(asof),
@@ -317,9 +325,11 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
             "inboundHours": round(k[3] / 60.0, 2) if k[3] else None,
             "transitDays": round(k[4] / 1440.0, 2) if k[4] else None,
             "transitSamples": sgn,
-            "rate3": rate(k[6]), "rate5": rate(k[7]), "rate6": rate(k[8]), "rate7": rate(k[9]),
+            "deliveryRates": delivery_rates(window_counts, n),
+            # Existing API fields continue to mean rates among valid timing samples.
+            **{f"rate{day}": sample_rates[str(day)] for day in DELIVERY_WINDOWS if day != 2},
             "signed": int(k[2] or 0),
-            "fallbackSigned": k[10], "fallbackTransitSamples": k[11],
+            "fallbackSigned": k[6], "fallbackTransitSamples": k[7],
         },
         "monthly": monthly, "byCarrier": by_carrier, "byWarehouse": by_wh,
         "warehouseShipping": warehouse_shipping, "orderSplit": order_split,
@@ -633,10 +643,7 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
                    count(*) FILTER (WHERE {usable} AND o.delivery_source='WMS') AS fallbackSamples,
                    round(avg(o.duration_min) FILTER (WHERE {usable}) / 1440.0, 2) AS avgDays,
                    round(quantile_cont(o.duration_min, 0.9) FILTER (WHERE {usable}) / 1440.0, 2) AS p90Days,
-                   count(*) FILTER (WHERE {usable} AND o.duration_min<=4320) AS d3,
-                   count(*) FILTER (WHERE {usable} AND o.duration_min<=7200) AS d5,
-                   count(*) FILTER (WHERE {usable} AND o.duration_min<=8640) AS d6,
-                   count(*) FILTER (WHERE {usable} AND o.duration_min<=10080) AS d7,
+                   {delivery_window_counts("o.duration_min")},
                    count(*) FILTER (WHERE {sla_usable}) AS sla_samples,
                    count(*) FILTER (WHERE {sla_usable} AND {sla_minutes}<=o.sla_days*1440) AS within_sla,
                    count(*) FILTER (WHERE o.in_transit) AS inTransit,
@@ -656,6 +663,8 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
 
     records, by_country = [], []
     for row in grouped:
+        window_counts = {day: row.pop(f"d{day}") for day in DELIVERY_WINDOWS}
+        row["deliveryRates"] = delivery_rates(window_counts, row["orders"])
         name = row["key"]
         if dimension == "group" and name == channel_groups.UNGROUPED:
             name = channel_groups.UNGROUPED_LABEL
@@ -665,12 +674,13 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
             if len(by_country) < 40:
                 by_country.append({"key": row["key"], "ch": name, "ctry": row["ctry"], "n": row["orders"],
                                    "avgDays": row["avgDays"], "samples": row["samples"],
-                                   "rate6": pct(row["d6"], row["samples"])})
+                                   "deliveryRates": row["deliveryRates"],
+                                   "rate6": pct(window_counts[6], row["samples"])})
             continue
         row.pop("ctry")
         row["channel"] = name
         for day in (3, 5, 6, 7):
-            row[f"rate{day}"] = pct(row.pop(f"d{day}"), row["samples"])
+            row[f"rate{day}"] = pct(window_counts[day], row["samples"])
         row["slaRate"] = pct(row.pop("within_sla"), row["sla_samples"])
         row["overRate"] = pct(row["overdue"], row["slaInTransit"])
         records.append(row)
