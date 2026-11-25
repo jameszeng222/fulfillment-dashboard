@@ -18,7 +18,7 @@ import alerts
 import build_orders
 import ingest
 import track17
-from app import analytics_snapshot, core, rules, tracking_archive, tracking_freshness, tracking_sync, track_lookup
+from app import analytics_snapshot, core, rules, tracking_archive, tracking_freshness, tracking_full, tracking_sync, track_lookup
 from app.tracking_clock import ensure_display_columns
 from backfill_tracking import REGISTRY_BATCH, ReadOnlyClient, RetryableRequestError, chunks, fetch_batch
 
@@ -213,7 +213,7 @@ def apply_pushes(con, pushes):
     return outcomes
 
 
-def prepare(stage, folder, track_limit=None, import_archive=False, repair=False):
+def prepare(stage, folder, track_limit=None, import_archive=False, repair=False, full=None):
     source = core.DUCK_DB
     started = core.now_iso()
     token = os.environ.get("TRACK17_TOKEN", "").strip()
@@ -222,7 +222,10 @@ def prepare(stage, folder, track_limit=None, import_archive=False, repair=False)
     pushes = tracking_sync.ready_pushes() if track_limit is None else []
     with closing(core.duck()) as con:
         exports = new_exports(con, folder) if track_limit is None else []
-        candidates = tracking_freshness.candidates(con, track_limit, repair=repair) if track_limit is not None else []
+        candidates = []
+        if track_limit is not None:
+            candidates = tracking_freshness.candidates(con, track_limit, repair=repair,
+                                                       numbers=full["numbers"] if full else None)
         if not exports and not candidates and not pushes and not import_archive and not repair:
             return 3
         if source.with_suffix(source.suffix + ".wal").exists():
@@ -259,6 +262,7 @@ def prepare(stage, folder, track_limit=None, import_archive=False, repair=False)
     stage.with_suffix(".json").write_text(json.dumps({
         "source_stamp": original_stamp, "started": started, "exports": imported,
         "tracking": tracking, "pushes": outcomes, "archive_count": archive_count,
+        "full": full,
     }, ensure_ascii=False), encoding="utf-8")
     return 0
 
@@ -289,7 +293,13 @@ def publish(stage, run_id=None):
                 archive_job = "17TRACK 历史轨迹导入"
                 jobs.append((archive_job, {"events": payload["archive_count"]}))
                 names.append(archive_job)
-            if payload["tracking"] is not None:
+            full = payload.get("full")
+            if full:
+                tracking = payload["tracking"]
+                counts = {**tracking, "skipped": len(full["numbers"]) - tracking["queried"]}
+                tracking_full.complete_batch(ops, full["id"], full["numbers"], counts)
+                names.append(tracking_full.JOB)
+            elif payload["tracking"] is not None:
                 if run_id is None:
                     jobs.append((tracking_sync.POLL_JOB, payload["tracking"]))
                 else:
@@ -314,9 +324,43 @@ def publish(stage, run_id=None):
     return 0
 
 
+def full_batch(run_id):
+    job = tracking_full.get_job()
+    if not job or job["id"] != run_id or job["status"] not in tracking_full.ACTIVE:
+        return 0
+    if "total" not in job["detail"]:
+        with closing(core.duck()) as con:
+            numbers = tracking_freshness.full_numbers(con)
+        tracking_full.seed(run_id, numbers)
+        print(f"17TRACK 全量拉取：共 {len(numbers):,} 个运单", flush=True)
+        if not numbers:
+            return 0
+    with core.ops() as db:
+        numbers = tracking_full.next_numbers(db, run_id, TRACK_LIMIT)
+    if not numbers:
+        raise RuntimeError("全量拉取队列和任务进度不一致")
+    stage = core.DUCK_DB.with_name(f".rolling-full-{run_id}.duckdb")
+    files = (stage, stage.with_suffix(".json"), stage.with_suffix(".duckdb.wal"))
+    try:
+        for path in files:
+            path.unlink(missing_ok=True)
+        result = prepare(stage, INPUT, track_limit=TRACK_LIMIT, full={"id": run_id, "numbers": numbers})
+        if result == 3:
+            with core.ops() as db:
+                db.execute("BEGIN IMMEDIATE")
+                tracking_full.complete_batch(db, run_id, numbers, {"skipped": len(numbers)})
+            return 0
+        if result == 0:
+            return publish(stage)
+        return result
+    finally:
+        for path in files:
+            path.unlink(missing_ok=True)
+
+
 def main():
     cli = argparse.ArgumentParser(description=__doc__)
-    cli.add_argument("action", choices=["prepare", "publish", "poll-start", "poll-idle", "poll-failed"])
+    cli.add_argument("action", choices=["prepare", "publish", "poll-start", "poll-idle", "poll-failed", "full-batch"])
     cli.add_argument("--stage", type=Path)
     cli.add_argument("--run-id", type=int)
     cli.add_argument("--reason", choices=["credentials", "prepare", "publish", "interrupted"])
@@ -325,6 +369,10 @@ def main():
     cli.add_argument("--import-archive", action="store_true", help="复制历史轨迹到快照，不调用 17TRACK")
     cli.add_argument("--repair", action="store_true", help="重建签收统计和轨迹筛选表，并仅重查承运商匹配异常")
     args = cli.parse_args()
+    if args.action == "full-batch":
+        if args.run_id is None:
+            cli.error("需要全量拉取任务编号")
+        return full_batch(args.run_id)
     if args.action == "poll-start":
         print(tracking_sync.begin_poll())
         return 0

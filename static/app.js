@@ -2798,13 +2798,66 @@ const syncTime = value => value && Number.isFinite(Date.parse(value)) ? syncCloc
 const sourceRows = rows => rows.map(([label, value]) =>
   `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('');
 
+const syncStatusPath = '/api/17track/sync-status';
+
 async function loadSyncStatus() {
-  return presentReport('trackSync', '/api/17track/sync-status', renderSyncStatus,
+  return presentReport('trackSync', syncStatusPath, renderSyncStatus,
     {cache: 'no-store'}, {force: true, oldVisible: Boolean($('#pollSummary').children.length)});
+}
+
+let fullPullStarting = false;
+let fullPullState = null;
+let fullPullAvailable = false;
+
+function renderFullPull(job, available) {
+  fullPullState = job;
+  fullPullAvailable = available;
+  const button = $('#startFullPull');
+  const progress = $('#fullPullProgress');
+  const detail = job?.detail || {};
+  const active = ['queued', 'running'].includes(job?.status);
+  const resume = job?.status === 'failed' && detail.total != null;
+  button.disabled = !ME.can_edit || !available || active || fullPullStarting;
+  button.textContent = active ? '全量拉取中' : resume ? '继续拉取轨迹' : '全量拉取轨迹';
+  progress.hidden = !detail.total;
+  if (detail.total) {
+    progress.max = detail.total;
+    progress.value = detail.processed;
+  }
+  const reason = {credentials:'本机 17TRACK 凭据不可用', launch:'本机任务启动失败', batch:'批次处理失败'};
+  const label = !job ? '暂无全量拉取任务' : job.status === 'queued' ? '已排队，等待本机运行' :
+    job.status === 'running' ? '正在分批查询与入库' : job.status === 'ok' ? '本轮已完成' :
+      reason[detail.reason] || '任务失败';
+  const counts = detail.total == null ? '' :
+    ` · 已处理 ${fmt(detail.processed)} / ${fmt(detail.total)} 个运单 · 取回逐条轨迹 ${fmt(detail.with_events)}`;
+  const outcomes = [['账号未登记', detail.unmatched], ['承运商不匹配', detail.carrier_conflict],
+    ['未返回轨迹', detail.empty], ['查询失败', detail.read_error], ['本地轨迹较新', detail.older],
+    ['已不符合查询范围', detail.skipped]].filter(([, count]) => count)
+    .map(([name, count]) => `${name} ${fmt(count)}`).join(' · ');
+  $('#fullPullStatus').textContent = label + counts + (outcomes ? ' · ' + outcomes : '') +
+    (job?.finished_at ? ' · ' + syncTime(job.finished_at) : '');
+}
+
+async function startFullPull() {
+  if (fullPullStarting || $('#startFullPull').disabled) return;
+  fullPullStarting = true;
+  $('#startFullPull').disabled = true;
+  try {
+    const job = await api('/api/17track/full-pull', {method:'POST', signal:AbortSignal.timeout(12_000)});
+    renderFullPull(job, true);
+    const previous = reportRecord(syncStatusPath);
+    if (previous) persistReport(syncStatusPath, {...previous, data:{...previous.data, fullPull:job}});
+    reportInflight.delete(syncStatusPath);
+    await loadSyncStatus();
+  } finally {
+    fullPullStarting = false;
+    renderFullPull(fullPullState, fullPullAvailable);
+  }
 }
 
 function renderSyncStatus(state) {
   const { poll, webhook } = state;
+  renderFullPull(state.fullPull || null, Boolean(state.fullPullAvailable));
   const run = poll.runs[0];
   let pollBadge = run ? syncRunStates[run.status] : ['gray', '等待首次同步'];
   if (poll.schedule?.state === 'Running' && run?.status !== 'running') pollBadge = syncRunStates.running;
@@ -3430,6 +3483,7 @@ run(async function boot() {
     showView('track');
   });
   document.querySelectorAll('#ruleTabs [data-rule-pane]').forEach(btn => btn.onclick = () => setRulePane(btn.dataset.rulePane));
+  $('#startFullPull').onclick = () => run(startFullPull);
   setInterval(() => {
     if (VIEW === 'rules' && !$('#rules-sync').hidden && !document.hidden) refreshSyncStatus();
   }, 30_000);

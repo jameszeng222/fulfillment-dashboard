@@ -530,6 +530,10 @@ button.rank-row:hover { background: var(--surface-muted); }
 .source-list dd { color: var(--ink); }
 .sync-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 11px; }
 .sync-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.sync-card-head #startFullPull { flex: none; }
+.full-pull-summary { margin-top: 10px; }
+.full-pull-progress { display: block; width: min(100%, 48rem); height: 10px; margin-top: 8px; accent-color: var(--brand); }
+.full-pull-progress[hidden] { display: none; }
 .sync-grid .source-list dd { overflow-wrap: anywhere; }
 .sync-grid .tip { margin-top: 10px; }
 .sync-observed { text-align: right; }

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261125-tracking-pager">
+<link rel="stylesheet" href="/static/app.css?v=20261125-full-pull">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -402,6 +402,15 @@
           <button type="button" class="tab-toned tone-blue" data-rule-pane="dictionary" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg>17TRACK 字典</button>
         </div>
         <div class="workspace-stack" id="rules-sync" hidden>
+          <section class="card" aria-labelledby="fullPullTitle">
+            <div class="ct sync-card-head">
+              <div><h2 id="fullPullTitle">全量拉取</h2>
+                <p class="tip">按定时拉取的运单范围分批查询，最近查过的也会重新核对。</p></div>
+              <button type="button" class="btn" id="startFullPull" disabled>全量拉取轨迹</button>
+            </div>
+            <p class="tip full-pull-summary" id="fullPullStatus" role="status">读取任务状态…</p>
+            <progress class="full-pull-progress" id="fullPullProgress" aria-label="全量拉取进度" hidden></progress>
+          </section>
           <div class="sync-grid">
             <div class="card">
               <div class="ct sync-card-head"><h2>定时拉取</h2><span class="badge gray" id="pollStatus">读取中</span></div>
@@ -656,6 +665,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261125-tracking-pager" defer></script>
+<script src="/static/app.js?v=20261125-full-pull" defer></script>
 </body>
 </html>

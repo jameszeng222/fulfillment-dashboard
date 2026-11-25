@@ -43,9 +43,19 @@ def scope(con):
     """
 
 
-def candidates(con, limit, *, repair=False):
+def full_numbers(con):
+    return [row[0] for row in con.execute(scope(con) + """
+        SELECT number FROM scope GROUP BY number ORDER BY max(shipped_at) DESC, number
+    """).fetchall()]
+
+
+def candidates(con, limit, *, repair=False, numbers=None):
     due = "outcome='carrier_conflict'" if repair else """checked_at IS NULL OR checked_at <= now - CASE WHEN outcome='read_error'
               THEN INTERVAL '6 hours' ELSE INTERVAL '12 hours' END"""
+    args = []
+    if numbers is not None:
+        due = "number IN (SELECT unnest(?::VARCHAR[]))"
+        args.append(numbers)
     return con.execute(scope(con) + f"""
         SELECT number, 物流商, C端承运商, carrier, last_event, last_status,
                count(DISTINCT nullif(lower(trim(C端承运商)),'')) OVER (PARTITION BY number)>1 AS conflict
@@ -53,7 +63,7 @@ def candidates(con, limit, *, repair=False):
         WHERE {due}
         QUALIFY row_number() OVER (PARTITION BY number ORDER BY shipped_at DESC, order_no)=1
         ORDER BY checked_at NULLS FIRST, shipped_at DESC, number LIMIT ?
-    """, [limit]).fetchall()
+    """, [*args, limit]).fetchall()
 
 
 def save_checks(con, rows):
