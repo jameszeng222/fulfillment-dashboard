@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261125-channel-presets">
+<link rel="stylesheet" href="/static/app.css?v=20261125-workspace">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -167,6 +167,7 @@
         </div>
         <div class="workspace-stack" id="alertsPane" hidden>
           <div class="filters" id="alertFilters"></div>
+          <div class="filters" id="archiveFilters" hidden></div>
           <div class="chips" id="alertChips"></div>
           <div class="card table-card">
             <div class="ct table-head">
@@ -203,13 +204,7 @@
           <button type="button" class="tab-toned tone-warn" data-pane="exceptions" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg>轨迹异常</button>
         </div>
         <div class="workspace-stack" id="channelTimingPane">
-        <section class="channel-operations" aria-label="筛选和对比口径">
-        <div class="channel-presets" id="channelPresets" hidden>
-          <label for="channelPresetChoice">组合筛选</label>
-          <select id="channelPresetChoice"></select>
-          <button type="button" class="btn ghost sm" id="channelPresetAdd">保存当前筛选</button>
-          <button type="button" class="btn ghost sm" id="channelPresetManage">管理组合</button>
-        </div>
+        <section class="report-controls" aria-label="筛选和对比口径">
         <div class="filters" id="channelFilters"></div>
         <div class="channel-basis">
           <div class="channel-dimension-control"><span>对比维度</span>
@@ -312,8 +307,10 @@
           <button type="button" class="tab-toned tone-blue" data-value="us" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-pin"/></svg>美国</button>
           <button type="button" class="tab-toned tone-cyan" data-value="other" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg>其他国家</button>
         </div>
+        <section class="report-controls" aria-label="筛选和时效口径">
         <div class="filters" id="usFilters"></div>
-        <div class="card us-basis">
+        <div class="filters" id="otherRegionFilters" hidden></div>
+        <div class="us-basis">
           <div><label for="usBasis">时效口径</label>
             <select id="usBasis">
               <optgroup label="全程及运输">
@@ -331,6 +328,7 @@
             <select id="usDimension"><option value="lastmile">C 端渠道</option><option value="current">当前渠道</option><option value="group">自定义渠道</option></select>
           </div>
         </div>
+        </section>
         <p class="tip us-status" id="usStatus" role="status">正在读取美国履约数据…</p>
         <div id="usResults" class="workspace-stack" hidden>
           <div class="kpis us-kpi" id="usKpi"></div>
@@ -629,27 +627,27 @@
       <button type="submit" class="btn" id="trackRuleSave">保存规则</button></footer>
   </form>
 </dialog>
-<dialog class="settings-dialog channel-preset-dialog" id="channelPresetDialog" aria-labelledby="channelPresetTitle">
-  <form id="channelPresetForm">
+<dialog class="settings-dialog filter-preset-dialog" id="filterPresetDialog" aria-labelledby="filterPresetTitle">
+  <form id="filterPresetForm">
     <header>
-      <h2 id="channelPresetTitle">筛选组合</h2>
-      <button type="button" class="btn ghost sm" id="channelPresetClose">关闭</button>
+      <h2 id="filterPresetTitle">筛选组合</h2>
+      <button type="button" class="btn ghost sm" id="filterPresetClose">关闭</button>
     </header>
     <div class="settings-fields">
-      <label id="channelPresetEditLabel">选择组合<select id="channelPresetEdit"></select></label>
-      <label>组合名称<input id="channelPresetName" maxlength="60" required placeholder="例如 美国海外仓"></label>
-      <label class="settings-check" id="channelPresetReplaceLabel" hidden><input type="checkbox" id="channelPresetReplace">用当前页面的筛选条件覆盖此组合</label>
-      <p class="tip channel-preset-summary" id="channelPresetSummary"></p>
-      <label class="settings-check"><input type="checkbox" id="channelPresetDefault">设为默认组合</label>
-      <p class="tip channel-preset-summary">组合保存在此浏览器。重新打开或刷新页面后，进入渠道时效时自动应用默认组合。</p>
+      <label id="filterPresetEditLabel">选择组合<select id="filterPresetEdit"></select></label>
+      <label>组合名称<input id="filterPresetName" maxlength="60" required placeholder="例如 美国海外仓"></label>
+      <label class="settings-check" id="filterPresetReplaceLabel" hidden><input type="checkbox" id="filterPresetReplace">用当前页面的筛选条件覆盖此组合</label>
+      <p class="tip filter-preset-summary" id="filterPresetSummary"></p>
+      <label class="settings-check"><input type="checkbox" id="filterPresetDefault">设为默认组合</label>
+      <p class="tip filter-preset-summary">组合保存在此浏览器。刷新后首次进入该视图时，会应用默认组合。</p>
     </div>
-    <p class="settings-error" id="channelPresetError" role="alert"></p>
+    <p class="settings-error" id="filterPresetError" role="alert"></p>
     <footer>
-      <button type="button" class="btn ghost" id="channelPresetDelete" hidden>删除组合</button>
-      <button type="submit" class="btn" id="channelPresetSave">保存组合</button>
+      <button type="button" class="btn ghost" id="filterPresetDelete" hidden>删除组合</button>
+      <button type="submit" class="btn" id="filterPresetSave">保存组合</button>
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261125-channel-presets" defer></script>
+<script src="/static/app.js?v=20261125-workspace" defer></script>
 </body>
 </html>
