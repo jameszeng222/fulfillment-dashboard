@@ -951,11 +951,22 @@ function commonDateFilters() {
 }
 
 async function loadDash() {
-  if (!DF && !defaultFilterPreset('overview')) {
-    fetchReport('/api/overview?date_basis=' + DEFAULT_DATE_BASIS).catch(() => {});
-  }
+  const initial = !DF && !META && !defaultFilterPreset('overview') ?
+    loadOverview({date_basis: DEFAULT_DATE_BASIS}) : null;
+  initial?.catch(() => {});
   loadChartLibrary().catch(() => {});
-  await loadMeta();
+  try {
+    await loadMeta();
+  } catch (error) {
+    if (!initial) throw error;
+    if (VIEW === 'dash') {
+      const retry = el('button', 'btn ghost sm', '重试筛选项');
+      retry.type = 'button';
+      retry.onclick = () => run(loadDash);
+      $('#dashFilters').replaceChildren(retry);
+    }
+    return initial;
+  }
   if (VIEW !== 'dash') return;
   if (!DF) {
     const host = $('#dashFilters');
@@ -964,11 +975,26 @@ async function loadDash() {
   }
   const f = readF(DF);
   updateDateOptions(DF, f.date_basis);
+  if (initial) {
+    if (renderedDash) syncOverviewFilterNote(renderedDash);
+    return initial;
+  }
+  return loadOverview(f);
+}
+
+function loadOverview(f) {
   return presentReport('dash', '/api/overview?' + qs(f), d => renderDash(d, f), {}, {oldVisible: Boolean(renderedDash)});
+}
+
+function syncOverviewFilterNote(d) {
+  if (!DF) return;
+  DF._info.hidden = !d.snapshotFiltersSkipped;
+  DF._info.textContent = d.snapshotFiltersSkipped ? '实时筛选暂不可用，图表显示全量快照' : '';
 }
 
 function renderDash(d, f) {
   if (VIEW !== 'dash') return;
+  syncOverviewFilterNote(d);
   if (renderedDash === d) {
     void loadOverviewCharts(d);
     return;
@@ -976,8 +1002,6 @@ function renderDash(d, f) {
   renderedDash = d;
   const dateBasis = d.dateBasis || (d.snapshotAt ? 'created' : f.date_basis);
   $('#monthlyScope').textContent = `按${dateBasisLabel[dateBasis].replace('时间', '')}月份统计 · 出库 → 妥投`;
-  DF._info.hidden = !d.snapshotFiltersSkipped;
-  DF._info.textContent = d.snapshotFiltersSkipped ? '实时筛选暂不可用，图表显示全量快照' : '';
   setTopMeta(d.asof);
 
   const k = d.kpi;
@@ -1368,6 +1392,7 @@ function openTracking(values = {}) {
 }
 
 function filterByTrackStatus(label, scope = {}) {
+  if (!META) return run(async () => { await loadMeta(); filterByTrackStatus(label, scope); });
   const state = trackingGroups().find(row => row.t === label);
   const coverage = coverageOptions.find(([, name]) => name === label)?.[0];
   if (state || coverage) openTracking({ ...scope, tstat: state?.v, coverage });
