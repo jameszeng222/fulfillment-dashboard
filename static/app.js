@@ -52,6 +52,7 @@ const reportMemory = new Map();
 const reportInflight = new Map();
 const reportCacheBase = 'fulfillment-report-v2:';
 const reportTtl = 120_000;
+const metaPath = '/api/meta';
 const reportTimers = new Map();
 let resizeFrame = 0;
 let toastTimer;
@@ -169,14 +170,14 @@ function persistReport(path, record) {
   else setTimeout(save, 0);
 }
 
-function reportFresh(record) {
+function reportFresh(record, maxAge = reportTtl) {
   return record && dataRevision && record.revision === dataRevision &&
-    performance.now() - revisionCheckedAt < 40_000 && Date.now() - record.at < reportTtl;
+    performance.now() - revisionCheckedAt < 40_000 && Date.now() - record.at < maxAge;
 }
 
 function fetchReport(path, options = {}, force = false) {
   const saved = reportRecord(path);
-  if (!force && reportFresh(saved)) return Promise.resolve(saved);
+  if (!force && reportFresh(saved, path === metaPath ? Infinity : reportTtl)) return Promise.resolve(saved);
   const revision = dataRevision;
   const pending = reportInflight.get(path);
   if (pending?.revision === revision) return pending.promise;
@@ -247,25 +248,6 @@ function scheduleReport(key, refresh) {
   }, 180));
 }
 
-async function warmReports() {
-  const base = {date_basis: 'shipped'};
-  const paths = ['/api/overview?' + qs(base), '/api/channels?' + qs({...base,basis:'shipped'}),
-    '/api/channels?' + qs({...base,basis:'shipped',dimension:'group'}),
-    '/api/regional-analysis?' + qs({...base,market:'us',basis:'paid',dimension:'lastmile'}),
-    '/api/regional-analysis?' + qs({...base,market:'us',dimension:'lastmile',detail:'segments',level:'all'}),
-    '/api/regional-analysis?' + qs({...base,market:'other',basis:'paid',dimension:'lastmile'}),
-    '/api/regional-analysis?' + qs({...base,market:'other',dimension:'lastmile',detail:'segments',level:'all'}),
-    '/api/health','/api/rules','/api/overview/channel-groups','/api/17track/sync-status'];
-  for (const path of paths) {
-    if (document.hidden) break;
-    try { await fetchReport(reportPath(path), {priority:'low'}); } catch { /* Warmup never blocks normal navigation. */ }
-    await new Promise(resolve => setTimeout(resolve, 120));
-  }
-  if (!document.hidden) for (const market of ['us','other']) {
-    try { await prepareUsMap(market); } catch { /* Load again on the user's next visit. */ }
-  }
-}
-
 function applyMeta(data) {
   if (META === data) return data;
   META = data;
@@ -291,7 +273,7 @@ function applyMeta(data) {
 function revalidateMeta(force = false) {
   if (!metaFetch || metaFetchRevision !== dataRevision) {
     const revision = dataRevision;
-    const request = fetchReport('/api/meta', {signal: AbortSignal.timeout(12_000)}, force)
+    const request = fetchReport(metaPath, {signal: AbortSignal.timeout(12_000)}, force)
       .then(record => metaFetch === request ? applyMeta(record.data) : META || record.data)
       .finally(() => { if (metaFetch === request) metaFetch = null; });
     metaFetch = request;
@@ -301,10 +283,10 @@ function revalidateMeta(force = false) {
 }
 
 function loadMeta() {
-  const saved = reportRecord('/api/meta');
+  const saved = reportRecord(metaPath);
   if (saved) {
     applyMeta(saved.data);
-    if (!reportFresh(saved)) revalidateMeta().catch(() => {});
+    if (!reportFresh(saved, Infinity)) revalidateMeta().catch(() => {});
     return Promise.resolve(META);
   }
   return revalidateMeta();
@@ -314,7 +296,7 @@ function loadChartLibrary() {
   if (window.echarts) return Promise.resolve();
   if (!chartsFetch) chartsFetch = new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = '/static/echarts.min.js';
+    script.src = '/static/echarts.min.js?v=1';
     const fail = () => {
       clearTimeout(deadline);
       chartsFetch = null;
@@ -366,11 +348,12 @@ async function refreshDataRevision() {
     dataRevision = revision;
     revisionCheckedAt = performance.now();
     if (changed && !document.querySelector('dialog[open]')) {
-      revalidateMeta(true).catch(() => {});
+      if (usesFilterMeta()) revalidateMeta().catch(() => {});
       const refresh = {dash: loadDash, channels: channelMode === 'timing' ? loadChannels : loadTrackExceptions,
         us: loadUs, rules: loadRules}[VIEW];
       if (refresh) run(refresh);
-      if (VIEW === 'us' && usReport && currentSegmentScope) run(() => loadRegionSegments(currentSegmentScope));
+      if (VIEW === 'dash' || VIEW === 'track') run(loadActivity);
+      if (VIEW === 'us') loadVisibleRegionSegments();
     }
   } catch {
     revisionCheckedAt = -Infinity;
@@ -426,8 +409,19 @@ let VIEW = 'dash';
 let trackMode = 'tracking';
 let channelMode = 'timing';
 
-function showView(v) {
-  if (ME.preview && ['rules', 'us'].includes(v)) v = 'dash';
+function routeView(route) {
+  if (['alerts', 'archive', 'detailed'].includes(route)) return 'track';
+  if (route === 'channel-exceptions') return 'channels';
+  if (['regions', 'regions-other'].includes(route)) return 'us';
+  return Object.hasOwn(VIEW_META, route) ? route : 'dash';
+}
+
+function usesFilterMeta() {
+  return ['dash','track','us'].includes(VIEW) || (VIEW === 'channels' && channelMode === 'timing') ||
+    (VIEW === 'rules' && !$('#rules-sla').hidden);
+}
+
+function displayView(v) {
   if (VIEW === 'us' && v !== 'us') segmentPath = '';
   VIEW = v;
   $('#reportCacheStatus').hidden = true;
@@ -439,14 +433,21 @@ function showView(v) {
   });
   $('#crumb').textContent = VIEW_META[v];
   setTopMeta(META?.range.end);
+}
+
+function showView(v) {
+  if (ME.preview && ['rules', 'us'].includes(v)) v = 'dash';
+  displayView(v);
   const route = v === 'track' && trackMode !== 'tracking' ? trackMode :
     v === 'channels' && channelMode === 'exceptions' ? 'channel-exceptions' :
       v === 'us' ? (usView.market === 'us' ? 'regions' : 'regions-other') : v;
   history.replaceState(null, '', '#' + route);
   window.scrollTo({ top: 0 });
   resizeVisibleCharts();
+  if (META && usesFilterMeta()) loadMeta().catch(() => {});
   run({ dash: loadDash, track: trackMode === 'tracking' ? loadTrack : loadAlerts,
     channels: channelMode === 'exceptions' ? loadTrackExceptions : loadChannels, us: loadUs, rules: loadRules }[v]);
+  if (!ME.preview && (v === 'dash' || v === 'track')) run(loadActivity);
 }
 
 function initChart(id) {
@@ -806,6 +807,7 @@ function pager(host, total, page, size, go, {sizes, changeSize} = {}) {
 /* ================= 数据总览 ================= */
 let DF = null;
 let renderedDash = null;
+let paintedOverview = null;
 const DEFAULT_DATE_BASIS = 'shipped';
 const dateBasisLabel = {paid: '支付时间', created: '创建时间', shipped: '出库时间'};
 const commonFilterLabels = {month:'月份', week:'周次', wh:'仓库', pf:'平台', cr:'后台物流商',
@@ -911,10 +913,9 @@ async function saveChannelGroup(remove) {
   toast(remove ? '已删除分组' : '已保存渠道分组');
   await Promise.all([revalidateMeta(true), loadChannelGroups()]);
 }
-function drawWeekCalendar() {
+function drawWeekCalendar(weeks) {
   const body = $('#weekCalendarBody');
   if (body.rows.length) return;
-  const weeks = META.filterOptions.week || [];
   body.innerHTML = weeks.map(week => {
     const sunday = Date.parse(week.start + 'T00:00:00Z');
     const days = Array.from({length: 7}, (_, offset) =>
@@ -950,9 +951,11 @@ function commonDateFilters() {
 }
 
 async function loadDash() {
-  if (!DF) fetchReport(reportPath('/api/overview?' + qs(defaultFilterPreset('overview')?.criteria.filters ||
-    {date_basis:DEFAULT_DATE_BASIS}))).catch(() => {});
-  await Promise.all([loadMeta(), loadChartLibrary()]);
+  if (!DF && !defaultFilterPreset('overview')) {
+    fetchReport('/api/overview?date_basis=' + DEFAULT_DATE_BASIS).catch(() => {});
+  }
+  loadChartLibrary().catch(() => {});
+  await loadMeta();
   if (VIEW !== 'dash') return;
   if (!DF) {
     const host = $('#dashFilters');
@@ -965,7 +968,11 @@ async function loadDash() {
 }
 
 function renderDash(d, f) {
-  if (VIEW !== 'dash' || renderedDash === d) return;
+  if (VIEW !== 'dash') return;
+  if (renderedDash === d) {
+    void loadOverviewCharts(d);
+    return;
+  }
   renderedDash = d;
   const dateBasis = d.dateBasis || (d.snapshotAt ? 'created' : f.date_basis);
   $('#monthlyScope').textContent = `按${dateBasisLabel[dateBasis].replace('时间', '')}月份统计 · 出库 → 妥投`;
@@ -987,8 +994,50 @@ function renderDash(d, f) {
 
   drawOverviewMixes(d);
 
-  const c = initChart('cMonthly');
-  c.setOption({
+  if (trend.globalBasis !== dateBasis) {
+    trend.globalBasis = trend.basis = dateBasis;
+    document.querySelectorAll('#dailyBasis button').forEach(button =>
+      button.setAttribute('aria-pressed', String(button.dataset.dateBasis === dateBasis)));
+  }
+  trend.created = d.daily;
+  trend.shipped = d.dailyShipped;
+  trend.paid = d.dailyPaid;
+  trend.filters = f;
+  void loadOverviewCharts(d);
+
+  drawRank('cCarrier', d.byCarrier, 10, k.orders,
+    ME.preview ? null : value => openTracking({ ...f, cr: value }));
+  drawRank('cLastMile', d.byLastMile.map(r => ({ ...r, k: r.k || '未填写 C 端渠道', filter: r.k || '__empty__' })), 10, k.orders,
+    ME.preview ? null : value => openTracking({ ...f, lastmile: value }));
+  drawRank('cTrackingStatus', d.byTrackingStatus, 10, k.orders,
+    ME.preview ? null : value => filterByTrackStatus(value, f));
+  drawRank('cWarehouse', d.byWarehouse, 10, k.orders,
+    ME.preview ? null : value => openTracking({ ...f, wh: value }));
+  drawRank('cCountry', d.byCountry, 15, k.orders);
+  drawRank('cCurrentChannel', d.byCurrentChannel || [], 10, k.orders,
+    ME.preview ? null : value => openTracking({ ...f, channel: value }));
+  drawRank('cChannelGroup', (d.byChannelGroup || []).map(row => ({...row, filter: row.group || false})),
+    Number.POSITIVE_INFINITY, k.orders, ME.preview ? null : group => openTracking({...f, channel_group: group}));
+  drawDispatchStatus(d.byStatus);
+}
+
+async function loadOverviewCharts(d) {
+  if (paintedOverview === d) return;
+  const status = $('#overviewChartStatus');
+  try {
+    await loadChartLibrary();
+  } catch {
+    if (VIEW !== 'dash' || renderedDash !== d) return;
+    const retry = el('button', 'btn ghost sm', '重试图表');
+    retry.type = 'button';
+    retry.onclick = () => loadOverviewCharts(d);
+    status.replaceChildren('趋势图暂时无法加载。 ', retry);
+    status.hidden = false;
+    return;
+  }
+  if (VIEW !== 'dash' || renderedDash !== d || paintedOverview === d) return;
+  status.hidden = true;
+  initChart('cMonthly').setOption({
     animation: chartMotion, animationDuration: 230, animationDurationUpdate: 140, animationEasing: 'quarticOut',
     grid: { left: 6, right: 10, top: 32, bottom: 5, containLabel: true },
     tooltip: { ...chartTip, trigger: 'axis', valueFormatter: fmt },
@@ -1008,32 +1057,8 @@ function renderDash(d, f) {
         tooltip: { valueFormatter: value => measure(value, ' 天') } },
     ],
   });
-
-  if (trend.globalBasis !== dateBasis) {
-    trend.globalBasis = trend.basis = dateBasis;
-    document.querySelectorAll('#dailyBasis button').forEach(button =>
-      button.setAttribute('aria-pressed', String(button.dataset.dateBasis === dateBasis)));
-  }
-  trend.created = d.daily;
-  trend.shipped = d.dailyShipped;
-  trend.paid = d.dailyPaid;
-  trend.filters = f;
   drawDailyVolume();
-
-  drawRank('cCarrier', d.byCarrier, 10, k.orders,
-    ME.preview ? null : value => openTracking({ ...f, cr: value }));
-  drawRank('cLastMile', d.byLastMile.map(r => ({ ...r, k: r.k || '未填写 C 端渠道', filter: r.k || '__empty__' })), 10, k.orders,
-    ME.preview ? null : value => openTracking({ ...f, lastmile: value }));
-  drawRank('cTrackingStatus', d.byTrackingStatus, 10, k.orders,
-    ME.preview ? null : value => filterByTrackStatus(value, f));
-  drawRank('cWarehouse', d.byWarehouse, 10, k.orders,
-    ME.preview ? null : value => openTracking({ ...f, wh: value }));
-  drawRank('cCountry', d.byCountry, 15, k.orders);
-  drawRank('cCurrentChannel', d.byCurrentChannel || [], 10, k.orders,
-    ME.preview ? null : value => openTracking({ ...f, channel: value }));
-  drawRank('cChannelGroup', (d.byChannelGroup || []).map(row => ({...row, filter: row.group || false})),
-    Number.POSITIVE_INFINITY, k.orders, ME.preview ? null : group => openTracking({...f, channel_group: group}));
-  drawDispatchStatus(d.byStatus);
+  paintedOverview = d;
 }
 
 function drawOverviewMixes(data) {
@@ -1108,6 +1133,7 @@ function drawDispatchStatus(rows) {
 }
 
 function drawDailyVolume() {
+  if (!renderedDash || !window.echarts) return;
   const clock = day => Date.parse(day + 'T00:00:00Z');
   const dayMs = 86_400_000;
   const series = trend[trend.basis] || [];
@@ -1242,7 +1268,7 @@ const coverageOptions = [
 ];
 
 function setTrackMode(mode) {
-  if (ME.preview) mode = 'tracking';
+  if (ME?.preview) mode = 'tracking';
   if (trackMode !== mode && mode !== 'tracking') {
     $('#alertBody').replaceChildren();
     $('#alertChips').replaceChildren();
@@ -2037,8 +2063,7 @@ function renderChannelComparison(data, rows) {
 
 async function loadChannels() {
   if (!CF) {
-    const preset = defaultFilterPreset('channels');
-    fetchReport(channelQuery(preset?.criteria || CHANNEL_BASE_CRITERIA)).catch(() => {});
+    if (!defaultFilterPreset('channels')) fetchReport(channelQuery(CHANNEL_BASE_CRITERIA)).catch(() => {});
     await loadChannelFilters();
   }
   if (!CF || VIEW !== 'channels' || channelMode !== 'timing' || !CF.validate()) return;
@@ -2145,7 +2170,7 @@ const readTrackWords = value => value.split(/\r?\n/).map(word => word.trim()).fi
 const eventWallClock = value => value ? value.replace('T', ' ').slice(0, 16) + ' ' + value.slice(-6) : '—';
 
 function setChannelMode(mode) {
-  channelMode = ME.preview ? 'timing' : mode;
+  channelMode = ME?.preview ? 'timing' : mode;
   $('#channelTimingPane').hidden = channelMode !== 'timing';
   $('#channelExceptionPane').hidden = channelMode !== 'exceptions';
   $('#channelTabs').querySelectorAll('button').forEach(button =>
@@ -2380,10 +2405,9 @@ const usShare = (part, total) => total > 0 ? 100 * part / total : null;
 async function loadUs() {
   const market = usView.market;
   const scope = 'region-' + market;
-  if (!UF) {
-    const preset = defaultFilterPreset(scope)?.criteria;
-    fetchReport(reportPath('/api/regional-analysis?' + qs({...(preset?.filters || {date_basis:DEFAULT_DATE_BASIS}), market,
-      basis:preset?.basis || usView.basis, dimension:preset?.dimension || usView.dimension}))).catch(() => {});
+  if (!UF && !defaultFilterPreset(scope)) {
+    fetchReport(reportPath('/api/regional-analysis?' + qs({date_basis:DEFAULT_DATE_BASIS, market,
+      basis:usView.basis, dimension:usView.dimension}))).catch(() => {});
   }
   await loadMeta();
   if (VIEW !== 'us' || usView.market !== market) return;
@@ -2437,7 +2461,11 @@ function renderRegionalData(report, filters) {
   regionalFilters = filters;
   $('#usStatus').textContent = `按${dateBasisLabel[report.dateBasis]}筛选（北京时间） · ${usTimingLabel[report.basis]}`;
   $('#usResults').hidden = false;
-  if (prior === report) return;
+  if (prior === report) {
+    loadVisibleRegionSegments();
+    if (!charts.usMap) void loadUsMap(report.market);
+    return;
+  }
   const selector = $('#usMapChannel');
   selector.replaceChildren(new Option('全部渠道', ''), ...report.channels.map(row => new Option(row.label, row.label)));
   selector.value = usView.channel;
@@ -2532,11 +2560,18 @@ function renderUsReport() {
   }
   usMapPlaces = new Map(mapEntries.filter(([name]) => !duplicateNames.has(name)));
   drawUsMap();
-  void loadRegionSegments(scope);
+  currentSegmentScope = scope;
+  loadVisibleRegionSegments();
+}
+
+function loadVisibleRegionSegments() {
+  if (regionSegmentsVisible && VIEW === 'us' && currentSegmentScope && usReport?.market === usView.market &&
+      usReport.basis === usView.basis && usReport.dimension === usView.dimension) {
+    void loadRegionSegments(currentSegmentScope);
+  }
 }
 
 async function loadRegionSegments(scope) {
-  currentSegmentScope = scope;
   const filters = {...regionalFilters, market: usReport.market, dimension: usReport.dimension, detail: 'segments',
     level: usView.place === null ? 'all' : usView.level, place: usView.place || '', focus: usView.channel};
   const path = '/api/regional-analysis?' + qs(filters);
@@ -2561,7 +2596,7 @@ async function loadRegionSegments(scope) {
   }
 }
 
-let renderedSegments = null, currentSegmentScope = '';
+let renderedSegments = null, currentSegmentScope = '', regionSegmentsVisible = false;
 function renderRegionSegments(report, path, selection) {
     if (!report || segmentPath !== path || VIEW !== 'us' || usView.market !== report.market) return;
     $('#regionalSegmentStatus').textContent = selection + ' · ' + fmt(report.total) + ' 单';
@@ -2977,17 +3012,24 @@ function setRulePane(pane) {
   run(loadRules);
 }
 
+async function loadRuleReference() {
+  const path = '/api/reference?v=1';
+  const record = reportRecord(path) || await fetchReport(path);
+  return record.data;
+}
+
 async function loadRules() {
   if (!$('#rules-definitions').hidden) {
-    await loadMeta();
-    return drawWeekCalendar();
+    if (!$('#weekCalendarBody').rows.length) drawWeekCalendar((await loadRuleReference()).weeks);
+    return;
   }
   if (!$('#rules-data').hidden) return loadHealth();
   if (!$('#rules-sync').hidden) return refreshSyncStatus();
   if (!$('#rules-channel-groups').hidden) return loadChannelGroups();
   if (!$('#rules-dictionary').hidden) {
-    await loadMeta();
-    $('#dictionaryBody').innerHTML = META.trackStatuses.map(row =>
+    if ($('#dictionaryBody').rows.length) return;
+    const {trackStatuses} = await loadRuleReference();
+    $('#dictionaryBody').innerHTML = trackStatuses.map(row =>
       `<tr><td>${esc(row.label)}</td><td class="mono">${esc(row.status)}</td><td>${esc(row.sub_label)}</td>
         <td class="mono">${esc(row.sub)}</td></tr>`).join('') || blankRow(4, '暂无状态字典');
     return;
@@ -3441,8 +3483,18 @@ function closeDrawer() {
 
 /* ================= 启动 ================= */
 run(async function boot() {
+  const v = location.hash.slice(1);
+  if (v === 'alerts' || v === 'archive') setTrackMode(v);
+  if (v === 'channel-exceptions') setChannelMode('exceptions');
+  if (v === 'regions-other') setRegionMarket('other');
+  displayView(routeView(v));
   ME = await api('/api/me');
-  setTopMeta(null);
+  if (ME.dataRevision) {
+    dataRevision = ME.dataRevision;
+    revisionCheckedAt = performance.now();
+  }
+  if (v === 'alerts' || v === 'archive') setTrackMode(v);
+  if (v === 'channel-exceptions') setChannelMode('exceptions');
   $('#opsAssistant').hidden = !ME.opsAssistant;
   $('#openChannelGroups').hidden = !ME.can_edit;
   $('#channelGroupAction').hidden = !ME.can_edit;
@@ -3462,6 +3514,10 @@ run(async function boot() {
   $('#applyBatch').hidden = !ME.can_edit;
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => showView(b.dataset.v));
   setupUsControls();
+  new IntersectionObserver(([entry]) => {
+    regionSegmentsVisible = entry.isIntersecting;
+    if (regionSegmentsVisible) loadVisibleRegionSegments();
+  }, {rootMargin:'120px 0px'}).observe($('#regionSegmentsPanel'));
   setupTrackExceptionControls();
   const periods = [...document.querySelectorAll('#dailyPeriod button')];
   periods.forEach(button => button.onclick = () => {
@@ -3488,10 +3544,7 @@ run(async function boot() {
     if (VIEW === 'rules' && !$('#rules-sync').hidden && !document.hidden) refreshSyncStatus();
   }, 30_000);
   setInterval(() => { if (!ME.preview && !document.hidden) refreshDataRevision(); }, 15_000);
-  if (!ME.preview) {
-    refreshDataRevision();
-    setTimeout(() => warmReports(), 1500);
-  }
+  if (!ME.preview && !dataRevision) refreshDataRevision();
   $('#openPending').onclick = () => run(async () => {
     await loadMeta();
     setTrackMode('alerts');
@@ -3675,13 +3728,7 @@ run(async function boot() {
     }
   });
   $('#logout').onclick = () => run(async () => { await api('/api/logout', { method: 'POST' }); location.href = '/login'; });
-  const v = (location.hash || '').replace('#', '');
-  if (v === 'alerts' || v === 'archive') setTrackMode(v);
-  if (v === 'channel-exceptions') setChannelMode('exceptions');
-  if (v === 'regions-other') setRegionMarket('other');
   if (v === 'detailed') openTracking({ coverage: 'detailed', sort: '逐条事件数' });
-  else showView(v === 'alerts' || v === 'archive' ? 'track' :
-    v === 'channel-exceptions' ? 'channels' : ['regions', 'regions-other'].includes(v) ? 'us' : VIEW_META[v] ? v : 'dash');
-  if (!ME.preview && v !== 'rules') run(loadActivity);
+  else showView(routeView(v));
   window.addEventListener('resize', resizeVisibleCharts);
 });

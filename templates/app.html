@@ -63,7 +63,7 @@
   <div class="main">
     <div class="top">
       <div class="crumb">履约监控系统 <span>/</span> <b id="crumb">数据总览</b></div>
-      <div class="top-data-status"><span id="reportCacheStatus" class="report-cache-status" role="status" hidden></span><div class="date-tag" id="topMeta">正在读取数据</div></div>
+      <div class="top-data-status"><span id="reportCacheStatus" class="report-cache-status" role="status" hidden></span><div class="date-tag" id="topMeta">履约数据</div></div>
     </div>
 
     <div class="content">
@@ -76,6 +76,7 @@
         </div>
         <div class="filters" id="dashFilters"></div>
         <div class="kpis" id="dashKpi"></div>
+        <p class="tip" id="overviewChartStatus" role="status" hidden></p>
         <div class="dashboard-source" id="dashboardSource" hidden>
           <span class="source-label"><svg class="ui-icon" aria-hidden="true"><use href="#i-sync"/></svg><b id="dashboardSourceLabel"></b></span>
           <span class="tip" id="dashboardSourceTime"></span>
@@ -364,9 +365,9 @@
               </table></div>
             </section>
           </div>
-          <section class="card plot-card" aria-labelledby="regionalSegmentsTitle">
+          <section class="card plot-card" id="regionSegmentsPanel" aria-labelledby="regionalSegmentsTitle">
             <div class="ct"><div><h2 id="regionalSegmentsTitle">分段时效</h2>
-              <p class="tip" id="regionalSegmentStatus" role="status">正在统计各阶段…</p></div></div>
+              <p class="tip" id="regionalSegmentStatus" role="status"></p></div></div>
             <div id="regionalSegmentContent" class="regional-segments"></div>
             <p class="tip us-notes">点击阶段查看地域分布 · 各阶段独立计样本</p>
           </section>
@@ -665,6 +666,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261125-full-pull" defer></script>
+<script src="/static/app.js?v=20261126-on-demand" defer></script>
 </body>
 </html>

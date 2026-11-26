@@ -87,7 +87,10 @@ export default {
       const asset = await env.ASSETS.fetch(request);
       if (asset.ok || asset.status === 304) {
         const headers = privateHeaders(asset.headers);
-        if (APP_ASSETS.has(url.pathname)) headers.set("Cache-Control", "public, max-age=300");
+        if (APP_ASSETS.has(url.pathname)) {
+          headers.set("Cache-Control", url.searchParams.has("v") ?
+            "public, max-age=86400, immutable" : "public, max-age=300");
+        }
         return new Response(asset.body, {status: asset.status, headers});
       }
     }
