@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261125-workspace">
+<link rel="stylesheet" href="/static/app.css?v=20261126-track-analysis">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -63,7 +63,7 @@
   <div class="main">
     <div class="top">
       <div class="crumb">履约监控系统 <span>/</span> <b id="crumb">数据总览</b></div>
-      <div class="top-data-status"><span id="reportCacheStatus" class="report-cache-status" role="status" hidden></span><div class="date-tag" id="topMeta">正在读取数据</div></div>
+      <div class="top-data-status"><span id="reportCacheStatus" class="report-cache-status" role="status" hidden></span><div class="date-tag" id="topMeta">履约数据</div></div>
     </div>
 
     <div class="content">
@@ -76,17 +76,18 @@
         </div>
         <div class="filters" id="dashFilters"></div>
         <div class="kpis" id="dashKpi"></div>
+        <p class="tip" id="overviewChartStatus" role="status" hidden></p>
         <div class="dashboard-source" id="dashboardSource" hidden>
           <span class="source-label"><svg class="ui-icon" aria-hidden="true"><use href="#i-sync"/></svg><b id="dashboardSourceLabel"></b></span>
           <span class="tip" id="dashboardSourceTime"></span>
         </div>
         <div class="grid overview-mixes">
-          <section class="card plot-card mix-card tone-blue" aria-labelledby="warehouseShareTitle">
-            <div class="ct"><div><h2 id="warehouseShareTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span>海外仓发货占比</h2><p class="tip icon-caption">按已出库履约单统计 · 跟随总览筛选</p></div></div>
+          <section class="card plot-card mix-card warehouse-mix-card tone-blue" aria-labelledby="warehouseShareTitle">
+            <div class="ct"><div><h2 id="warehouseShareTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span>海外仓发货占比</h2><p class="tip icon-caption">当前筛选 · 已出库履约单</p></div></div>
             <div id="warehouseShippingMix"></div>
           </section>
           <section class="card plot-card mix-card tone-violet" aria-labelledby="splitShareTitle">
-            <div class="ct"><div><h2 id="splitShareTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-split"/></svg></span>订单拆单率</h2><p class="tip icon-caption">订单被拆为多个履约单 · 按该订单的全部有效履约单判定类型</p></div></div>
+            <div class="ct"><div><h2 id="splitShareTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-split"/></svg></span>订单拆单率</h2><p class="tip icon-caption">一单多个履约单 · 按整单判定拆单类型</p></div></div>
             <div id="orderSplitMix"></div>
           </section>
         </div>
@@ -109,10 +110,10 @@
             <div class="chart" id="cDaily" role="img" aria-label="每日履约单量趋势"></div>
             <div class="daily-footer"><p class="tip" id="dailyFocus"></p><p class="tip" id="dailyNote" hidden>点击查看当天履约单</p></div>
           </section>
-          <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg></span>C 端承运商单量</h2><p class="tip icon-caption">客户看到的末端承运商 · 单量前 10</p></div></div><div id="cLastMile"></div></section>
+          <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg></span>C 端承运商单量</h2><p class="tip icon-caption">单量前 10</p></div></div><div id="cLastMile"></div></section>
         </div>
         <div class="grid overview-breakdown">
-          <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip" id="monthlyScope">按出库时间所属月份统计 · 物流时效为出库到妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
+          <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip" id="monthlyScope">按出库月份统计 · 出库 → 妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
           <section class="card plot-card status-card" aria-labelledby="statusTitle">
             <div class="ct"><div><h2 id="statusTitle"><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>出库单状态</h2><p class="tip icon-caption">全部出库单状态，含已取消</p></div></div>
             <div id="cStatus"></div>
@@ -128,7 +129,7 @@
           </section>
           <section class="card plot-card" aria-labelledby="customChannelTitle">
             <div class="ct">
-              <div><h2 id="customChannelTitle">自定义渠道分布</h2><p class="tip">按「当前渠道」归组 · 占筛选范围内有效履约单</p></div>
+              <div><h2 id="customChannelTitle">自定义渠道分布</h2><p class="tip">按当前渠道归组 · 以筛选内有效履约单为分母</p></div>
             </div>
             <div id="cChannelGroup"></div>
           </section>
@@ -137,7 +138,7 @@
 
       <!-- ============ 轨迹监控 ============ -->
       <section class="view" id="v-track">
-        <div class="page-head"><div><h1>轨迹监控</h1><p id="trackIntro">查看 17TRACK 主子状态、履约节点与预警处理进度。</p></div></div>
+        <div class="page-head"><div><h1>轨迹监控</h1><p id="trackIntro">物流轨迹、履约节点与预警</p></div></div>
         <div class="tabs" id="trackTabs" aria-label="轨迹监控分类">
           <button type="button" class="tab-toned tone-cyan" data-mode="tracking" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>运单轨迹</button>
           <button type="button" class="tab-toned tone-warn" data-mode="alerts" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg>预警处理 <span class="nav-count" id="alertTabCount"></span></button>
@@ -151,6 +152,7 @@
             <span class="tip" id="trackListStatus" role="status"></span>
             <button type="button" class="btn ghost sm" id="retryTrack" hidden>重试列表</button>
             <button type="button" class="btn ghost sm" id="showDetailed">有逐条轨迹</button>
+            <button type="button" class="btn ghost sm" id="openTrackAnalysis" aria-haspopup="dialog" aria-controls="trackAnalysisDialog" hidden><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg>AI 轨迹分析</button>
             <button type="button" class="btn ghost sm" id="exportTrack">导出本页</button>
           </div></div>
           <div class="tblwrap">
@@ -198,7 +200,7 @@
 
       <!-- ============ 渠道时效 ============ -->
       <section class="view" id="v-channels">
-        <div class="page-head"><div><h1>渠道时效</h1><p>比较不同渠道的签收时效与承诺达成率。</p></div></div>
+        <div class="page-head"><div><h1>渠道时效</h1><p>签收时效与 SLA 对比</p></div></div>
         <div class="tabs" id="channelTabs" aria-label="渠道时效分类">
           <button type="button" class="tab-toned tone-blue" data-pane="timing" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg>时效对比</button>
           <button type="button" class="tab-toned tone-warn" data-pane="exceptions" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg>轨迹异常</button>
@@ -207,20 +209,16 @@
         <section class="report-controls" aria-label="筛选和对比口径">
         <div class="filters" id="channelFilters"></div>
         <div class="channel-basis">
-          <div class="channel-dimension-control"><span>对比维度</span>
-            <div class="tabs" id="channelDimension" role="group" aria-label="渠道对比维度">
-              <button type="button" class="tab-toned tone-cyan" data-dimension="lastmile" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>C 端渠道</button>
-              <button type="button" class="tab-toned tone-green" data-dimension="group" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg>自定义渠道</button>
-            </div>
+          <div class="tabs" id="channelDimension" role="group" aria-label="渠道对比维度">
+            <button type="button" class="tab-toned tone-cyan" data-dimension="lastmile" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>C 端渠道</button>
+            <button type="button" class="tab-toned tone-green" data-dimension="group" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg>自定义渠道</button>
           </div>
-          <div class="channel-dimension-control"><span>时效口径</span>
           <div class="tabs" id="channelBasis" role="group" aria-label="时效统计口径">
             <button type="button" class="tab-toned tone-blue" data-basis="paid" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-wallet"/></svg>支付到签收</button>
             <button type="button" class="tab-toned tone-green" data-basis="shipped" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-warehouse"/></svg>出库到签收</button>
             <button type="button" class="tab-toned tone-cyan" data-basis="online" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-scan"/></svg>上网到签收</button>
           </div>
-          </div>
-          <p id="channelBasisNote" aria-live="polite">从出库（北京时间）到妥投。计算时统一时区。</p>
+          <p id="channelBasisNote" aria-live="polite">签出 → 妥投</p>
         </div>
         </section>
         <div id="channelLoading" class="card" role="status">正在读取渠道时效…</div>
@@ -230,24 +228,30 @@
           <div class="ct table-head"><div>
             <h2 id="channelComparisonTitle"><span id="channelComparisonName">C 端渠道时效对比</span></h2>
             <p class="tip" id="channelChartScope"></p>
-          </div><button type="button" class="btn ghost sm" id="exportChannels"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg>导出结果</button></div>
+          </div><div class="toolbar">
+            <div class="tabs period-tabs" id="channelDayMode" role="group" aria-label="妥投率计时方式">
+              <button type="button" data-day-mode="calendar" aria-pressed="true">自然日</button>
+              <button type="button" data-day-mode="workday" aria-pressed="false">工作日</button>
+            </div>
+            <button type="button" class="btn ghost sm" id="exportChannels"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg>导出结果</button>
+          </div></div>
           <div class="channel-period" id="channelComparisonPeriod" aria-label="统计时间范围"></div>
           <div class="compare-grid compare-head" id="channelCompareHead" aria-hidden="true">
             <div id="channelCompareLabel">C 端渠道</div><div>有效样本 / 单量</div><div>平均用时</div><div>P90 用时</div>
-            <div>3 天内签收</div><div>5 天内签收</div><div>6 天内签收</div><div>7 天内签收</div>
+            <div>2 天内妥投</div><div>3 天内妥投</div><div>5 天内妥投</div><div>6 天内妥投</div><div>7 天内妥投</div>
           </div>
           <ul class="compare-list" id="channelComparisonRows" aria-label="渠道时效图与数据"></ul>
           <div class="channel-compare-expand" id="channelCompareExpand" hidden><button type="button" id="channelCompareToggle" class="btn ghost sm"></button></div>
-          <p class="tip compare-empty" id="channelChartEmpty" hidden>当前筛选和口径下没有有效签收样本。</p>
+          <p class="tip compare-empty" id="channelChartEmpty" hidden>暂无符合条件的渠道。</p>
         </section>
         <div class="card table-card">
-          <div class="ct table-head"><div><h2 id="channelPerformanceTitle">C 端渠道表现对比</h2><p class="tip">SLA 达成率和超时在途按每单「当前渠道」配置的起点与承诺天数计算。超时占比仅统计可计时的在途单。</p></div></div>
+          <div class="ct table-head"><div><h2 id="channelPerformanceTitle">C 端渠道表现对比</h2><p class="tip" id="channelDetailedRateScope">自然日妥投率按全部有效单 · SLA 按当前渠道配置及有效签收样本 · 超时占比按可计时在途单</p></div></div>
           <div class="channel-period" id="channelTablePeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:none">
             <table class="tbl">
               <thead><tr>
                 <th id="channelTableLabel">C 端显示物流渠道</th><th>单量</th><th>有妥投时间</th><th>有效样本</th><th>平均时效</th><th>P90</th>
-                <th>3天达成</th><th>5天达成</th><th>6天达成</th><th>7天达成</th><th>SLA 达成率</th>
+                <th>2 天内妥投</th><th>3 天内妥投</th><th>5 天内妥投</th><th>6 天内妥投</th><th>7 天内妥投</th><th>SLA 达成率</th>
                 <th>在途</th><th>超时在途</th>
               </tr></thead>
               <tbody id="channelBody"></tbody>
@@ -255,11 +259,11 @@
           </div>
         </div>
         <div class="card" style="padding:0">
-          <div class="ct" style="padding:12px 14px 0"><h2 id="channelCountryTitle">C 端渠道 × 国家</h2><div class="tip">单量 ≥ 200 的组合</div></div>
+          <div class="ct" style="padding:12px 14px 0"><h2 id="channelCountryTitle">C 端渠道 × 国家</h2><div class="tip" id="channelCountryRateScope">单量 ≥ 200 的组合 · 自然日妥投率</div></div>
           <div class="channel-period" id="channelCountryPeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:460px">
             <table class="tbl">
-              <thead><tr><th id="channelCountryLabel">C 端渠道</th><th>国家</th><th>单量</th><th>有效样本</th><th>平均时效</th><th>6天达成</th></tr></thead>
+              <thead><tr><th id="channelCountryLabel">C 端渠道</th><th>国家</th><th>单量</th><th>有效样本</th><th>平均时效</th><th>2 天内妥投</th><th>6 天内妥投</th></tr></thead>
               <tbody id="chanCountryBody"></tbody>
             </table>
           </div>
@@ -269,11 +273,11 @@
         <div class="workspace-stack" id="channelExceptionPane" hidden>
           <section class="card plot-card" aria-labelledby="trackRulesTitle">
             <div class="ct">
-              <div><h2 id="trackRulesTitle">轨迹异常规则</h2><p class="tip">按已入库的承运商轨迹核对截止时间。超过截止后才会标记。</p></div>
+              <div><h2 id="trackRulesTitle">轨迹异常规则</h2><p class="tip">按入库轨迹核对 · 超过截止时间后标记</p></div>
               <button type="button" class="btn ghost sm" id="addTrackRule" hidden>新增规则</button>
             </div>
             <div id="trackRuleCards" class="trajectory-rule-cards"></div>
-            <p class="tip track-rule-note">3PE 常见节点为国内揽收 → 出口扫描 → 起飞 → 落地 → 进口扫描 → 目的地设施离站。当前用目的地设施离站作为尾程提取参考。</p>
+            <p class="tip track-rule-note">3PE 常见节点 · 国内揽收 → 出口扫描 → 起飞 → 落地 → 进口扫描 → 目的地设施离站（尾程提取参考）</p>
           </section>
           <section class="card table-card" aria-labelledby="trackExceptionTitle">
             <div class="ct table-head"><div><h2 id="trackExceptionTitle">命中清单</h2>
@@ -301,7 +305,7 @@
       <!-- ============ 区域分析 ============ -->
       <section class="view" id="v-us" aria-labelledby="usTitle">
         <div class="page-head">
-          <div><h1 id="usTitle">区域分析</h1><p>比较各目的地区的渠道构成与履约关键阶段时效。</p></div>
+          <div><h1 id="usTitle">区域分析</h1><p>各目的地的渠道构成与分段时效</p></div>
         </div>
         <div class="tabs" id="regionMarkets" role="group" aria-label="分析区域">
           <button type="button" class="tab-toned tone-blue" data-value="us" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-pin"/></svg>美国</button>
@@ -315,14 +319,13 @@
             <select id="usBasis">
               <optgroup label="全程及运输">
                 <option value="paid">支付到签收</option><option value="created">创建到签收</option>
-                <option value="shipped">出库到签收</option><option value="pickup_delivered">提取到签收</option>
+                <option value="shipped">出库到签收</option><option value="pickup_delivered">上网到签收</option>
               </optgroup>
               <optgroup label="接单与交接">
                 <option value="paid_create">支付到创建</option><option value="create_ship">创建到出库</option>
-                <option value="ship_pickup">出库到提取</option>
+                <option value="ship_pickup">出库到上网</option>
               </optgroup>
             </select>
-            <span class="tip">支付即客户下单，创建即 ERP 履约单创建。</span>
           </div>
           <div><label for="usDimension">比较渠道</label>
             <select id="usDimension"><option value="lastmile">C 端渠道</option><option value="current">当前渠道</option><option value="group">自定义渠道</option></select>
@@ -344,9 +347,9 @@
               <div class="us-map-controls">
                 <div class="tabs period-tabs" id="usMetric" role="group" aria-label="地图指标">
                   <button type="button" data-value="orders" aria-pressed="false">单量</button>
-                  <button type="button" data-value="share" aria-pressed="false">占比</button>
                   <button type="button" data-value="avg" aria-pressed="false">平均时效</button>
                   <button type="button" data-value="p90" aria-pressed="true">P90 时效</button>
+                  <button type="button" data-value="p95" aria-pressed="false">P95 时效</button>
                 </div>
                 <label class="us-focus">地图渠道<select id="usMapChannel" aria-label="地图渠道"></select></label>
               </div>
@@ -358,16 +361,16 @@
               <div class="ct"><div><h2 id="usMixTitle">全美渠道构成</h2><p class="tip" id="usMixScope"></p></div>
                 <button type="button" class="btn ghost sm" id="usClear" hidden>返回全美</button></div>
               <div class="tblwrap"><table class="tbl us-channel-table">
-                <thead><tr><th scope="col">渠道</th><th scope="col">单量</th><th scope="col">占比</th><th scope="col">平均</th><th scope="col">P90</th><th scope="col">样本</th></tr></thead>
+                <thead><tr><th scope="col">渠道</th><th scope="col">单量</th><th scope="col">占比</th><th scope="col">平均</th><th scope="col">P90</th><th scope="col">P95</th><th scope="col">样本</th></tr></thead>
                 <tbody id="usMixBody"></tbody>
               </table></div>
             </section>
           </div>
-          <section class="card plot-card" aria-labelledby="regionalSegmentsTitle">
+          <section class="card plot-card" id="regionSegmentsPanel" aria-labelledby="regionalSegmentsTitle">
             <div class="ct"><div><h2 id="regionalSegmentsTitle">分段时效</h2>
-              <p class="tip" id="regionalSegmentStatus" role="status">正在统计各阶段…</p></div></div>
+              <p class="tip" id="regionalSegmentStatus" role="status"></p></div></div>
             <div id="regionalSegmentContent" class="regional-segments"></div>
-            <p class="tip us-notes">提取为首条实际揽收记录或 17TRACK PickedUp 节点。缺少起点、终点或耗时小于等于零的样本不计入该段时效。各阶段有效样本数独立计算。点击阶段查看该时效的地域分布。</p>
+            <p class="tip us-notes">点击阶段查看地域分布 · 各阶段独立计样本</p>
           </section>
           <section class="card table-card" aria-labelledby="usDetailTitle">
             <div class="ct table-head"><div><h2 id="usDetailTitle">州级明细</h2><p class="tip" id="usDetailScope"></p></div>
@@ -375,17 +378,22 @@
             </div>
             <div class="tblwrap"><table class="tbl">
               <thead><tr><th scope="col" id="usPlaceColumn">目的州</th><th scope="col" id="usChannelColumn">单量最高的渠道</th>
-                <th scope="col">单量</th><th scope="col">占比</th><th scope="col">平均时效</th><th scope="col">P90 时效</th><th scope="col">有效样本</th></tr></thead>
+                <th scope="col">单量</th><th scope="col">占比</th><th scope="col">平均时效</th><th scope="col">P90 时效</th><th scope="col">P95 时效</th><th scope="col">有效样本</th></tr></thead>
               <tbody id="usDetailsBody"></tbody>
             </table></div>
           </section>
-          <p class="tip us-notes">单量按履约单计，含在途单。平均时效与 P90 使用对应阶段的有效正值样本，按实际经过时间折算。P90 表示约 90% 的有效样本在该时长内完成该阶段。签收优先取 17TRACK，缺失时按仓库时区口径使用 WMS。美国沿用万邑通七区，阿拉斯加和夏威夷并入太平洋，美国属地单列。州从收件州字段识别，缺失时按 ZIP 邮编补齐。其他国家按目的国家字段统计。地图未描绘的小地区仍可在明细查看。<a id="regionMapSource" href="https://github.com/apache/echarts-examples/blob/gh-pages/public/data/asset/geo/USA.json" target="_blank" rel="noopener noreferrer">地图数据</a></p>
+          <details class="tip regional-notes">
+            <summary>统计与地图口径</summary>
+            <p>支付取客户下单时间，创建取 ERP 履约单创建时间。上网取 17TRACK 首条有效揽收或运输扫描。统计前换算成北京时间，起止齐全且耗时大于零才纳入时效样本。</p>
+            <p>妥投优先取 17TRACK，缺失时按仓库时间口径用 WMS 补算。P90、P95 表示约 90%、95% 的有效样本在该时长内完成对应阶段。地图颜色按当前范围内的实际数值分级，区间见图例。</p>
+            <p>美国按万邑通七区划分，阿拉斯加和夏威夷归太平洋，美国属地单列。优先取收件州，缺失时用 ZIP 邮编补齐。其他国家按目的国统计。地图未绘的小地区可在明细查看。 <a id="regionMapSource" href="https://github.com/apache/echarts-examples/blob/gh-pages/public/data/asset/geo/USA.json" target="_blank" rel="noopener noreferrer">地图数据</a></p>
+          </details>
         </div>
       </section>
 
       <!-- ============ 数据与规则 ============ -->
       <section class="view" id="v-rules">
-        <div class="page-head"><div><h1>数据与规则</h1><p>核对数据来源、17TRACK 覆盖和当前预警计算口径。</p></div><button type="button" class="btn ghost" id="refreshRules">刷新数据</button></div>
+        <div class="page-head"><div><h1>数据与规则</h1><p>数据来源、统计口径与预警规则</p></div><button type="button" class="btn ghost" id="refreshRules">刷新数据</button></div>
         <div class="tabs" id="ruleTabs" aria-label="数据与规则分类">
           <button type="button" class="tab-toned tone-green" data-rule-pane="data" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-check"/></svg>数据健康</button>
           <button type="button" class="tab-toned tone-blue" data-rule-pane="definitions" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-book"/></svg>数据口径</button>
@@ -396,6 +404,15 @@
           <button type="button" class="tab-toned tone-blue" data-rule-pane="dictionary" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg>17TRACK 字典</button>
         </div>
         <div class="workspace-stack" id="rules-sync" hidden>
+          <section class="card" aria-labelledby="fullPullTitle">
+            <div class="ct sync-card-head">
+              <div><h2 id="fullPullTitle">全量拉取</h2>
+                <p class="tip">导入后有运单新进入追踪范围时自动排队，也可手动发起。全量拉取会重新核对最近查过的运单。</p></div>
+              <button type="button" class="btn" id="startFullPull" disabled>全量拉取轨迹</button>
+            </div>
+            <p class="tip full-pull-summary" id="fullPullStatus" role="status">读取任务状态…</p>
+            <progress class="full-pull-progress" id="fullPullProgress" aria-label="全量拉取进度" hidden></progress>
+          </section>
           <div class="sync-grid">
             <div class="card">
               <div class="ct sync-card-head"><h2>定时拉取</h2><span class="badge gray" id="pollStatus">读取中</span></div>
@@ -409,7 +426,7 @@
           </div>
           <p class="tip sync-observed" id="syncObserved" role="status"></p>
           <div class="card table-card">
-            <div class="ct table-head"><div><h2>承运商匹配异常</h2><p class="tip">按 ERP 渠道及 17TRACK 实际登记代码汇总尚待核对的履约单。</p></div><button type="button" class="btn ghost sm" id="openCarrierConflicts">查看履约单</button></div>
+            <div class="ct table-head"><div><h2>承运商匹配异常</h2><p class="tip">待核对履约单 · 按 ERP 渠道和 17TRACK 登记代码汇总</p></div><button type="button" class="btn ghost sm" id="openCarrierConflicts">查看履约单</button></div>
             <div class="tblwrap"><table class="tbl"><thead><tr><th>后台物流商</th><th>C 端渠道</th><th>预期代码</th><th>实际登记代码</th><th>履约单数</th></tr></thead><tbody id="carrierConflicts"></tbody></table></div>
           </div>
           <div class="card table-card">
@@ -431,15 +448,16 @@
         </div>
         <div class="workspace-stack" id="rules-definitions" hidden>
           <section class="card table-card definitions-card">
-            <div class="ct"><h2>时间字段与取值</h2><p class="tip">按履约单统计。ERP、WMS 与承运商的时间在计算时统一到同一时区。</p></div>
+            <div class="ct"><h2>时间字段与取值</h2><p class="tip">按履约单统计，时效统一使用北京时间计算。</p></div>
             <div class="tblwrap"><table class="tbl">
               <thead><tr><th scope="col">字段</th><th scope="col">来源</th><th scope="col">取值及显示</th></tr></thead>
               <tbody>
                 <tr><th scope="row">客户下单</th><td>ERP 支付时间</td><td>同一履约单取明细中最早的有效支付时间，按北京时间显示。</td></tr>
                 <tr><th scope="row">创建履约单</th><td>ERP 创建时间</td><td>取同一履约单最早的有效创建时间。</td></tr>
                 <tr><th scope="row">出库</th><td>ERP / WMS 签出时间</td><td>取同一履约单最早的有效签出时间，按北京时间显示。分配和打包时间取各自在明细中最后一次记录，供查看库内节点。</td></tr>
+                <tr><th scope="row">17TRACK 时间</th><td>UTC 时间或带时区偏移的时间</td><td><strong>统计时换算成北京时间</strong>，再计算上网、妥投等节点的时效。轨迹明细优先显示承运商当地时间，缺少当地时间时标注 UTC。</td></tr>
                 <tr><th scope="row">物流上网</th><td>17TRACK 首条有效揽收或运输扫描</td><td>按归一运单号，从关键节点、近期轨迹与可匹配的历史轨迹取最早的一条揽收、起运、到达、清关或其他有效运输扫描。面单创建、电子信息预报、等待收件等记录不计。最早扫描换算后早于建单，或没有可用扫描时，该单不计上网时效。</td></tr>
-                <tr><th scope="row">物流妥投</th><td>优先 17TRACK，缺失时用 ERP / WMS 补算</td><td>国内仓按原值北京时间处理。WINIT 仓按承运商区分，YANWEN、SpeedX、VEHO、FedEx、OnTrac、DHL eCommerce 等已验证渠道按北京时间，其他按目的地当地时区及夏令时换算。早于出库、晚于导出时刻或时区无法确认的 WMS 签收记录不计入时效。轨迹时间线保留承运商当地时间。</td></tr>
+                <tr><th scope="row">物流妥投</th><td>优先 17TRACK，缺失时用 ERP / WMS 补算</td><td>国内仓按原值北京时间处理。WINIT 仓按承运商区分，YANWEN、SpeedX、VEHO、FedEx、OnTrac、DHL eCommerce 等已验证渠道按北京时间，其他按目的地当地时区及夏令时换算。早于出库、晚于导出时刻或时区无法确认的 WMS 签收记录不计入时效。</td></tr>
               </tbody>
             </table></div>
           </section>
@@ -449,10 +467,11 @@
               <thead><tr><th scope="col">指标</th><th scope="col">计算方式</th></tr></thead>
               <tbody>
                 <tr><th scope="row">库内处理</th><td>出库时间减创建履约单时间。按分钟计算，取大于 0 的样本平均值，换算为小时。分配、打包节点供核对过程。</td></tr>
-                <tr><th scope="row">下单 / 出库 / 上网到妥投</th><td>妥投时间减所选起点，换算为天。缺有效起点或妥投时间、耗时小于等于 0 的记录不计入平均时效及达成率。</td></tr>
+                <tr><th scope="row">下单 / 出库 / 上网到妥投</th><td>妥投时间减所选起点，换算为天。缺有效起点或妥投时间、耗时小于等于 0 的记录不作为有效时效样本，也不计入按期妥投单数。</td></tr>
                 <tr><th scope="row">妥投覆盖率</th><td>有有效妥投时间的履约单数 ÷ 本次筛选范围内的履约单数。取消单仅计入出库单状态统计。</td></tr>
                 <tr><th scope="row">海外仓发货占比</th><td>海外仓已出库履约单 ÷ 筛选范围内全部已出库履约单。按仓库代码判断，WINIT、NF01 和 MGZYTH01 归为海外仓，未归类仓库单独显示。</td></tr>
-                <tr><th scope="row">总览 6 天达成率</th><td>出库后 6 个自然日内签收的履约单数 ÷ 出库到签收的有效样本数。缺少出库或有效签收时间、签收时间不晚于出库的记录不计入样本。按实际经过时间计算，6 天等于 144 小时。</td></tr>
+                <tr><th scope="row">2、3、5、6、7 天内妥投率</th><td>在对应天数内确认妥投的履约单数 ÷ 筛选范围内全部有效履约单数。在途（含未满观察期）、超时、缺可用时效的单均计入分母。总览按出库起算并用自然日，渠道时效按所选起点，可切换自然日和工作日。</td></tr>
+                <tr><th scope="row">妥投率计时方式</th><td>自然日连续计时。工作日按北京时间只累计周一至周五的实际经过时间，周末暂停计时，法定节假日未单独剔除。每天折合 24 小时。例如周五 10:00 至周一 10:00 为 3 个自然日、1 个工作日。平均时效、P90 与 SLA 按各自原有口径计算。</td></tr>
                 <tr><th scope="row">订单拆单率</th><td>拆单订单数 ÷ 筛选命中的可识别订单数。按平台和 ERP 订单号识别，一张订单有两个或以上有效履约单即为拆单。筛选命中任一履约单即纳入订单，判定类型时看整张订单。同仓指所有履约单仓库相同，异仓指涉及两个或以上仓库。仓库缺失且无法判定时单独显示。</td></tr>
                 <tr><th scope="row">承诺时效达成率</th><td>在承诺天数内妥投的有效样本数 ÷ 有效签收样本数。按每单的「当前渠道」配置确定 SLA 起点与承诺天数，渠道表现按 C 端显示物流渠道对比。</td></tr>
                 <tr><th scope="row">平均时效和 P90</th><td>使用当前选择的时效起点及有效妥投样本。P90 是时效的第 90 百分位，约 90% 的有效样本在这个耗时内妥投。</td></tr>
@@ -526,7 +545,7 @@
           </table></div>
         </section>
         <div class="card table-card" id="rules-sla" hidden>
-          <div class="ct table-head"><div><h2><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg></span>渠道 SLA 规则</h2><p class="tip icon-caption">按履约单的「当前渠道」配置起点和承诺天数。妥投优先用 17TRACK，缺失时由 WMS 补算。</p></div>
+          <div class="ct table-head"><div><h2><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg></span>渠道 SLA 规则</h2><p class="tip icon-caption">按当前渠道配置计时起点与承诺天数 · 目标对照以有效签收样本为分母</p></div>
             <div class="toolbar" id="slaGroupFilter">
               <input type="search" id="slaSearch" class="inline-search" placeholder="搜索当前渠道…" aria-label="搜索当前渠道">
             </div>
@@ -563,6 +582,24 @@
   <div class="body" id="dBody"></div>
 </aside>
 <div class="toast" id="toast" role="status"></div>
+<dialog class="settings-dialog track-analysis-dialog" id="trackAnalysisDialog" aria-labelledby="trackAnalysisTitle">
+  <header>
+    <div><h2 id="trackAnalysisTitle">AI 轨迹分析</h2><p class="tip" id="trackAnalysisScope"></p></div>
+    <form method="dialog"><button class="btn ghost sm" aria-label="关闭轨迹分析">关闭</button></form>
+  </header>
+  <div class="track-analysis-body">
+    <p class="tip" id="trackAnalysisStatus" role="status"></p>
+    <div id="trackAnalysisResult"></div>
+    <section class="track-analysis-reading" id="trackAnalysisReading" hidden>
+      <h3>AI 解读</h3>
+      <p id="trackAnalysisText" role="status"></p>
+    </section>
+  </div>
+  <footer>
+    <button type="button" class="btn ghost sm" id="refreshTrackAnalysis">重新分析</button>
+    <button type="button" class="btn sm" id="interpretTrackAnalysis" hidden>生成 AI 解读</button>
+  </footer>
+</dialog>
 <dialog class="settings-dialog" id="settingsDialog" aria-labelledby="settingsTitle">
   <form id="settingsForm">
     <header><h2 id="settingsTitle"></h2><button type="button" class="btn ghost sm" id="settingsClose" aria-label="关闭配置">关闭</button></header>
@@ -639,7 +676,7 @@
       <label class="settings-check" id="filterPresetReplaceLabel" hidden><input type="checkbox" id="filterPresetReplace">用当前页面的筛选条件覆盖此组合</label>
       <p class="tip filter-preset-summary" id="filterPresetSummary"></p>
       <label class="settings-check"><input type="checkbox" id="filterPresetDefault">设为默认组合</label>
-      <p class="tip filter-preset-summary">组合保存在此浏览器。刷新后首次进入该视图时，会应用默认组合。</p>
+      <p class="tip filter-preset-summary">保存在此浏览器 · 再次打开时应用默认组合</p>
     </div>
     <p class="settings-error" id="filterPresetError" role="alert"></p>
     <footer>
@@ -648,6 +685,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261125-workspace" defer></script>
+<script src="/static/app.js?v=20261126-track-analysis" defer></script>
 </body>
 </html>

@@ -12,11 +12,11 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 import pandas as pd
 
-from . import alert_history, analytics_snapshot, channel_groups, core, public_preview, rules, us_analysis, track_lookup
+from . import alert_history, analytics_snapshot, channel_groups, core, ops_assistant, public_preview, rules, us_analysis, track_analysis, track_lookup
 from .carrier_delivery import (
     DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts, transport_minutes,
 )
-from .channel_timing import ONLINE_START, TimingBasis, timing_start, transport_archive_version
+from .channel_timing import ONLINE_START, TimingBasis, timing_start, transport_archive_version, workday_minutes
 from .filter_time import DATE_BASIS_FIELDS, DEFAULT_DATE_BASIS, DateBasis, time_bounds, week_filter
 from .order_time import delivery_facts
 from .tracking_archive import fill_local_times
@@ -25,9 +25,22 @@ from .waybill import key_sql, normalized as normalize_waybill
 router = APIRouter(prefix="/api")
 
 TRACK_STATUS_LABEL = "t.状态标签"
+DELIVERY_WINDOWS = (2, 3, 5, 6, 7)
 
 
 # ---------------------------------------------------------------- 公共
+
+def delivery_window_counts(minutes, *, prefix="d", include_zero=False):
+    minimum = ">=0" if include_zero else ">0"
+    return ", ".join(
+        f"count(*) FILTER (WHERE {minutes}{minimum} AND {minutes}<={day * 1440}) AS {prefix}{day}"
+        for day in DELIVERY_WINDOWS
+    )
+
+
+def delivery_rates(counts, orders):
+    return {str(day): round(100 * counts[day] / orders, 1) if orders else None for day in DELIVERY_WINDOWS}
+
 
 def _cond(month="", wh="", pf="", cr="", cn="", status="", start="", end="", q="",
           alias="o", lastmile="", channel="", date_basis=DEFAULT_DATE_BASIS, week="", require_time=False,
@@ -245,12 +258,9 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
                    avg(仓内分钟) FILTER (WHERE 仓内分钟 > 0) hm,
                    avg(物流分钟) FILTER (WHERE 物流分钟 > 0) tm,
                    count(*) FILTER (WHERE 物流分钟 > 0) sgn,
-                   count(*) FILTER (WHERE 物流分钟 > 0 AND 物流分钟 <= 4320) d3,
-                   count(*) FILTER (WHERE 物流分钟 > 0 AND 物流分钟 <= 7200) d5,
-                   count(*) FILTER (WHERE 物流分钟 > 0 AND 物流分钟 <= 8640) d6,
-                   count(*) FILTER (WHERE 物流分钟 > 0 AND 物流分钟 <= 10080) d7,
                    count(*) FILTER (WHERE {DELIVERY_SOURCE}='WMS') fallback_signed,
-                   count(*) FILTER (WHERE {DELIVERY_SOURCE}='WMS' AND 物流分钟>0) fallback_samples
+                   count(*) FILTER (WHERE {DELIVERY_SOURCE}='WMS' AND 物流分钟>0) fallback_samples,
+                   {delivery_window_counts("物流分钟")}
             FROM overview_timing
         """).fetchone()
         warehouse_shipping = _warehouse_shipping_mix(con)
@@ -305,9 +315,8 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
 
     n = k[0] or 0
     sgn = k[5] or 0
-
-    def rate(x):
-        return round(100.0 * x / sgn, 1) if sgn else None
+    window_counts = dict(zip(DELIVERY_WINDOWS, k[8:], strict=True))
+    sample_rates = delivery_rates(window_counts, sgn)
 
     return core.clean({
         "asof": str(asof),
@@ -317,9 +326,11 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
             "inboundHours": round(k[3] / 60.0, 2) if k[3] else None,
             "transitDays": round(k[4] / 1440.0, 2) if k[4] else None,
             "transitSamples": sgn,
-            "rate3": rate(k[6]), "rate5": rate(k[7]), "rate6": rate(k[8]), "rate7": rate(k[9]),
+            "deliveryRates": delivery_rates(window_counts, n),
+            # Existing API fields continue to mean rates among valid timing samples.
+            **{f"rate{day}": sample_rates[str(day)] for day in DELIVERY_WINDOWS if day != 2},
             "signed": int(k[2] or 0),
-            "fallbackSigned": k[10], "fallbackTransitSamples": k[11],
+            "fallbackSigned": k[6], "fallbackTransitSamples": k[7],
         },
         "monthly": monthly, "byCarrier": by_carrier, "byWarehouse": by_wh,
         "warehouseShipping": warehouse_shipping, "orderSplit": order_split,
@@ -353,34 +364,25 @@ def usa(request: Request, month: str = "", wh: str = "", pf: str = "", cr: str =
     settings = json.dumps(groups, ensure_ascii=False, sort_keys=True) if dimension == "group" else ""
     snapshot = core.snapshot_key()
     if detail == "segments":
-        return us_analysis.segments(snapshot, market, date_basis, dimension, cond, tuple(args), settings, level, place, focus)
-    return us_analysis.report(snapshot, date_basis, basis, dimension, cond, tuple(args), settings, market)
+        return us_analysis.segments(snapshot, market, date_basis, dimension, cond, tuple(args), settings,
+                                    level, place, focus, transport_archive_version())
+    archive_version = transport_archive_version() if basis in ("ship_pickup", "pickup_delivered") else None
+    return us_analysis.report(snapshot, date_basis, basis, dimension, cond, tuple(args), settings, market, archive_version)
 
 
 # ---------------------------------------------------------------- 轨迹监控
 
-@router.get("/track")
-def track(request: Request,
-          page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
-          q: str = "", month: str = "", wh: str = "", pf: str = "", cr: str = "",
-          cn: str = "", tstat: str = "", rule: str = "", signed: str = "",
-          sort: str = "", order: str = "desc",
-          start: str = "", end: str = "", lastmile: str = "",
-          sub: str = "", coverage: str = "", channel: str = "", week: str = "",
-          date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = "", resolved_only: bool = False,
-          part: Literal["all", "rows", "summary"] = "all"):
-    if core.require_reader(request)["preview"]:
-        return public_preview.search("" if resolved_only else q, page, size)
-    resolved = None
-    selection = (None, None)
-    if channel_group or resolved_only:
-        with core.ops() as db:
-            if channel_group:
-                selection = channel_groups.filter_values(channel_group, channel_groups.load(db)["groups"])
-            if resolved_only:
-                resolved = alert_history.resolved_for_orders(db, manual_only=True)
-    if resolved == {}:
-        return {"total": 0, "page": page, "size": size, "rows": [], "statusSummary": [], "ruleSummary": []}
+def _track_selection(channel_group, resolved_only):
+    if not (channel_group or resolved_only):
+        return (None, None), None
+    with core.ops() as db:
+        selection = channel_groups.filter_values(channel_group, channel_groups.load(db)["groups"]) if channel_group else (None, None)
+        resolved = alert_history.resolved_for_orders(db, manual_only=True) if resolved_only else None
+    return selection, resolved
+
+
+def _track_conditions(*, q, month, wh, pf, cr, cn, tstat, rule, signed, start, end,
+                      lastmile, sub, coverage, channel, week, date_basis, selection):
     cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q=q, lastmile=lastmile, channel=channel,
                        date_basis=date_basis, week=week, group_selection=selection)
 
@@ -403,6 +405,110 @@ def track(request: Request,
         cond += " AND t.覆盖=?"; args.append(coverage)
     if signed in ("0", "1"):
         cond += " AND o.已签收 = ?"; args.append(int(signed))
+    return cond, args
+
+
+def _register_live_alerts(con, condition, arguments):
+    with core.ops() as ops:
+        summaries = ops.execute(f"""
+            WITH ranked AS (
+                SELECT order_no, rule_cn, rule, level, count(*) OVER by_order AS total,
+                       row_number() OVER (by_order ORDER BY is_main DESC,
+                          CASE level WHEN '紧急' THEN 0 WHEN '高' THEN 1 ELSE 2 END, rule) AS choice
+                FROM ({alert_history.current_rows()})
+                WHERE {condition} AND state IN {alert_history.PENDING_STATES}
+                WINDOW by_order AS (PARTITION BY order_no)
+            )
+            SELECT order_no,rule_cn,rule,level,total FROM ranked WHERE choice=1
+        """, arguments).fetchall()
+    con.register("live_alerts", pd.DataFrame.from_records(
+        summaries, columns=["履约单号", "主预警名称", "主预警规则", "主预警级别", "预警数"]
+    ).astype({"履约单号": "string", "主预警名称": "string", "主预警规则": "string",
+              "主预警级别": "string", "预警数": "int64"}))
+
+
+class TrackAnalysisScope(BaseModel):
+    q: str = Field("", max_length=128)
+    month: str = Field("", max_length=4096)
+    week: str = Field("", max_length=4096)
+    wh: str = Field("", max_length=4096)
+    pf: str = Field("", max_length=4096)
+    cr: str = Field("", max_length=4096)
+    cn: str = Field("", max_length=4096)
+    tstat: str = Field("", max_length=128)
+    rule: str = Field("", max_length=128)
+    signed: str = Field("", max_length=4)
+    start: str = Field("", max_length=32)
+    end: str = Field("", max_length=32)
+    lastmile: str = Field("", max_length=4096)
+    sub: str = Field("", max_length=128)
+    coverage: str = Field("", max_length=64)
+    channel: str = Field("", max_length=8192)
+    date_basis: DateBasis = DEFAULT_DATE_BASIS
+    channel_group: str = Field("", max_length=4096)
+    resolved_only: bool = False
+
+
+@router.post("/track-analysis", status_code=200, response_class=ops_assistant.PrivateJSON)
+def analyze_track(body: TrackAnalysisScope, request: Request, interpret: bool = False):
+    user = core.require_reader(request)
+    if user["preview"]:
+        raise HTTPException(403, "当前预览模式只能查询单笔轨迹")
+    ai_available = ops_assistant.can_use(user) and ops_assistant.configured()["ai"]
+    if interpret:
+        ops_assistant.authorize(request, "ai")
+    selection, resolved = _track_selection(body.channel_group, body.resolved_only)
+    cond, args = _track_conditions(**body.model_dump(exclude={"channel_group", "resolved_only"}), selection=selection)
+    if not track_analysis.RUNNING.acquire(blocking=False):
+        raise HTTPException(429, "已有轨迹分析正在计算，请稍后再试")
+    try:
+        with core.duck() as con:
+            facts = delivery_facts(con, core.active_facts(core.order_facts(con)))
+            if resolved is not None:
+                con.register("analysis_resolved", pd.DataFrame({"id": pd.Series(resolved.keys(), dtype="string")}))
+                cond += " AND o.履约单号 IN (SELECT id FROM analysis_resolved)"
+            alert_join = ""
+            if body.rule:
+                _register_live_alerts(con, rules.visible_alerts(), [])
+                alert_join = "LEFT JOIN live_alerts a ON a.履约单号=o.履约单号"
+            con.execute(f"""
+                CREATE TEMP TABLE analysis_orders AS
+                SELECT o.履约单号 AS id,o.单号归一 AS num,
+                    coalesce(t.carrier,t.回补运输商代码) AS carrier,o.签出时间 AS shipped,
+                    coalesce(o.C端承运商,o.物流商,'未识别') AS carrier_name,
+                    coalesce(o.仓库,'—') AS warehouse,coalesce(o.当前渠道,'—') AS channel,
+                    t.状态 AS official,t.子状态 AS latest_sub,t.查询时间 AS checked,
+                    coalesce(o.已签收=1,false) AS wms_delivered
+                FROM {facts} o LEFT JOIN {track_lookup.source(con)} t ON t.履约单号=o.履约单号
+                {alert_join} WHERE 1=1{cond}
+            """, args)
+            result = track_analysis.report(con)
+    finally:
+        track_analysis.RUNNING.release()
+    if interpret and result["summary"]["tracked"]:
+        result["interpretation"] = ops_assistant.trajectory_summary(result)
+    return {**result, "aiAvailable": bool(ai_available)}
+
+
+@router.get("/track")
+def track(request: Request,
+          page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
+          q: str = "", month: str = "", wh: str = "", pf: str = "", cr: str = "",
+          cn: str = "", tstat: str = "", rule: str = "", signed: str = "",
+          sort: str = "", order: str = "desc",
+          start: str = "", end: str = "", lastmile: str = "",
+          sub: str = "", coverage: str = "", channel: str = "", week: str = "",
+          date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = "", resolved_only: bool = False,
+          part: Literal["all", "rows", "summary"] = "all"):
+    if core.require_reader(request)["preview"]:
+        return public_preview.search("" if resolved_only else q, page, size)
+    selection, resolved = _track_selection(channel_group, resolved_only)
+    if resolved == {}:
+        return {"total": 0, "page": page, "size": size, "rows": [], "statusSummary": [], "ruleSummary": []}
+    cond, args = _track_conditions(q=q, month=month, wh=wh, pf=pf, cr=cr, cn=cn, tstat=tstat,
+                                   rule=rule, signed=signed, start=start, end=end, lastmile=lastmile,
+                                   sub=sub, coverage=coverage, channel=channel, week=week,
+                                   date_basis=date_basis, selection=selection)
 
     sort_cols = {"停滞天数": "t.停滞天数", "签出时间": "o.签出时间", "创建时间": "o.创建时间",
                  "物流分钟": "o.物流分钟", "履约单号": "o.履约单号", "逐条事件数": "逐条事件数"}
@@ -469,22 +575,7 @@ def track(request: Request,
         if fast_page:
             alert_args = [row[0] for row in con.execute("SELECT 履约单号 FROM selected_track_orders").fetchall()]
             alert_where += f' AND order_no IN ({",".join("?" * len(alert_args))})' if alert_args else " AND FALSE"
-        with core.ops() as ops:
-            summaries = ops.execute(f"""
-                WITH ranked AS (
-                    SELECT order_no, rule_cn, rule, level, count(*) OVER by_order AS total,
-                           row_number() OVER (by_order ORDER BY is_main DESC,
-                              CASE level WHEN '紧急' THEN 0 WHEN '高' THEN 1 ELSE 2 END, rule) AS choice
-                    FROM ({alert_history.current_rows()})
-                    WHERE {alert_where} AND state IN {alert_history.PENDING_STATES}
-                    WINDOW by_order AS (PARTITION BY order_no)
-                )
-                SELECT order_no,rule_cn,rule,level,total FROM ranked WHERE choice=1
-            """, alert_args).fetchall()
-        con.register("live_alerts", pd.DataFrame.from_records(
-            summaries, columns=["履约单号", "主预警名称", "主预警规则", "主预警级别", "预警数"]
-        ).astype({"履约单号": "string", "主预警名称": "string", "主预警规则": "string",
-                  "主预警级别": "string", "预警数": "int64"}))
+        _register_live_alerts(con, alert_where, alert_args)
         joins = (f"LEFT JOIN {tracking} t ON t.履约单号 = o.履约单号 "
                 "LEFT JOIN live_alerts a ON a.履约单号 = o.履约单号")
         joined = joins + " WHERE 1=1" + cond
@@ -600,11 +691,8 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
         sla_sql, sla_values = rules.sla_table(slas)
         sla_scans = any(config["basis"] == "online" for config in slas.values())
         scan_join, online_start = analytics_snapshot.scan_source(con, _archive) if basis == "online" or sla_scans else ("", ONLINE_START)
-        minutes = {
-            "paid": elapsed_minutes("o.支付时间", f"o.{DELIVERED_BJ}"),
-            "shipped": "o.物流分钟",
-            "online": elapsed_minutes(online_start, f"o.{DELIVERED_BJ}"),
-        }[basis]
+        report_start = {"paid": "o.支付时间", "shipped": "o.签出时间", "online": online_start}[basis]
+        minutes = "o.物流分钟" if basis == "shipped" else elapsed_minutes(report_start, f"o.{DELIVERED_BJ}")
         sla_start = timing_start("tgt.basis", sla_scans, online_start)
         active = f"o.已签收=0 AND o.{DELIVERED_UTC} IS NULL AND (o.状态 IS DISTINCT FROM '已完成' OR o.签收时间 IS NOT NULL) AND o.签出时间 IS NOT NULL"
         group_join = ""
@@ -617,7 +705,7 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
         scoped = f"""SELECT {key} AS key,
                             coalesce(o.目的国中文,o.目的国) AS ctry,
                             o.{DELIVERED_BJ} AS delivered, o.{DELIVERY_SOURCE} AS delivery_source,
-                            {minutes} AS duration_min, {sla_start} AS sla_start,
+                            {minutes} AS duration_min, {report_start} AS report_start, {sla_start} AS sla_start,
                             coalesce(tgt.days,{rules.DEFAULT_SLA_DAYS}) AS sla_days,
                             {active} AS in_transit
                      FROM {facts} o LEFT JOIN tgt ON tgt.ch=o.当前渠道
@@ -626,24 +714,25 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
         sla_minutes = elapsed_minutes("o.sla_start", "o.delivered")
         sla_usable = f"{sla_minutes}>0"
         grouped = con.execute(f"""
-            WITH tgt(ch, days, basis) AS ({sla_sql}), scoped AS ({scoped})
+            WITH tgt(ch, days, basis) AS ({sla_sql}), scoped AS ({scoped}), measured AS (
+                SELECT *, CASE WHEN duration_min>0 THEN {workday_minutes("report_start", "delivered")} END AS workday_min
+                FROM scoped
+            )
             SELECT grouping(o.ctry) AS channel_total, o.key, o.ctry, count(*) AS orders,
                    count(o.delivered) AS signed,
                    count(*) FILTER (WHERE {usable}) AS samples,
                    count(*) FILTER (WHERE {usable} AND o.delivery_source='WMS') AS fallbackSamples,
                    round(avg(o.duration_min) FILTER (WHERE {usable}) / 1440.0, 2) AS avgDays,
                    round(quantile_cont(o.duration_min, 0.9) FILTER (WHERE {usable}) / 1440.0, 2) AS p90Days,
-                   count(*) FILTER (WHERE {usable} AND o.duration_min<=4320) AS d3,
-                   count(*) FILTER (WHERE {usable} AND o.duration_min<=7200) AS d5,
-                   count(*) FILTER (WHERE {usable} AND o.duration_min<=8640) AS d6,
-                   count(*) FILTER (WHERE {usable} AND o.duration_min<=10080) AS d7,
+                   {delivery_window_counts("o.duration_min")},
+                   {delivery_window_counts("o.workday_min", prefix="w", include_zero=True)},
                    count(*) FILTER (WHERE {sla_usable}) AS sla_samples,
                    count(*) FILTER (WHERE {sla_usable} AND {sla_minutes}<=o.sla_days*1440) AS within_sla,
                    count(*) FILTER (WHERE o.in_transit) AS inTransit,
                    count(*) FILTER (WHERE o.in_transit AND o.sla_start IS NOT NULL) AS slaInTransit,
                    count(*) FILTER (WHERE o.in_transit AND
                       date_diff('second',o.sla_start,?::TIMESTAMP)>o.sla_days*86400) AS overdue
-            FROM scoped o
+            FROM measured o
             GROUP BY GROUPING SETS ((o.key), (o.key, o.ctry))
             HAVING grouping(o.ctry)=1 OR count(*)>=200
             ORDER BY orders DESC,o.key,o.ctry
@@ -656,6 +745,10 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
 
     records, by_country = [], []
     for row in grouped:
+        window_counts = {day: row.pop(f"d{day}") for day in DELIVERY_WINDOWS}
+        workday_counts = {day: row.pop(f"w{day}") for day in DELIVERY_WINDOWS}
+        row["deliveryRates"] = delivery_rates(window_counts, row["orders"])
+        row["workdayDeliveryRates"] = delivery_rates(workday_counts, row["orders"])
         name = row["key"]
         if dimension == "group" and name == channel_groups.UNGROUPED:
             name = channel_groups.UNGROUPED_LABEL
@@ -665,12 +758,14 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
             if len(by_country) < 40:
                 by_country.append({"key": row["key"], "ch": name, "ctry": row["ctry"], "n": row["orders"],
                                    "avgDays": row["avgDays"], "samples": row["samples"],
-                                   "rate6": pct(row["d6"], row["samples"])})
+                                   "deliveryRates": row["deliveryRates"],
+                                   "workdayDeliveryRates": row["workdayDeliveryRates"],
+                                   "rate6": pct(window_counts[6], row["samples"])})
             continue
         row.pop("ctry")
         row["channel"] = name
         for day in (3, 5, 6, 7):
-            row[f"rate{day}"] = pct(row.pop(f"d{day}"), row["samples"])
+            row[f"rate{day}"] = pct(window_counts[day], row["samples"])
         row["slaRate"] = pct(row.pop("within_sla"), row["sla_samples"])
         row["overRate"] = pct(row["overdue"], row["slaInTransit"])
         records.append(row)
