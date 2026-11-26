@@ -43,6 +43,10 @@ def scope(con):
     """
 
 
+def eligible_orders(con):
+    return set(con.execute(scope(con) + "SELECT order_no, number FROM scope").fetchall())
+
+
 def full_numbers(con):
     return [row[0] for row in con.execute(scope(con) + """
         SELECT number FROM scope GROUP BY number ORDER BY max(shipped_at) DESC, number

@@ -406,7 +406,7 @@
           <section class="card" aria-labelledby="fullPullTitle">
             <div class="ct sync-card-head">
               <div><h2 id="fullPullTitle">全量拉取</h2>
-                <p class="tip">按定时拉取的运单范围分批查询，最近查过的也会重新核对。</p></div>
+                <p class="tip">导入后有运单新进入追踪范围时自动排队，也可手动发起。全量拉取会重新核对最近查过的运单。</p></div>
               <button type="button" class="btn" id="startFullPull" disabled>全量拉取轨迹</button>
             </div>
             <p class="tip full-pull-summary" id="fullPullStatus" role="status">读取任务状态…</p>
@@ -666,6 +666,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261126-region-p95" defer></script>
+<script src="/static/app.js?v=20261126-import-track-pull" defer></script>
 </body>
 </html>

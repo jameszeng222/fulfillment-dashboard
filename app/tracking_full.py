@@ -44,20 +44,53 @@ def enqueue(actor):
         return job
 
 
+def _add_numbers(db, run_id, numbers):
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS track17_full_queue (
+            id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, number TEXT NOT NULL
+        )
+    """)
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_track17_full_number ON track17_full_queue(run_id,number)")
+    return db.executemany("INSERT OR IGNORE INTO track17_full_queue(run_id,number) VALUES (?,?)",
+                          ((run_id, number) for number in numbers)).rowcount
+
+
+def enqueue_import(db, numbers):
+    """Queue a successful import or extend the full pull already underway."""
+    if not numbers:
+        return None
+    job = latest(db)
+    import_detail = {"lastImportAt": core.now_iso(), "lastImportWaybills": len(numbers)}
+    if job and (job["status"] in ACTIVE or job["status"] == "failed" and "total" in job["detail"]):
+        run_id = job["id"]
+        detail = {**job["detail"], **import_detail}
+        added = _add_numbers(db, run_id, numbers)
+        if "total" in detail:
+            detail["total"] += added
+        detail.pop("reason", None)
+        save(db, run_id, "running" if job["status"] == "running" else "queued", detail)
+    else:
+        detail = {"trigger": "import", **import_detail}
+        run_id = db.execute("""
+            INSERT INTO job_runs(job,started_at,status,detail) VALUES (?,?,'queued',?)
+        """, (JOB, import_detail["lastImportAt"], json.dumps(detail))).lastrowid
+        _add_numbers(db, run_id, numbers)
+    core.audit("system", "track17_full_pull_import", str(run_id), import_detail, connection=db)
+    return run_id
+
+
 def seed(run_id, numbers):
     with core.ops() as db:
         db.execute("BEGIN IMMEDIATE")
-        db.execute("""
-            CREATE TABLE IF NOT EXISTS track17_full_queue (
-                id INTEGER PRIMARY KEY, run_id INTEGER NOT NULL, number TEXT NOT NULL
-            )
-        """)
-        db.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_track17_full_number ON track17_full_queue(run_id,number)")
+        job = latest(db)
+        if not job or job["id"] != run_id or job["status"] not in ACTIVE or "total" in job["detail"]:
+            raise RuntimeError("全量拉取任务已变更")
+        _add_numbers(db, run_id, numbers)
         db.execute("DELETE FROM track17_full_queue WHERE run_id<>?", (run_id,))
-        db.executemany("INSERT INTO track17_full_queue(run_id,number) VALUES (?,?)",
-                       ((run_id, number) for number in numbers))
-        detail = {"total": len(numbers), **dict.fromkeys(COUNTERS, 0)}
-        save(db, run_id, "running" if numbers else "ok", detail)
+        total = db.execute("SELECT count(*) FROM track17_full_queue WHERE run_id=?", (run_id,)).fetchone()[0]
+        detail = {**job["detail"], "total": total, **dict.fromkeys(COUNTERS, 0)}
+        save(db, run_id, "running" if total else "ok", detail)
+        return total
 
 
 def save(db, run_id, status, detail):

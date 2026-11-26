@@ -2959,7 +2959,9 @@ function renderFullPull(job, available) {
     ['未返回轨迹', detail.empty], ['查询失败', detail.read_error], ['本地轨迹较新', detail.older],
     ['已不符合查询范围', detail.skipped]].filter(([, count]) => count)
     .map(([name, count]) => `${name} ${fmt(count)}`).join(' · ');
-  $('#fullPullStatus').textContent = label + counts + (outcomes ? ' · ' + outcomes : '') +
+  const importSummary = detail.lastImportWaybills ? ` · ${detail.trigger === 'import' ? '入库自动触发' : '已并入入库更新'}` +
+    ` · 最近导入有 ${fmt(detail.lastImportWaybills)} 个运单进入追踪范围` : '';
+  $('#fullPullStatus').textContent = label + counts + importSummary + (outcomes ? ' · ' + outcomes : '') +
     (job?.finished_at ? ' · ' + syncTime(job.finished_at) : '');
 }
 

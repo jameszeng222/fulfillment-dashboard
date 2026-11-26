@@ -234,9 +234,12 @@ def prepare(stage, folder, track_limit=None, import_archive=False, repair=False,
         shutil.copyfile(source, stage)
     with closing(duckdb.connect(str(stage))) as con:
         tracking = None
+        eligible_before = tracking_freshness.eligible_orders(con) if exports and core.columns(con, "fct_order") else set()
         imported = import_exports(con, exports)
         if imported or repair or "WMS签收异常" not in core.columns(con, "fct_order"):
             build_orders.build(con)
+        import_waybills = sorted({number for _, number in tracking_freshness.eligible_orders(con) - eligible_before}) \
+            if imported else []
         archive_count = None
         if import_archive:
             archive_count, _ = tracking_archive.refresh_archive(con, tracking_archive.path_for(source))
@@ -262,7 +265,7 @@ def prepare(stage, folder, track_limit=None, import_archive=False, repair=False,
     stage.with_suffix(".json").write_text(json.dumps({
         "source_stamp": original_stamp, "started": started, "exports": imported,
         "tracking": tracking, "pushes": outcomes, "archive_count": archive_count,
-        "full": full,
+        "full": full, "import_waybills": import_waybills,
     }, ensure_ascii=False), encoding="utf-8")
     return 0
 
@@ -289,6 +292,8 @@ def publish(stage, run_id=None):
             jobs = []
             if names:
                 jobs.append((ERP_JOB, names.copy()))
+                if tracking_full.enqueue_import(ops, payload.get("import_waybills", [])):
+                    names.append(f"自动排队 17TRACK 全量拉取（{len(payload['import_waybills']):,} 个新符合条件的运单）")
             if payload.get("archive_count") is not None:
                 archive_job = "17TRACK 历史轨迹导入"
                 jobs.append((archive_job, {"events": payload["archive_count"]}))
@@ -331,9 +336,9 @@ def full_batch(run_id):
     if "total" not in job["detail"]:
         with closing(core.duck()) as con:
             numbers = tracking_freshness.full_numbers(con)
-        tracking_full.seed(run_id, numbers)
-        print(f"17TRACK 全量拉取：共 {len(numbers):,} 个运单", flush=True)
-        if not numbers:
+        total = tracking_full.seed(run_id, numbers)
+        print(f"17TRACK 全量拉取：共 {total:,} 个运单", flush=True)
+        if not total:
             return 0
     with core.ops() as db:
         numbers = tracking_full.next_numbers(db, run_id, TRACK_LIMIT)
