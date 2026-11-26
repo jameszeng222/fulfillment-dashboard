@@ -130,9 +130,13 @@ def fail(run_id, reason):
             save(db, run_id, "failed", {**job["detail"], "reason": reason})
 
 
+def available():
+    return os.name == "nt" and os.environ.get("FULFILLMENT_HUB_SITE") != "true"
+
+
 async def dispatch():
     """Resume persisted work on service startup, one batch at a time."""
-    if os.name != "nt":
+    if not available():
         return
     shell = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
     while True:

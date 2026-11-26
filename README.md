@@ -1,62 +1,28 @@
-# 履约监控系统
+# 履约监控系统 · 智能中枢版
 
-[打开线上履约监控系统](https://fulfillment-monitor.pages.dev/) · [部署记录](https://github.com/jameszeng222/fulfillment-dashboard/actions) · [运维交接文档](交接文档.md)
+中枢站点：[logistics-dashboard](https://biz.htwig.com:18700/) · [发布与验收](deploy/README.md) · [运维交接](交接文档.md)
 
 | 页面 | 用途 |
 |---|---|
-| 数据总览 | 查看日单量、月度时效、妥投覆盖和渠道单量。取消单仅计入出库单状态统计。 |
-| 轨迹监控 | 按履约单号、运单号、订单号或平台订单号查单，查看履约节点、逐条物流轨迹及预警。 |
-| 渠道时效 | 按 C 端显示物流渠道或自定义渠道分组比较支付、出库、上网到妥投的时效及 SLA 达成。 |
-| 数据与规则 | 查看 ERP 导入和 17TRACK 同步状态，管理业务预警与各当前渠道的 SLA。 |
+| 数据总览 | 查看日单量、月度时效、妥投覆盖和渠道单量。 |
+| 轨迹监控 | 按履约单号、运单号、订单号或平台订单号查单；选定日期或单号后可分析聚集异常。 |
+| 渠道时效 | 对比支付、出库、上网到妥投的时间及 SLA 达成情况。 |
+| 数据与规则 | 查看 ERP 和 17TRACK 的数据状态，管理业务预警与各渠道 SLA。 |
 
-## 日常使用
+中枢站点使用智能中枢登录。`data/履约单.duckdb` 是只读事实库，`data/ops.db` 是该站点的操作库，保存会话、规则和处理记录。不会因同步代码而同步两站的数据库、账号或配置。Windows 批量拉取工具留在数据源侧；中枢页面不提交此类任务。
 
-- 开发期间启用开放测试。直接打开线上链接或 [本机入口](http://127.0.0.1:8766/) 即可浏览履约单、看完整详情、导出、处理预警和配置规则。无需账号、邀请或桌面登录。
-- 开放测试中的编辑保存到实际操作库，操作日志使用 `open-test` 记录。线上与本机使用同一份主库与操作库。
-- 本机离线期间，线上入口提供 Cloudflare 里的只读快照。页面显示快照时间，支持看全量统计和按完整单号查已入库轨迹。
+## 两条发布线
 
-## 数据更新和备份
+- **`main` → Cloudflare**：共享业务功能先在 `main` 开发，Cloudflare 仅按其自己的流程发布。
+- **`ops/logistics-dashboard-hub` → 智能中枢**：通过 PR 单向合入 `main`，保留中枢登录、直接 HTTPS 和站点数据目录。不把中枢适配反向合入 `main`，不携带 Cloudflare 的发布、转发及隧道配置。两站分别验收和发布。
 
-| 内容 | 怎么更新 |
-|---|---|
-| ERP 履约单 | 将 ERP 导出的 `履约单数据_*.xlsx` 放进桌面的 **履约单2026** 文件夹。Windows 每 5 分钟检查，按文件内容去重并合并明细。 |
-| 近期 17TRACK 轨迹 | Windows 每 2 小时查询一批已登记运单，每批最多 4,000 个，按运单号和承运商代码匹配，跳过 Postnet。 |
-| 历史轨迹 | 历史回补写入本机断点库。回补后执行 `.\sync_control_tower.ps1 -ImportArchive`，将逐条轨迹导入主库。 |
-| 同步状态 | 在 **数据与规则 → 数据健康 / 17TRACK 同步** 查看导入、拉取和 Webhook 收件与入库。 |
+## 开发验证
 
-业务备份保留项目目录内的 **`履约单.duckdb`** 和 **`ops.db`**。前者保存履约单及近期和历史逐条轨迹。后者保存 SLA、预警、操作记录和同步队列。如需继续历史回补，再保留 **`17TRACK历史轨迹.sqlite3`**。数据和密钥由运行环境保管。
-
-自定义渠道配置保存在 `ops.db`。在 **数据与规则 → 自定义渠道 → 导出配置** 下载包含配置版本和完整渠道映射的 JSON 文件，可用于独立备份；恢复时使用备份中的 `groups`，并以当前系统配置版本提交。
-
-每次滚动更新同时重建轨迹筛选表与统计明细表，保存经过校验的妥投、揽收、上网时间和区域归属。统计页面按筛选条件汇总这些明细，P90 仍基于逐单有效样本计算。浏览器保留近期统计报告并按数据版本刷新，缓存可直接显示，筛选条件发生变化时会提示上次结果直至新结果返回。
-
-## 时效口径
-
-支付时间是客户下单时间，创建时间是履约单创建时间，签出时间是出库时间，签收时间是物流妥投时间。时效优先使用 17TRACK 妥投，缺失时按仓库及承运商口径用 WMS 补算。国内仓和已验证为北京时间的 WINIT 承运商使用原值，其他 WINIT 渠道按收货地当地时区及夏令时换算。早于出库或晚于数据导出时刻的签收时间不计入补算。页面保留承运商当地时间，计算时统一时区。
-
-## 开发和发布
-
-使用 Python 3.12 和 Node.js 24，在项目目录运行：
-
-~~~powershell
+```bash
 python -m pip install -r requirements.txt
-python -m unittest discover -s test -p ops_fastapi.py -v
-node --test test/cloudflare-edge.mjs
-~~~
+python -m unittest discover -s test -p 'test_*.py' -v
+python -m unittest discover -s test -p 'ops_fastapi.py' -v
+node --check static/app.js
+```
 
-- 界面在 `templates/` 和 `static/`，应用接口在 `app/`，滚动更新入口是 `sync_control_tower.ps1`。
-- **`main` 是正式发布分支**。发布相关文件更新后，由 [GitHub Actions](https://github.com/jameszeng222/fulfillment-dashboard/actions/workflows/deploy-fulfillment-monitor.yml) 部署 Cloudflare Pages。
-- 修改本机 Python API 后，同时更新生产电脑上的工作区并重启 Origin 任务。边缘发布与本机数据服务分别验收。
-- 原静态看板已退役。详细的任务配置、备份和故障排查见[交接文档](交接文档.md)。
-
-### 中枢站点部署
-
-站点 `logistics-dashboard` 发布到 `https://biz.htwig.com:18700`，入口是 `deploy/run_site.py`：
-
-~~~bash
-python3 deploy/run_site.py           # 前台启动，监听 $PORT（默认 18700）
-python3 deploy/run_site.py --check   # 只打印配置摘要
-~~~
-
-登录、站点 MCP、AI 与技能都通过后端环境变量接入，密钥不进仓库、不进页面。
-平台托管发布、上传文件清单和验收步骤见 [deploy/README.md](deploy/README.md)。
+`deploy/run_site.py` 是中枢发布入口。使用平台受管运行环境启动；`--check` 仅诊断配置是否存在，不代替 HTTPS 或登录验收。

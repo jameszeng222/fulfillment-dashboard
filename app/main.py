@@ -25,6 +25,7 @@ STATIC = ROOT / "static"
 
 @asynccontextmanager
 async def lifespan(_app):
+    _startup()
     worker = asyncio.create_task(tracking_full.dispatch())
     try:
         yield
@@ -134,9 +135,10 @@ def favicon():
     return HTMLResponse(status_code=204)
 
 
-@app.on_event("startup")
 def _startup():
-    logging.getLogger("uvicorn.access").addFilter(HideCallbackQuery())
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(item, HideCallbackQuery) for item in access.filters):
+        access.addFilter(HideCallbackQuery())
     if not core.OPS_DB.exists():
         print("[warn] ops.db 不存在，先运行: python init_ops.py")
     elif core.DUCK_DB.exists():

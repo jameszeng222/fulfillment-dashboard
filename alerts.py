@@ -24,7 +24,6 @@
     python alerts.py build --asof 2026-11-16
     python alerts.py list --rule returning --limit 50
     python alerts.py summary
-    python alerts.py export           # 导出 交付给运营的 CSV
 """
 from __future__ import annotations
 
@@ -46,8 +45,7 @@ from app.tracking_archive import sources as tracking_sources
 from app.rules import PRIORITY as RULE_PRIORITY, RULES_BY_KEY
 
 ROOT = Path(__file__).resolve().parent
-DB = ROOT / "履约单.duckdb"
-OUT_CSV = ROOT / "out" / "履约预警清单.csv"
+DB = core.DUCK_DB
 
 # 名称/级别/分类全部来自 app/rules.py，保证页面文案与判定口径一致
 RULE_CN = {k: v["name"] for k, v in RULES_BY_KEY.items()}
@@ -254,7 +252,7 @@ def calculate(con, asof: str | None, rule_overrides, sla_overrides):
 
 
 def build(con, asof: str | None):
-    ops_path = ROOT / "ops.db"
+    ops_path = core.OPS_DB
     overrides = ({}, {})
     if ops_path.exists():
         with closing(sqlite3.connect(ops_path)) as settings:
@@ -270,7 +268,7 @@ def build(con, asof: str | None):
 def push_to_ops(dcon):
     """把 fct_alert 镜像到 SQLite 的 alerts 表，供 API 直接查询。
     不再命中的预警及其处理结果保留在 alert_history。"""
-    ops = ROOT / "ops.db"
+    ops = core.OPS_DB
     if not ops.exists():
         print("  ops.db 不存在，跳过镜像（先跑 python init_ops.py）")
         return
@@ -420,26 +418,14 @@ def summary(con):
 def cmd_list(con, args):
     where = ["是否主预警"] if not args.all else ["1=1"]
     if args.rule:
-        where.append(f"规则 = '{args.rule}'")
+        where.append("规则 = ?")
     sql = f"""SELECT 履约单号, 规则中文 预警, 级别, 证据, round(天数,1) 天数,
                      物流服务商, 仓库代码, 目的国, 轨迹状态, 轨迹子状态, 签出日期
               FROM fct_alert WHERE {' AND '.join(where)}
               ORDER BY CASE 级别 WHEN '紧急' THEN 1 WHEN '高' THEN 2 ELSE 3 END, 天数 DESC
-              LIMIT {args.limit}"""
-    print(con.execute(sql).df().to_string(index=False))
-
-
-def cmd_export(con, args):
-    OUT_CSV.parent.mkdir(exist_ok=True)
-    df = con.execute("""
-        SELECT 履约单号, 快递单号, 规则中文, 业务分类, 级别, 证据, round(天数,1) 已过天数,
-               出库单状态, 物流服务商, 仓库代码, 目的国, 轨迹状态, 轨迹子状态,
-               创建日期, 签出日期, 评估基准日
-        FROM fct_alert WHERE 是否主预警
-        ORDER BY CASE 级别 WHEN '紧急' THEN 1 WHEN '高' THEN 2 ELSE 3 END, 天数 DESC
-    """).df()
-    df.to_csv(OUT_CSV, index=False, encoding="utf-8-sig")
-    print(f"已导出 {len(df):,} 行 -> {OUT_CSV}")
+              LIMIT ?"""
+    params = [args.rule] if args.rule else []
+    print(con.execute(sql, [*params, max(1, min(args.limit, 200))]).df().to_string(index=False))
 
 
 def main() -> int:
@@ -449,10 +435,9 @@ def main() -> int:
     s = sub.add_parser("summary"); s.add_argument("--db", default=str(DB))
     l = sub.add_parser("list"); l.add_argument("--rule"); l.add_argument("--limit", type=int, default=30)
     l.add_argument("--all", action="store_true"); l.add_argument("--db", default=str(DB))
-    e = sub.add_parser("export"); e.add_argument("--db", default=str(DB))
     args = ap.parse_args()
 
-    con = duckdb.connect(args.db)
+    con = duckdb.connect(args.db, read_only=args.cmd != "build")
     try:
         if args.cmd == "build":
             build(con, args.asof)
@@ -461,8 +446,6 @@ def main() -> int:
             summary(con)
         elif args.cmd == "list":
             cmd_list(con, args)
-        elif args.cmd == "export":
-            cmd_export(con, args)
         return 0
     finally:
         con.close()

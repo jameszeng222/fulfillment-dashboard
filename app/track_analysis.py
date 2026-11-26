@@ -116,14 +116,14 @@ def report(con):
             count(*) FILTER (WHERE late AND first_scan IS NULL) AS missing,
             round(median(scan_h) FILTER (WHERE late),1) AS hours,
             mode(hub) FILTER (WHERE late) AS place,
-            list(id ORDER BY delivered,scan_h DESC NULLS FIRST,id) FILTER (WHERE late) AS samples
+            arg_max(id, struct_pack(open := NOT delivered, score := coalesce(scan_h, 1e9)), 3) FILTER (WHERE late) AS examples
           FROM (
             SELECT *, events IS NOT NULL AND
               (scan_h>? OR (first_scan IS NULL AND NOT delivered)) AS late
             FROM analysis_steps WHERE shipped<=? - INTERVAL '48 hours'
           ) s GROUP BY 1,2,3,4
         )
-        SELECT * EXCLUDE(samples),list_slice(samples,1,3) AS examples FROM groups
+        SELECT * FROM groups
         WHERE affected>=? AND affected*1.0/total>=0.03 ORDER BY affected DESC,period DESC LIMIT 12
     """, [SCAN_HOURS, asof, 1 if summary["total"] <= 10 else 3])
     stale = _rows(con, """
@@ -133,7 +133,7 @@ def report(con):
                          ELSE coalesce(latest_sub,official,'状态未提供') END AS stage,
           count(*) AS affected,count(*) AS open,min(last_seen) AS first_seen,max(last_seen) AS last_seen,
           round(min(date_diff('second',last_seen,?)/3600.0),1) AS hours,
-          list_slice(list(id ORDER BY last_seen,id),1,3) AS examples
+          arg_min(id, last_seen, 3) AS examples
         FROM analysis_steps WHERE NOT delivered AND last_seen<=? - to_hours(?)
         GROUP BY 1,2,3,4 HAVING count(*)>=?
         ORDER BY affected DESC,period DESC LIMIT 12
@@ -143,7 +143,7 @@ def report(con):
           SELECT shipped::DATE AS period,warehouse,carrier_name,channel,hub AS place,
                  count(*) AS total,count(*) FILTER (WHERE station_h>?) AS affected,
                  round(median(station_h),1) AS hours,
-                 list_slice(list(id ORDER BY station_h DESC,id) FILTER (WHERE station_h>?),1,3) AS examples
+                 arg_max(id, station_h, 3) FILTER (WHERE station_h>?) AS examples
           FROM analysis_steps WHERE station_h IS NOT NULL AND hub IS NOT NULL
             AND shipped<=? - INTERVAL '5 days' GROUP BY 1,2,3,4,5
         ), compared AS (
@@ -166,7 +166,7 @@ def report(con):
           FROM analysis_events e JOIN analysis_steps s USING(id) WHERE issue IS NOT NULL AND event_at IS NOT NULL
         )
         SELECT period,carrier_name,issue,count(*) AS affected,count(*) FILTER (WHERE NOT delivered) AS open,
-          list_slice(list(id ORDER BY delivered,id),1,3) AS examples
+          arg_min(id, struct_pack(done := delivered, sample_id := id), 3) AS examples
         FROM distinct_hits GROUP BY 1,2,3 HAVING count(*)>=?
         ORDER BY affected DESC,period DESC LIMIT 12
     """, [1 if summary["total"] <= 10 else 3])

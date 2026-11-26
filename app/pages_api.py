@@ -427,6 +427,9 @@ def _register_live_alerts(con, condition, arguments):
               "主预警级别": "string", "预警数": "int64"}))
 
 
+TRACK_ANALYSIS_MAX_ORDERS = 10_000
+
+
 class TrackAnalysisScope(BaseModel):
     q: str = Field("", max_length=128)
     month: str = Field("", max_length=4096)
@@ -457,8 +460,12 @@ def analyze_track(body: TrackAnalysisScope, request: Request, interpret: bool = 
     ai_available = ops_assistant.can_use(user) and ops_assistant.configured()["ai"]
     if interpret:
         ops_assistant.authorize(request, "ai")
+    if not (body.q.strip() or core.filter_values(body.month) or core.filter_values(body.week)
+            or (body.start and body.end)):
+        raise HTTPException(422, "请先选择月份、周次、起止日期或输入单号，再分析轨迹")
     selection, resolved = _track_selection(body.channel_group, body.resolved_only)
-    cond, args = _track_conditions(**body.model_dump(exclude={"channel_group", "resolved_only"}), selection=selection)
+    scope = body.model_dump(exclude={"channel_group", "resolved_only", "rule"})
+    cond, args = _track_conditions(**scope, rule="", selection=selection)
     if not track_analysis.RUNNING.acquire(blocking=False):
         raise HTTPException(429, "已有轨迹分析正在计算，请稍后再试")
     try:
@@ -467,10 +474,6 @@ def analyze_track(body: TrackAnalysisScope, request: Request, interpret: bool = 
             if resolved is not None:
                 con.register("analysis_resolved", pd.DataFrame({"id": pd.Series(resolved.keys(), dtype="string")}))
                 cond += " AND o.履约单号 IN (SELECT id FROM analysis_resolved)"
-            alert_join = ""
-            if body.rule:
-                _register_live_alerts(con, rules.visible_alerts(), [])
-                alert_join = "LEFT JOIN live_alerts a ON a.履约单号=o.履约单号"
             con.execute(f"""
                 CREATE TEMP TABLE analysis_orders AS
                 SELECT o.履约单号 AS id,o.单号归一 AS num,
@@ -480,8 +483,30 @@ def analyze_track(body: TrackAnalysisScope, request: Request, interpret: bool = 
                     t.状态 AS official,t.子状态 AS latest_sub,t.查询时间 AS checked,
                     coalesce(o.已签收=1,false) AS wms_delivered
                 FROM {facts} o LEFT JOIN {track_lookup.source(con)} t ON t.履约单号=o.履约单号
-                {alert_join} WHERE 1=1{cond}
-            """, args)
+                WHERE 1=1{cond} LIMIT ?
+            """, [*args, TRACK_ANALYSIS_MAX_ORDERS + 1])
+            if con.execute("SELECT count(*) FROM analysis_orders").fetchone()[0] > TRACK_ANALYSIS_MAX_ORDERS:
+                raise HTTPException(422, "匹配履约单超过 10,000 笔，请缩小筛选范围后重试")
+            selected_rules = core.filter_values(body.rule)
+            if selected_rules:
+                # Fetch only matching alerts for the bounded set of candidate orders.
+                order_ids = [row[0] for row in con.execute("SELECT id FROM analysis_orders").fetchall() if row[0]]
+                if order_ids:
+                    # Use bounded parameter batches to support SQLite builds with small variable limits.
+                    for index in range(0, len(order_ids), 500):
+                        batch = order_ids[index:index + 500]
+                        predicate = rules.visible_alerts() + f' AND order_no IN ({",".join("?" * len(batch))})'
+                        _register_live_alerts(con, predicate, batch)
+                        con.execute("CREATE TEMP TABLE IF NOT EXISTS analysis_alerts AS SELECT * FROM live_alerts WHERE FALSE")
+                        con.execute("INSERT INTO analysis_alerts SELECT * FROM live_alerts")
+                        con.unregister("live_alerts")
+                    con.execute(f"""
+                        DELETE FROM analysis_orders WHERE id NOT IN (
+                            SELECT 履约单号 FROM analysis_alerts WHERE 主预警规则 IN ({','.join('?' * len(selected_rules))})
+                        )
+                    """, selected_rules)
+                else:
+                    con.execute("DELETE FROM analysis_orders")
             result = track_analysis.report(con)
     finally:
         track_analysis.RUNNING.release()

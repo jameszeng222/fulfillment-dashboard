@@ -9,15 +9,15 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
-from pathlib import Path
 
 import duckdb
 from fastapi import HTTPException, Request
 from .ops_gateway import setting, site_origin
 
-ROOT = Path(__file__).resolve().parent.parent
-DUCK_DB = ROOT / "履约单.duckdb"
-OPS_DB = ROOT / "ops.db"
+from .datapaths import ROOT, fact_database, operations_database
+
+DUCK_DB = fact_database()
+OPS_DB = operations_database()
 
 SESSION_COOKIE = "fd_session"
 SESSION_TTL_HOURS = 12

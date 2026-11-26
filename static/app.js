@@ -1499,7 +1499,7 @@ async function analyzeTrack({interpret = false} = {}) {
   } else {
     reading.hidden = ai.hidden = true;
     $('#trackAnalysisResult').replaceChildren();
-    status.textContent = '正在归并当前筛选范围的逐条轨迹…';
+    status.textContent = '正在汇总当前筛选范围的轨迹…';
   }
   try {
     const report = await api('/api/track-analysis' + (interpret ? '?interpret=true' : ''), {
@@ -1527,7 +1527,7 @@ function openTrackAnalysis() {
     ...(selection.week || []),
     [selection.start, selection.end].filter(Boolean).join(' 至 '),
   ].filter(Boolean);
-  $('#trackAnalysisScope').textContent = ['当前筛选 · 全部匹配订单', ...scopeItems].join(' · ');
+  $('#trackAnalysisScope').textContent = ['按当前日期或单号筛选 · 最多 10,000 笔', ...scopeItems].join(' · ');
   $('#trackAnalysisDialog').showModal();
   run(analyzeTrack);
 }
@@ -3056,7 +3056,8 @@ function renderFullPull(job, available) {
     .map(([name, count]) => `${name} ${fmt(count)}`).join(' · ');
   const importSummary = detail.lastImportWaybills ? ` · ${detail.trigger === 'import' ? '入库自动触发' : '已并入入库更新'}` +
     ` · 最近导入有 ${fmt(detail.lastImportWaybills)} 个运单进入追踪范围` : '';
-  $('#fullPullStatus').textContent = label + counts + importSummary + (outcomes ? ' · ' + outcomes : '') +
+  const unavailable = available ? '' : '本站不执行本机批量拉取，请在数据源侧同步。';
+  $('#fullPullStatus').textContent = [unavailable, job || available ? label + counts + importSummary + (outcomes ? ' · ' + outcomes : '') : ''].filter(Boolean).join(' ') +
     (job?.finished_at ? ' · ' + syncTime(job.finished_at) : '');
 }
 

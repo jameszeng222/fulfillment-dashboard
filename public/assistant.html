@@ -58,7 +58,6 @@ pre{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10
 
   <div class="tabs">
     <button class="tab on" data-tab="ai">AI 对话</button>
-    <button class="tab" data-tab="mcp">MCP 工具</button>
     <button class="tab" data-tab="skill">技能</button>
   </div>
 
@@ -76,22 +75,6 @@ pre{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10
         <span class="hint" id="aiMeta"></span>
       </div>
       <div class="hint" id="aiQuota" style="margin-top:8px"></div>
-    </div>
-  </section>
-
-  <!-- MCP -->
-  <section id="tab-mcp" class="hidden">
-    <div class="card">
-      <h2>站点 MCP 工具 <button class="btn ghost" id="mcpReload" style="float:right">刷新</button></h2>
-      <div class="hint" style="margin-bottom:10px">这些是本站点被授权调用的工具，由后端持站点密钥请求，浏览器看不到密钥。</div>
-      <div class="list" id="mcpList"><div class="item hint">加载中…</div></div>
-    </div>
-    <div class="card hidden" id="mcpCallCard">
-      <h2>调用 <span class="mono" id="mcpName"></span></h2>
-      <div class="hint" style="margin:6px 0 8px">参数（JSON）</div>
-      <textarea id="mcpArgs" rows="4">{}</textarea>
-      <div class="row"><button class="btn" id="mcpRun">执行</button></div>
-      <div id="mcpResult" style="margin-top:10px"></div>
     </div>
   </section>
 
@@ -152,9 +135,6 @@ pre{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10
       $('aiSend').disabled = true;
       $('aiInput').placeholder = '站点 AI 未配置';
     } else if (fulfillment) { loadModels(); }
-    if (!ME.features.mcp){
-      $('mcpList').innerHTML = '<div class="item hint">站点 MCP 未配置</div>';
-    } else if (!fulfillment) { loadMcp(); }
     if (!ME.features.skills){
       $('skillList').innerHTML = '<div class="item hint">技能服务未配置</div>';
     } else if (fulfillment) {
@@ -175,8 +155,7 @@ pre{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10
   document.querySelectorAll('.tab').forEach(b=>{
     b.onclick = ()=>{
       document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on', x===b));
-      ['ai','mcp','skill'].forEach(k=>$('tab-'+k).classList.toggle('hidden', k!==b.dataset.tab));
-      if (fulfillment && b.dataset.tab === 'mcp' && ME?.features.mcp) loadMcp();
+      ['ai','skill'].forEach(k=>$('tab-'+k).classList.toggle('hidden', k!==b.dataset.tab));
       if (fulfillment && b.dataset.tab === 'skill' && ME?.features.skills) loadSkills();
     };
   });
@@ -252,50 +231,6 @@ pre{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10
       '<div class="msg ' + (m.role==='user'?'u':'a') + '">' +
       String(m.content).replace(/[<>&]/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) + '</div>').join('');
   }
-
-  // ---------------- MCP
-  let TOOLS = [];
-  async function loadMcp(refresh = false){
-    $('mcpList').innerHTML = '<div class="item hint">加载中…</div>';
-    try{
-      const out = await api('/api/mcp/tools' + (refresh ? '?refresh=1' : ''));
-      TOOLS = out.tools || [];
-      $('mcpList').innerHTML = TOOLS.length
-        ? TOOLS.map((t,i)=>'<div class="item"><div style="flex:1"><b>'+esc(t.title||t.name)+'</b>'+
-            '<div class="d">'+esc(t.description||'')+'</div>'+
-            '<div class="d mono">'+esc(t.name)+'</div></div>'+
-            '<button class="btn ghost" data-i="'+i+'">调用</button></div>').join('')
-        : '<div class="item hint">本站点暂无可调用的工具</div>';
-      $('mcpList').querySelectorAll('button[data-i]').forEach(btn=>{
-        btn.onclick = ()=>{
-          const t = TOOLS[+btn.dataset.i];
-          $('mcpCallCard').classList.remove('hidden');
-          $('mcpName').textContent = t.name;
-          $('mcpResult').innerHTML = '';
-          const props = (t.inputSchema && t.inputSchema.properties) || {};
-          const tpl = {};
-          Object.keys(props).forEach(k=>{ tpl[k] = props[k] && props[k].type === 'number' ? 0 : ''; });
-          $('mcpArgs').value = JSON.stringify(tpl, null, 2);
-        };
-      });
-    }catch(e){ fail($('mcpList'), e); }
-  }
-  $('mcpReload').onclick = () => loadMcp(true);
-  $('mcpRun').onclick = async ()=>{
-    $('mcpResult').innerHTML = '<div class="hint">执行中…</div>';
-    $('mcpRun').disabled = true;
-    try{
-      let args = {};
-      try { args = JSON.parse($('mcpArgs').value || '{}'); }
-      catch(e){ throw new Error('参数不是合法 JSON'); }
-      const out = await api('/api/mcp/call', {method:'POST',
-        body: JSON.stringify({name: $('mcpName').textContent, arguments: args})});
-      $('mcpResult').innerHTML = '<div class="hint" style="margin-bottom:6px">'+
-        (out.ok ? '<span style="color:var(--ok)">调用成功</span>' : '<span class="err">工具返回错误</span>')+
-        '</div><pre>'+esc(out.text || JSON.stringify(out.raw, null, 2))+'</pre>';
-    }catch(e){ fail($('mcpResult'), e); }
-    finally{ $('mcpRun').disabled = false; }
-  };
 
   // ---------------- 技能
   async function loadSkills(refresh = false){

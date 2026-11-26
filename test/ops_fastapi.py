@@ -1,6 +1,6 @@
 """Exercise the FastAPI OPS integration without network access or production data."""
 import asyncio
-from contextlib import closing
+from contextlib import closing, nullcontext
 from email.message import Message
 from hashlib import sha256
 from http.cookies import SimpleCookie
@@ -10,10 +10,12 @@ from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
+
+import duckdb
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlsplit
 
-from app import alert_history, cloud_login, core, ops_auth, ops_gateway
+from app import alert_history, cloud_login, core, ops_auth, ops_gateway, pages_api
 from app.main import app
 from init_ops import SCHEMA, hash_pw
 
@@ -25,8 +27,6 @@ ENV = {
     "OPS_REDIRECT_URI": SITE + "/ops/auth/callback", "OPS_AUTHORIZE_URL": HUB + "/authorize",
     "OPS_TOKEN_URL": HUB + "/token", "OPS_USERINFO_URL": HUB + "/userinfo",
     "OPS_LOCAL_LOGIN": "false", "OPS_ALLOW_VIEWER_SIGNUP": "false",
-    "OPS_SITE_MCP_URL": HUB + "/mcp", "OPS_SITE_MCP_KEY": "mock-mcp-key",
-    "OPS_MCP_ALLOWED_TOOLS": "warehouse_summary",
     "OPS_SITE_AI_URL": HUB + "/ai", "OPS_SITE_AI_KEY": "mock-ai-key", "OPS_AI_PROTOCOL": "",
     "OPS_ASSISTANT_ROLES": "admin", "OPS_SITE_SKILLS_URL": HUB + "/skills",
     "FULFILLMENT_PUBLIC_PREVIEW": "false", "FULFILLMENT_OPEN_TEST": "false",
@@ -94,7 +94,7 @@ class OpsTests(unittest.TestCase):
         self.usage = []
         self.bad_hash = False
         self.quota = False
-        self.mcp_status = 200
+        self.ai_status = 200
         with closing(sqlite3.connect(db)) as con:
             con.executescript(SCHEMA)
             con.execute("INSERT INTO users(username,password_hash,role,created_at) VALUES (?,?,?,?)",
@@ -119,35 +119,10 @@ class OpsTests(unittest.TestCase):
         if url.path == "/userinfo":
             self.assertEqual(authorization, "Bearer mock-access")
             return Response({"sub": "stable-subject", "preferred_username": "display-only"})
-        if url.path == "/mcp":
-            self.assertEqual(authorization, "Bearer mock-mcp-key")
-            if self.mcp_status != 200:
-                return Response(status=self.mcp_status)
-            if request.get_method() == "DELETE":
-                return Response(status=204)
-            self.assertEqual(request.get_header("Accept"), "application/json, text/event-stream")
-            message = json.loads(request.data)
-            method = message["method"]
-            if method != "initialize":
-                self.assertEqual(request.get_header("Mcp-session-id"), "test-session")
-                self.assertEqual(request.get_header("Mcp-protocol-version"), "2025-06-18")
-            if method == "notifications/initialized":
-                return Response(status=202)
-            results = {
-                "initialize": {"protocolVersion": "2025-06-18"},
-                "tools/list": {"tools": [{"name": "warehouse_summary"}, {"name": "not_allowed"}]},
-                "tools/call": {"content": [{"text": "matched"}]},
-            }
-            payload = {"jsonrpc": "2.0", "id": message["id"], "result": results[method]}
-            if method == "tools/call":
-                self.assertEqual(message["params"]["name"], "warehouse_summary")
-                return Response(b"data: " + json.dumps(payload).encode() + b"\n\n", content_type="text/event-stream")
-            response = Response(payload)
-            if method == "initialize":
-                response.headers["Mcp-Session-Id"] = "test-session"
-            return response
         self.assertEqual(authorization, "Bearer mock-ai-key")
         if url.path == "/ai/models":
+            if self.ai_status != 200:
+                return Response({"error": "private upstream response"}, self.ai_status)
             return Response({"data": [{"id": "chat"}, {"id": "claude"},
                                       {"id": "response", "protocol": "responses"}]})
         if url.path.startswith("/ai/"):
@@ -217,12 +192,16 @@ class OpsTests(unittest.TestCase):
         with patch.dict("os.environ", {"OPS_LOCAL_LOGIN": "true"}):
             self.assertEqual(self.browser.request("/api/login", "POST", credentials)[0], 200)
 
+    def prepare_test_cloud_account(self):
+        with core.ops() as db:
+            db.execute("INSERT INTO users(username,password_hash,role,created_at) VALUES (?,?,?,?)",
+                       (cloud_login.USERNAME, cloud_login.LOCAL_ACCOUNT_MARKER, "admin", core.now_iso()))
+
     def test_cloud_ticket_is_local_scope_single_use_and_expires(self):
-        from cloudflare.open_online import prepare_account
 
         with patch.dict("os.environ", {"FULFILLMENT_CLOUD_TICKETS": "true",
                                       "FULFILLMENT_ONLINE_USERS": cloud_login.USERNAME}):
-            prepare_account()
+            self.prepare_test_cloud_account()
             body = {"ticket": cloud_login.issue_ticket()}
             path = "/api/cloud/session"
             self.assertEqual(self.browser.request(path, "POST", body, {"origin": HUB})[0], 403)
@@ -236,13 +215,11 @@ class OpsTests(unittest.TestCase):
             self.assertEqual(self.browser.request(path, "POST", expired, {"origin": SITE})[0], 401)
 
     def test_cloud_invites_create_viewers_and_revoke_all_viewer_sessions(self):
-        from cloudflare.open_online import prepare_account
-
         manage = "/api/cloud/invites"
         accept = "/api/cloud/invite/session"
         with patch.dict("os.environ", {"FULFILLMENT_CLOUD_TICKETS": "true",
                                       "FULFILLMENT_ONLINE_USERS": cloud_login.USERNAME}):
-            prepare_account()
+            self.prepare_test_cloud_account()
             origin = {"origin": SITE}
             self.assertEqual(Browser().request(manage, "POST", {"name": "Demo"}, origin)[0], 401)
             self.assertEqual(self.browser.request("/api/cloud/session", "POST",
@@ -541,35 +518,76 @@ class OpsTests(unittest.TestCase):
                 self.assertEqual(status, 200, result)
                 self.assertEqual({row["order_no"] for row in json.loads(result)["rows"]}, {"A", "B"})
 
-    def test_mcp(self):
-        csrf = self.login()
-        status, _, body = self.browser.request("/api/mcp/tools")
-        self.assertEqual((status, json.loads(body)["tools"]), (200, [{"name": "warehouse_summary"}]))
-        path = "/api/mcp/call"
-        self.assertEqual(self.browser.request(path, "POST", {"name": "not_allowed"}, csrf)[0], 403)
-        status, _, body = self.browser.request(path, "POST", {"name": "warehouse_summary"}, csrf)
-        self.assertEqual((status, json.loads(body)["text"]), (200, "matched"))
-        for status, code in ((401, "MCP_UNAUTHORIZED"), (403, "MCP_FORBIDDEN"), (404, "MCP_DISABLED")):
-            self.mcp_status = status
-            self.assertEqual(json.loads(self.browser.request("/api/mcp/tools")[2])["error"], code)
+    def test_removed_mcp_routes_remain_unavailable(self):
+        for headers in (None, self.login()):
+            if headers is None:
+                browser = Browser()
+            else:
+                browser = self.browser
+            self.assertEqual(browser.request("/api/mcp/tools")[0], 404)
+            self.assertEqual(browser.request("/api/mcp/call", "POST", {}, headers)[0], 404)
+        schema = app.openapi()
+        self.assertNotIn("/api/mcp/call", schema["paths"])
+        self.assertIn("/api/ai/chat", schema["paths"])
+        self.assertIn("/api/track-analysis", schema["paths"])
+        self.assertNotIn("mcp", json.loads(self.browser.request("/api/ops/assistant")[2])["features"])
 
     def test_origin_is_derived_when_only_oauth_env_is_injected(self):
         with patch.dict("os.environ", {"OPS_SITE_ORIGIN": ""}):
             self.assertEqual(ops_gateway.site_origin(), SITE)
             self.assertTrue(ops_auth.enabled())
             csrf = self.login()
-            self.assertEqual(self.browser.request("/api/mcp/tools")[0], 200)
+            self.assertEqual(self.browser.request("/api/ops/assistant")[0], 200)
             self.assertIn("x-csrf-token", csrf)
 
-    def test_mcp_without_whitelist_uses_hub_authorization(self):
-        with patch.dict("os.environ", {"OPS_MCP_ALLOWED_TOOLS": ""}):
-            csrf = self.login()
-            status, _, body = self.browser.request("/api/mcp/tools")
+    def test_track_analysis_requires_login_and_business_scope(self):
+        path = "/api/track-analysis"
+        self.assertEqual(self.browser.request(path, "POST", {})[0], 401)
+        csrf = self.login()
+        for scope in ({}, {"month": "[]"}, {"start": "2026-11-01"}):
+            self.assertEqual(self.browser.request(path, "POST", scope, csrf)[0], 422)
+
+    def test_track_analysis_bounds_rows_and_honors_rule(self):
+        csrf = self.login()
+        with core.ops() as db:
+            db.execute("INSERT INTO alerts(order_no, rule, rule_cn) VALUES ('A', 'sample', '测试')")
+        con = duckdb.connect()
+        self.addCleanup(con.close)
+        con.execute("""CREATE TABLE facts AS SELECT
+            id AS 履约单号,id AS 单号归一,timestamp '2026-11-15' AS 签出时间,
+            'sample' AS C端承运商,'sample' AS 物流商,'W' AS 仓库,'C' AS 当前渠道,
+            0 AS 已签收 FROM (VALUES ('A'), ('B')) s(id)""")
+        con.execute("""CREATE TABLE tracking AS SELECT
+            履约单号,NULL::INTEGER AS carrier,NULL::INTEGER AS 回补运输商代码,
+            NULL::VARCHAR AS 状态,NULL::VARCHAR AS 子状态,NULL::TIMESTAMP AS 查询时间 FROM facts""")
+        def report(connection):
+            ids = connection.execute("SELECT id FROM analysis_orders").fetchall()
+            self.assertEqual(ids, [("A",)])
+            return {"summary": {"tracked": 0}}
+        with patch.object(core, "duck", return_value=nullcontext(con)), patch.object(core, "order_facts", return_value="facts"), patch.object(
+            core, "active_facts", return_value="facts"
+        ), patch.object(pages_api, "delivery_facts", return_value="facts"), patch.object(
+            pages_api.track_lookup, "source", return_value="tracking"
+        ), patch.object(pages_api.track_analysis, "report", side_effect=report) as calculate:
+            path = "/api/track-analysis"
+            scope = {"start": "2026-11-01", "end": "2026-11-30", "rule": "sample"}
+            with patch.object(pages_api, "TRACK_ANALYSIS_MAX_ORDERS", 1):
+                self.assertEqual(self.browser.request(path, "POST", scope, csrf)[0], 422)
+                calculate.assert_not_called()
+            con.execute("DROP TABLE analysis_orders")
+            status, _, body = self.browser.request(path, "POST", scope, csrf)
+            self.assertEqual(status, 200, body)
+            calculate.assert_called_once()
+
+    def test_hub_does_not_queue_external_windows_pulls(self):
+        csrf = self.login()
+        with patch.dict("os.environ", {"FULFILLMENT_HUB_SITE": "true"}):
+            self.assertEqual(self.browser.request("/api/17track/full-pull", "POST", {}, csrf)[0], 503)
+            status, _, data = self.browser.request("/api/17track/sync-status")
             self.assertEqual(status, 200)
-            self.assertEqual([tool["name"] for tool in json.loads(body)["tools"]],
-                             ["warehouse_summary", "not_allowed"])
-            self.assertEqual(self.browser.request("/api/mcp/call", "POST",
-                                                  {"name": "warehouse_summary"}, csrf)[0], 200)
+            self.assertFalse(json.loads(data)["fullPullAvailable"])
+            with core.ops() as db:
+                self.assertEqual(db.execute("SELECT count(*) FROM job_runs").fetchone()[0], 0)
 
     def test_first_login_signup_uses_configured_role(self):
         with core.ops() as db:
@@ -581,6 +599,17 @@ class OpsTests(unittest.TestCase):
             profile = json.loads(self.browser.request("/api/me")[2])
             self.assertTrue(profile["username"].startswith("ops:"))
             self.assertEqual((profile["role"], profile["can_edit"]), ("logistics", True))
+
+    def test_assistant_without_session_or_valid_upstream_config(self):
+        path = "/api/ai/models"
+        self.assertEqual(self.browser.request(path)[0], 401)
+        with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):
+            self.assertEqual(self.browser.request(path)[0], 401)
+        self.login()
+        self.ai_status = 401
+        status, _, data = self.browser.request(path)
+        self.assertEqual((status, json.loads(data)["error"]), (502, "AI_UNAUTHORIZED"))
+        self.assertNotIn(b"private upstream response", data)
 
     def test_models_and_skill(self):
 
