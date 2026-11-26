@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 import pandas as pd
 
-from . import alert_history, analytics_snapshot, channel_groups, core, public_preview, rules, us_analysis, track_lookup
+from . import alert_history, analytics_snapshot, channel_groups, core, ops_assistant, public_preview, rules, us_analysis, track_analysis, track_lookup
 from .carrier_delivery import (
     DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts, transport_minutes,
 )
@@ -372,28 +372,17 @@ def usa(request: Request, month: str = "", wh: str = "", pf: str = "", cr: str =
 
 # ---------------------------------------------------------------- 轨迹监控
 
-@router.get("/track")
-def track(request: Request,
-          page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
-          q: str = "", month: str = "", wh: str = "", pf: str = "", cr: str = "",
-          cn: str = "", tstat: str = "", rule: str = "", signed: str = "",
-          sort: str = "", order: str = "desc",
-          start: str = "", end: str = "", lastmile: str = "",
-          sub: str = "", coverage: str = "", channel: str = "", week: str = "",
-          date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = "", resolved_only: bool = False,
-          part: Literal["all", "rows", "summary"] = "all"):
-    if core.require_reader(request)["preview"]:
-        return public_preview.search("" if resolved_only else q, page, size)
-    resolved = None
-    selection = (None, None)
-    if channel_group or resolved_only:
-        with core.ops() as db:
-            if channel_group:
-                selection = channel_groups.filter_values(channel_group, channel_groups.load(db)["groups"])
-            if resolved_only:
-                resolved = alert_history.resolved_for_orders(db, manual_only=True)
-    if resolved == {}:
-        return {"total": 0, "page": page, "size": size, "rows": [], "statusSummary": [], "ruleSummary": []}
+def _track_selection(channel_group, resolved_only):
+    if not (channel_group or resolved_only):
+        return (None, None), None
+    with core.ops() as db:
+        selection = channel_groups.filter_values(channel_group, channel_groups.load(db)["groups"]) if channel_group else (None, None)
+        resolved = alert_history.resolved_for_orders(db, manual_only=True) if resolved_only else None
+    return selection, resolved
+
+
+def _track_conditions(*, q, month, wh, pf, cr, cn, tstat, rule, signed, start, end,
+                      lastmile, sub, coverage, channel, week, date_basis, selection):
     cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, q=q, lastmile=lastmile, channel=channel,
                        date_basis=date_basis, week=week, group_selection=selection)
 
@@ -416,6 +405,110 @@ def track(request: Request,
         cond += " AND t.覆盖=?"; args.append(coverage)
     if signed in ("0", "1"):
         cond += " AND o.已签收 = ?"; args.append(int(signed))
+    return cond, args
+
+
+def _register_live_alerts(con, condition, arguments):
+    with core.ops() as ops:
+        summaries = ops.execute(f"""
+            WITH ranked AS (
+                SELECT order_no, rule_cn, rule, level, count(*) OVER by_order AS total,
+                       row_number() OVER (by_order ORDER BY is_main DESC,
+                          CASE level WHEN '紧急' THEN 0 WHEN '高' THEN 1 ELSE 2 END, rule) AS choice
+                FROM ({alert_history.current_rows()})
+                WHERE {condition} AND state IN {alert_history.PENDING_STATES}
+                WINDOW by_order AS (PARTITION BY order_no)
+            )
+            SELECT order_no,rule_cn,rule,level,total FROM ranked WHERE choice=1
+        """, arguments).fetchall()
+    con.register("live_alerts", pd.DataFrame.from_records(
+        summaries, columns=["履约单号", "主预警名称", "主预警规则", "主预警级别", "预警数"]
+    ).astype({"履约单号": "string", "主预警名称": "string", "主预警规则": "string",
+              "主预警级别": "string", "预警数": "int64"}))
+
+
+class TrackAnalysisScope(BaseModel):
+    q: str = Field("", max_length=128)
+    month: str = Field("", max_length=4096)
+    week: str = Field("", max_length=4096)
+    wh: str = Field("", max_length=4096)
+    pf: str = Field("", max_length=4096)
+    cr: str = Field("", max_length=4096)
+    cn: str = Field("", max_length=4096)
+    tstat: str = Field("", max_length=128)
+    rule: str = Field("", max_length=128)
+    signed: str = Field("", max_length=4)
+    start: str = Field("", max_length=32)
+    end: str = Field("", max_length=32)
+    lastmile: str = Field("", max_length=4096)
+    sub: str = Field("", max_length=128)
+    coverage: str = Field("", max_length=64)
+    channel: str = Field("", max_length=8192)
+    date_basis: DateBasis = DEFAULT_DATE_BASIS
+    channel_group: str = Field("", max_length=4096)
+    resolved_only: bool = False
+
+
+@router.post("/track-analysis", status_code=200, response_class=ops_assistant.PrivateJSON)
+def analyze_track(body: TrackAnalysisScope, request: Request, interpret: bool = False):
+    user = core.require_reader(request)
+    if user["preview"]:
+        raise HTTPException(403, "当前预览模式只能查询单笔轨迹")
+    ai_available = ops_assistant.can_use(user) and ops_assistant.configured()["ai"]
+    if interpret:
+        ops_assistant.authorize(request, "ai")
+    selection, resolved = _track_selection(body.channel_group, body.resolved_only)
+    cond, args = _track_conditions(**body.model_dump(exclude={"channel_group", "resolved_only"}), selection=selection)
+    if not track_analysis.RUNNING.acquire(blocking=False):
+        raise HTTPException(429, "已有轨迹分析正在计算，请稍后再试")
+    try:
+        with core.duck() as con:
+            facts = delivery_facts(con, core.active_facts(core.order_facts(con)))
+            if resolved is not None:
+                con.register("analysis_resolved", pd.DataFrame({"id": pd.Series(resolved.keys(), dtype="string")}))
+                cond += " AND o.履约单号 IN (SELECT id FROM analysis_resolved)"
+            alert_join = ""
+            if body.rule:
+                _register_live_alerts(con, rules.visible_alerts(), [])
+                alert_join = "LEFT JOIN live_alerts a ON a.履约单号=o.履约单号"
+            con.execute(f"""
+                CREATE TEMP TABLE analysis_orders AS
+                SELECT o.履约单号 AS id,o.单号归一 AS num,
+                    coalesce(t.carrier,t.回补运输商代码) AS carrier,o.签出时间 AS shipped,
+                    coalesce(o.C端承运商,o.物流商,'未识别') AS carrier_name,
+                    coalesce(o.仓库,'—') AS warehouse,coalesce(o.当前渠道,'—') AS channel,
+                    t.状态 AS official,t.子状态 AS latest_sub,t.查询时间 AS checked,
+                    coalesce(o.已签收=1,false) AS wms_delivered
+                FROM {facts} o LEFT JOIN {track_lookup.source(con)} t ON t.履约单号=o.履约单号
+                {alert_join} WHERE 1=1{cond}
+            """, args)
+            result = track_analysis.report(con)
+    finally:
+        track_analysis.RUNNING.release()
+    if interpret and result["summary"]["tracked"]:
+        result["interpretation"] = ops_assistant.trajectory_summary(result)
+    return {**result, "aiAvailable": bool(ai_available)}
+
+
+@router.get("/track")
+def track(request: Request,
+          page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
+          q: str = "", month: str = "", wh: str = "", pf: str = "", cr: str = "",
+          cn: str = "", tstat: str = "", rule: str = "", signed: str = "",
+          sort: str = "", order: str = "desc",
+          start: str = "", end: str = "", lastmile: str = "",
+          sub: str = "", coverage: str = "", channel: str = "", week: str = "",
+          date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = "", resolved_only: bool = False,
+          part: Literal["all", "rows", "summary"] = "all"):
+    if core.require_reader(request)["preview"]:
+        return public_preview.search("" if resolved_only else q, page, size)
+    selection, resolved = _track_selection(channel_group, resolved_only)
+    if resolved == {}:
+        return {"total": 0, "page": page, "size": size, "rows": [], "statusSummary": [], "ruleSummary": []}
+    cond, args = _track_conditions(q=q, month=month, wh=wh, pf=pf, cr=cr, cn=cn, tstat=tstat,
+                                   rule=rule, signed=signed, start=start, end=end, lastmile=lastmile,
+                                   sub=sub, coverage=coverage, channel=channel, week=week,
+                                   date_basis=date_basis, selection=selection)
 
     sort_cols = {"停滞天数": "t.停滞天数", "签出时间": "o.签出时间", "创建时间": "o.创建时间",
                  "物流分钟": "o.物流分钟", "履约单号": "o.履约单号", "逐条事件数": "逐条事件数"}
@@ -482,22 +575,7 @@ def track(request: Request,
         if fast_page:
             alert_args = [row[0] for row in con.execute("SELECT 履约单号 FROM selected_track_orders").fetchall()]
             alert_where += f' AND order_no IN ({",".join("?" * len(alert_args))})' if alert_args else " AND FALSE"
-        with core.ops() as ops:
-            summaries = ops.execute(f"""
-                WITH ranked AS (
-                    SELECT order_no, rule_cn, rule, level, count(*) OVER by_order AS total,
-                           row_number() OVER (by_order ORDER BY is_main DESC,
-                              CASE level WHEN '紧急' THEN 0 WHEN '高' THEN 1 ELSE 2 END, rule) AS choice
-                    FROM ({alert_history.current_rows()})
-                    WHERE {alert_where} AND state IN {alert_history.PENDING_STATES}
-                    WINDOW by_order AS (PARTITION BY order_no)
-                )
-                SELECT order_no,rule_cn,rule,level,total FROM ranked WHERE choice=1
-            """, alert_args).fetchall()
-        con.register("live_alerts", pd.DataFrame.from_records(
-            summaries, columns=["履约单号", "主预警名称", "主预警规则", "主预警级别", "预警数"]
-        ).astype({"履约单号": "string", "主预警名称": "string", "主预警规则": "string",
-                  "主预警级别": "string", "预警数": "int64"}))
+        _register_live_alerts(con, alert_where, alert_args)
         joins = (f"LEFT JOIN {tracking} t ON t.履约单号 = o.履约单号 "
                 "LEFT JOIN live_alerts a ON a.履约单号 = o.履约单号")
         joined = joins + " WHERE 1=1" + cond

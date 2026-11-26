@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261126-region-p95">
+<link rel="stylesheet" href="/static/app.css?v=20261126-track-analysis">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -152,6 +152,7 @@
             <span class="tip" id="trackListStatus" role="status"></span>
             <button type="button" class="btn ghost sm" id="retryTrack" hidden>重试列表</button>
             <button type="button" class="btn ghost sm" id="showDetailed">有逐条轨迹</button>
+            <button type="button" class="btn ghost sm" id="openTrackAnalysis" aria-haspopup="dialog" aria-controls="trackAnalysisDialog" hidden><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg>AI 轨迹分析</button>
             <button type="button" class="btn ghost sm" id="exportTrack">导出本页</button>
           </div></div>
           <div class="tblwrap">
@@ -581,6 +582,24 @@
   <div class="body" id="dBody"></div>
 </aside>
 <div class="toast" id="toast" role="status"></div>
+<dialog class="settings-dialog track-analysis-dialog" id="trackAnalysisDialog" aria-labelledby="trackAnalysisTitle">
+  <header>
+    <div><h2 id="trackAnalysisTitle">AI 轨迹分析</h2><p class="tip" id="trackAnalysisScope"></p></div>
+    <form method="dialog"><button class="btn ghost sm" aria-label="关闭轨迹分析">关闭</button></form>
+  </header>
+  <div class="track-analysis-body">
+    <p class="tip" id="trackAnalysisStatus" role="status"></p>
+    <div id="trackAnalysisResult"></div>
+    <section class="track-analysis-reading" id="trackAnalysisReading" hidden>
+      <h3>AI 解读</h3>
+      <p id="trackAnalysisText" role="status"></p>
+    </section>
+  </div>
+  <footer>
+    <button type="button" class="btn ghost sm" id="refreshTrackAnalysis">重新分析</button>
+    <button type="button" class="btn sm" id="interpretTrackAnalysis" hidden>生成 AI 解读</button>
+  </footer>
+</dialog>
 <dialog class="settings-dialog" id="settingsDialog" aria-labelledby="settingsTitle">
   <form id="settingsForm">
     <header><h2 id="settingsTitle"></h2><button type="button" class="btn ghost sm" id="settingsClose" aria-label="关闭配置">关闭</button></header>
@@ -666,6 +685,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261126-import-track-pull" defer></script>
+<script src="/static/app.js?v=20261126-track-analysis" defer></script>
 </body>
 </html>

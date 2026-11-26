@@ -1437,6 +1437,101 @@ function trackRowsPath(filters, page, size) {
   return '/api/track?' + qs({...filters, part: 'rows'}, page, size);
 }
 
+let trackAnalysisRequest;
+let trackAnalysisScope;
+
+function renderTrackAnalysis(report) {
+  const stats = report.summary;
+  const stamp = value => value?.replace('T', ' ').slice(0, 16) || '—';
+  const day = value => value.slice(0, 10);
+  const range = stats.first_ship ? `${day(stats.first_ship)} 至 ${day(stats.last_ship)} 出库` : '无出库时间';
+  const percent = (n, total) => total ? `${fmt1(100 * n / total)}%` : '—';
+  const details = {
+    scan: row => `${fmt(row.affected)} / ${fmt(row.total)} 单 · ${percent(row.affected, row.total)}` +
+      (row.hours == null ? '' : ` · 已有扫描的中位数 ${fmt1(row.hours)} 小时`) +
+      (row.missing ? ` · ${fmt(row.missing)} 单仍无实物扫描` : '') + ` · ${fmt(row.open)} 单未确认妥投`,
+    stale: row => `${fmt(row.affected)} 单未确认妥投 · 最短断更 ${fmt1(row.hours)} 小时 · 最后扫描 ${stamp(row.first_seen)} 至 ${stamp(row.last_seen).slice(-5)}`,
+    station: row => `超 72 小时 ${fmt(row.affected)} / ${fmt(row.total)} 单 · ${percent(row.affected, row.total)}` +
+      `（此前 8 天 ${percent(row.baseline_affected, row.baseline_total)}） · 中位数 ${fmt1(row.hours)} 小时`,
+    exception: row => `${fmt(row.affected)} 单曾出现 · ${fmt(row.open)} 单未确认妥投`,
+  };
+  const groups = ['stale', 'scan', 'station', 'exception'].map(key => report.groups.find(group => group.name === key));
+  const metrics = [['匹配履约单', stats.total], ['有逐条轨迹', stats.tracked],
+    ['17TRACK 已妥投', stats.confirmed], ['未妥投且断更 ≥72 小时', stats.stale]];
+  $('#trackAnalysisStatus').textContent = report.aiAvailable ? '' : '当前显示本机统计。智能中枢 AI 解读暂不可用。';
+  $('#trackAnalysisResult').innerHTML = `
+    <div class="track-analysis-metrics">${metrics.map(([label, value]) =>
+      `<div><span>${esc(label)}</span><strong>${fmt(value)}</strong></div>`).join('')}</div>
+    <p class="tip track-analysis-window">${esc(range)} · 最近轨迹同步 ${esc(stamp(stats.checked))} · 分析于 ${esc(stamp(report.asOf))}（北京时间）</p>
+    ${stats.tracked ? groups.map(group => `
+      <section class="track-analysis-group"><h3>${esc(group.label)}</h3>
+        ${group.rows.length ? group.rows.map(row => {
+          const period = group.name === 'scan' ? stamp(row.first_shipped) +
+            (stamp(row.first_shipped) === stamp(row.last_shipped) ? '' : ` 至 ${stamp(row.last_shipped).slice(-5)}`) : day(row.period);
+          const origin = group.name === 'scan' || group.name === 'station' ? '出库' : '轨迹';
+          const parts = [`${period} ${origin}`, row.carrier_name, row.warehouse, row.channel, row.place, row.stage, row.issue];
+          return `<div class="track-analysis-row">
+            <strong>${esc(parts.filter(Boolean).join(' · '))}</strong>
+            <span>${esc(details[group.name](row))}</span>
+            <div class="track-analysis-examples" aria-label="样单">${row.examples.map(no =>
+              `<button type="button" class="order-link mono" data-track-analysis-order="${esc(no)}">${esc(no)}</button>`).join('')}</div>
+          </div>`;
+        }).join('') : '<p class="tip">当前筛选下未发现达到批次判定条件的记录。</p>'}
+      </section>`).join('') : '<p class="tip">筛选范围内没有可分析的逐条轨迹。</p>'}
+    ${stats.tracked ? '<p class="tip track-analysis-window">首条实物扫描排除面单创建和待接收通知。各类异常可能重叠。</p>' : ''}`;
+  $('#interpretTrackAnalysis').hidden = !report.aiAvailable || !stats.tracked;
+}
+
+async function analyzeTrack({interpret = false} = {}) {
+  trackAnalysisRequest?.abort();
+  const controller = new AbortController();
+  trackAnalysisRequest = controller;
+  const status = $('#trackAnalysisStatus');
+  const reading = $('#trackAnalysisReading');
+  const text = $('#trackAnalysisText');
+  const refresh = $('#refreshTrackAnalysis');
+  const ai = $('#interpretTrackAnalysis');
+  refresh.disabled = ai.disabled = true;
+  if (interpret) {
+    reading.hidden = false;
+    text.textContent = '正在生成 AI 解读…';
+    reading.scrollIntoView({block: 'nearest'});
+  } else {
+    reading.hidden = ai.hidden = true;
+    $('#trackAnalysisResult').replaceChildren();
+    status.textContent = '正在归并当前筛选范围的逐条轨迹…';
+  }
+  try {
+    const report = await api('/api/track-analysis' + (interpret ? '?interpret=true' : ''), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(trackAnalysisScope), signal: controller.signal,
+    });
+    if (trackAnalysisRequest !== controller) return;
+    renderTrackAnalysis(report);
+    if (interpret) text.textContent = report.interpretation || '当前范围没有可解读的轨迹。';
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    (interpret ? text : status).textContent = error.message;
+  } finally {
+    if (trackAnalysisRequest === controller) refresh.disabled = ai.disabled = false;
+  }
+}
+
+function openTrackAnalysis() {
+  const {sort, ...selection} = readF(TF || {});
+  trackAnalysisScope = Object.fromEntries(new URLSearchParams(qs(selection)));
+  const scopeItems = [
+    ...(selection.pf || []).map(platformName),
+    ...(selection.lastmile || []),
+    ...(selection.month || []),
+    ...(selection.week || []),
+    [selection.start, selection.end].filter(Boolean).join(' 至 '),
+  ].filter(Boolean);
+  $('#trackAnalysisScope').textContent = ['当前筛选 · 全部匹配订单', ...scopeItems].join(' · ');
+  $('#trackAnalysisDialog').showModal();
+  run(analyzeTrack);
+}
+
 async function loadTrackSummary(filters, available = null) {
   const {sort, ...scope} = filters;
   const path = '/api/track?' + qs({...scope, part: 'summary'});
@@ -3665,6 +3760,20 @@ run(async function boot() {
     list.addEventListener('focusin', watchOrderIntent);
   }
   $('#showDetailed').onclick = () => openTracking({ coverage: 'detailed', sort: '逐条事件数' });
+  $('#openTrackAnalysis').hidden = ME.preview;
+  $('#openTrackAnalysis').onclick = () => run(async () => {
+    await loadTrackFilters();
+    if (TF && VIEW === 'track' && trackMode === 'tracking') openTrackAnalysis();
+  });
+  $('#refreshTrackAnalysis').onclick = () => run(analyzeTrack);
+  $('#interpretTrackAnalysis').onclick = () => run(() => analyzeTrack({interpret: true}));
+  $('#trackAnalysisDialog').addEventListener('close', () => trackAnalysisRequest?.abort());
+  $('#trackAnalysisResult').onclick = event => {
+    const button = event.target.closest('[data-track-analysis-order]');
+    if (!button) return;
+    $('#trackAnalysisDialog').close();
+    run(() => openOrder(button.dataset.trackAnalysisOrder, $('#openTrackAnalysis')));
+  };
   $('#alertBody').onchange = refreshSelection;
   $('#batchAction').onchange = refreshSelection;
   $('#applyBatch').onclick = () => run(applyBatch);

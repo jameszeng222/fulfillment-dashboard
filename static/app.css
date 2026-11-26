@@ -642,6 +642,29 @@ button.rank-row:hover { background: var(--surface-muted); }
 .settings-dialog header { border-bottom: 1px solid var(--line); }
 .settings-dialog header h2 { font-size: 17px; overflow-wrap: anywhere; }
 .settings-dialog footer { justify-content: flex-end; border-top: 1px solid var(--line); }
+.track-analysis-dialog { width: min(880px, calc(100vw - 28px)); }
+.track-analysis-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.track-analysis-dialog header .tip { margin-top: 3px; }
+.track-analysis-body { overflow: auto; padding: 16px 17px; }
+#trackAnalysisStatus:not(:empty) { margin-bottom: 12px; }
+.track-analysis-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.track-analysis-metrics > div {
+  display: grid; gap: 3px; background: var(--bg); padding: 10px; border-radius: 8px; border: 1px solid var(--line);
+}
+.track-analysis-metrics span { color: var(--ink2); font-size: 12px; }
+.track-analysis-metrics strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+.track-analysis-window { margin-top: 10px; }
+.track-analysis-group { margin-top: 18px; border: 1px solid var(--line); border-radius: 8px; }
+.track-analysis-group h3, .track-analysis-reading h3 { font-size: 14px; }
+.track-analysis-group h3, .track-analysis-row, .track-analysis-group > p { padding: 9px 12px; }
+.track-analysis-row { display: grid; gap: 5px; border-top: 1px solid var(--line); }
+.track-analysis-row > span { color: var(--ink2); }
+.track-analysis-examples { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.track-analysis-reading { margin-top: 18px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.track-analysis-reading p { margin-top: 6px; line-height: 1.6; white-space: pre-wrap; }
+@media (max-width: 600px) {
+  .track-analysis-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .settings-fields { padding: 15px 17px; display: grid; gap: 13px; grid-template-columns: repeat(2,minmax(0,1fr)); }
 .settings-fields label { display: grid; gap: 5px; font-weight: 600; }
 .settings-fields input, .settings-fields select { min-width: 0; }
