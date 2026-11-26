@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261125-full-pull">
+<link rel="stylesheet" href="/static/app.css?v=20261126-region-p95">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -318,11 +318,11 @@
             <select id="usBasis">
               <optgroup label="全程及运输">
                 <option value="paid">支付到签收</option><option value="created">创建到签收</option>
-                <option value="shipped">出库到签收</option><option value="pickup_delivered">提取到签收</option>
+                <option value="shipped">出库到签收</option><option value="pickup_delivered">上网到签收</option>
               </optgroup>
               <optgroup label="接单与交接">
                 <option value="paid_create">支付到创建</option><option value="create_ship">创建到出库</option>
-                <option value="ship_pickup">出库到提取</option>
+                <option value="ship_pickup">出库到上网</option>
               </optgroup>
             </select>
           </div>
@@ -346,9 +346,9 @@
               <div class="us-map-controls">
                 <div class="tabs period-tabs" id="usMetric" role="group" aria-label="地图指标">
                   <button type="button" data-value="orders" aria-pressed="false">单量</button>
-                  <button type="button" data-value="share" aria-pressed="false">占比</button>
                   <button type="button" data-value="avg" aria-pressed="false">平均时效</button>
                   <button type="button" data-value="p90" aria-pressed="true">P90 时效</button>
+                  <button type="button" data-value="p95" aria-pressed="false">P95 时效</button>
                 </div>
                 <label class="us-focus">地图渠道<select id="usMapChannel" aria-label="地图渠道"></select></label>
               </div>
@@ -360,7 +360,7 @@
               <div class="ct"><div><h2 id="usMixTitle">全美渠道构成</h2><p class="tip" id="usMixScope"></p></div>
                 <button type="button" class="btn ghost sm" id="usClear" hidden>返回全美</button></div>
               <div class="tblwrap"><table class="tbl us-channel-table">
-                <thead><tr><th scope="col">渠道</th><th scope="col">单量</th><th scope="col">占比</th><th scope="col">平均</th><th scope="col">P90</th><th scope="col">样本</th></tr></thead>
+                <thead><tr><th scope="col">渠道</th><th scope="col">单量</th><th scope="col">占比</th><th scope="col">平均</th><th scope="col">P90</th><th scope="col">P95</th><th scope="col">样本</th></tr></thead>
                 <tbody id="usMixBody"></tbody>
               </table></div>
             </section>
@@ -377,14 +377,14 @@
             </div>
             <div class="tblwrap"><table class="tbl">
               <thead><tr><th scope="col" id="usPlaceColumn">目的州</th><th scope="col" id="usChannelColumn">单量最高的渠道</th>
-                <th scope="col">单量</th><th scope="col">占比</th><th scope="col">平均时效</th><th scope="col">P90 时效</th><th scope="col">有效样本</th></tr></thead>
+                <th scope="col">单量</th><th scope="col">占比</th><th scope="col">平均时效</th><th scope="col">P90 时效</th><th scope="col">P95 时效</th><th scope="col">有效样本</th></tr></thead>
               <tbody id="usDetailsBody"></tbody>
             </table></div>
           </section>
           <details class="tip regional-notes">
             <summary>统计与地图口径</summary>
-            <p>支付取客户下单时间，创建取 ERP 履约单创建时间。提取取首条实际揽收或 17TRACK PickedUp。平均时效和 P90 按实际耗时计算，仅纳入起止齐全且耗时大于零的样本。</p>
-            <p>妥投优先取 17TRACK，缺失时按仓库时间口径用 WMS 补算。P90 表示约 90% 的有效样本在该时长内完成对应阶段。</p>
+            <p>支付取客户下单时间，创建取 ERP 履约单创建时间。上网取 17TRACK 首条有效揽收或运输扫描。统计前换算成北京时间，起止齐全且耗时大于零才纳入时效样本。</p>
+            <p>妥投优先取 17TRACK，缺失时按仓库时间口径用 WMS 补算。P90、P95 表示约 90%、95% 的有效样本在该时长内完成对应阶段。地图颜色按当前范围内的实际数值分级，区间见图例。</p>
             <p>美国按万邑通七区划分，阿拉斯加和夏威夷归太平洋，美国属地单列。优先取收件州，缺失时用 ZIP 邮编补齐。其他国家按目的国统计。地图未绘的小地区可在明细查看。 <a id="regionMapSource" href="https://github.com/apache/echarts-examples/blob/gh-pages/public/data/asset/geo/USA.json" target="_blank" rel="noopener noreferrer">地图数据</a></p>
           </details>
         </div>
@@ -666,6 +666,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261126-on-demand-2" defer></script>
+<script src="/static/app.js?v=20261126-region-p95" defer></script>
 </body>
 </html>

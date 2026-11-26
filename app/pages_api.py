@@ -364,8 +364,10 @@ def usa(request: Request, month: str = "", wh: str = "", pf: str = "", cr: str =
     settings = json.dumps(groups, ensure_ascii=False, sort_keys=True) if dimension == "group" else ""
     snapshot = core.snapshot_key()
     if detail == "segments":
-        return us_analysis.segments(snapshot, market, date_basis, dimension, cond, tuple(args), settings, level, place, focus)
-    return us_analysis.report(snapshot, date_basis, basis, dimension, cond, tuple(args), settings, market)
+        return us_analysis.segments(snapshot, market, date_basis, dimension, cond, tuple(args), settings,
+                                    level, place, focus, transport_archive_version())
+    archive_version = transport_archive_version() if basis in ("ship_pickup", "pickup_delivered") else None
+    return us_analysis.report(snapshot, date_basis, basis, dimension, cond, tuple(args), settings, market, archive_version)
 
 
 # ---------------------------------------------------------------- 轨迹监控

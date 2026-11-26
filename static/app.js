@@ -131,7 +131,8 @@ function reportPath(path) {
 
 function reportStorageKey(path) {
   const version = /^\/api\/channels(?:\?|$)/.test(path) ? 'channel-workday-rates:' :
-    /^\/api\/overview(?:\?|$)/.test(path) ? 'delivery-rates:' : '';
+    /^\/api\/overview(?:\?|$)/.test(path) ? 'delivery-rates:' :
+      /^\/api\/regional-analysis(?:\?|$)/.test(path) ? 'regional-online-p95:' : '';
   return reportCacheBase + encodeURIComponent(`${ME?.username || 'preview'}:${ME?.role || 'preview'}:${ME?.preview ? 'preview' : 'full'}`) + ':' + version + path;
 }
 
@@ -461,7 +462,10 @@ function resizeVisibleCharts() {
     for (const chart of Object.values(charts)) {
       const host = chart.getDom();
       if (host.clientWidth && host.clientHeight &&
-          (host.clientWidth !== chart.getWidth() || host.clientHeight !== chart.getHeight())) chart.resize();
+          (host.clientWidth !== chart.getWidth() || host.clientHeight !== chart.getHeight())) {
+        chart.resize();
+        if (chart === charts.usMap) drawUsMap();
+      }
     }
   });
 }
@@ -2410,17 +2414,20 @@ const regionTimingByMarket = {};
 let usReport = null;
 const usMapLoads = new Map();
 let usMapPlaces = new Map();
+let usSharedEdges = [];
 let regionalFilters = {};
 let segmentPath = '';
 let segmentGeneration = -1;
 const usView = {market: 'us', basis: 'paid', dimension: 'lastmile', level: 'states', metric: 'p90', place: null, channel: ''};
-const usMetricLabel = {orders: '单量', share: '单量占比', avg: '平均时效', p90: 'P90 时效'};
+const usMetricLabel = {orders: '单量', avg: '平均时效', p90: 'P90 时效', p95: 'P95 时效'};
 const usTimingLabel = {paid: '支付到签收', created: '创建到签收', shipped: '出库到签收',
-  paid_create: '支付到创建', create_ship: '创建到出库', ship_pickup: '出库到提取', pickup_delivered: '提取到签收'};
+  paid_create: '支付到创建', create_ship: '创建到出库', ship_pickup: '出库到上网', pickup_delivered: '上网到签收'};
 const earlySegments = ['paid_create', 'create_ship', 'ship_pickup'];
 const lateSegments = ['pickup_delivered', 'shipped', 'created', 'paid'];
-const usPalette = ['#e6ede3', '#c5d4c4', '#9fb5a1', '#72947c', '#456651'];
+const usPalette = ['#e0ebe4', '#b3cbbd', '#80a995', '#4e7c68', '#264938'];
 const usBlank = '#eeede7';
+const usRegionLabels = new Set(['CA', 'CO', 'IA', 'TX', 'GA', 'VA', 'NY', 'PR']);
+const usStateLabels = new Set(['WA', 'CA', 'CO', 'TX', 'IL', 'FL', 'NY']);
 const regionalDuration = (minutes, basis) => Number.isFinite(minutes) ?
   earlySegments.includes(basis) ? (minutes / 60).toFixed(1) + ' 小时' : (minutes / 1440).toFixed(2) + ' 天' : '—';
 const usDay = value => Number.isFinite(value) ? regionalDuration(value * 1440, usReport.basis) : '—';
@@ -2518,12 +2525,13 @@ function renderUsReport() {
   const scope = usView.place === null ? whole : usPlaceLabel(usView.place);
   const mix = usView.place === null ? channels : selected?.channels || [];
   const selectedChannel = usView.channel;
+  const tail = usView.metric === 'p95' ? 'p95' : 'p90';
   $('#usKpi').innerHTML = [
     [other ? '其他国家履约单' : '美国履约单', fmt(national.orders), '单量含在途单','globe','blue'],
     ['有效时效样本', fmt(national.samples), earlySegments.includes(usReport.basis) ?
       `有效覆盖 ${usPercent(usShare(national.samples, national.orders))}` : `含 WMS 补算 ${fmt(national.fallback)} 单`,'check','green'],
     ['平均时效', usDay(national.avg), usTimingLabel[usReport.basis],'clock','cyan'],
-    ['P90 时效', usDay(national.p90), '约 90% 的有效样本在此时长内完成','history','violet'],
+    [usMetricLabel[tail], usDay(national[tail]), `约 ${tail.slice(1)}% 的有效样本在此时长内完成`,'history','violet'],
   ].map(row => metricCard(...row)).join('');
 
   $('#usMixTitle').textContent = scope + '渠道构成';
@@ -2539,13 +2547,14 @@ function renderUsReport() {
     return `<tr><td><button class="order-link" type="button" data-us-channel="${esc(row.label)}"
       aria-label="在地图查看 ${esc(row.label)}">${esc(row.label)}</button></td><td>${fmt(row.orders)}</td>
       <td>${usPercent(share)}<div class="us-share-meter" aria-hidden="true"><i style="width:${share ?? 0}%"></i></div></td>
-      <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${fmt(row.samples)}</td></tr>`;
-  }).join('') || blankRow(6, '当前范围无渠道数据');
+      <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${usDay(row.p95)}</td><td>${fmt(row.samples)}</td></tr>`;
+  }).join('') || blankRow(7, '当前范围无渠道数据');
 
   const countNote = selectedChannel ? '渠道单量 ÷ 当地总单量' : other ? '当地单量 ÷ 其他国家总单量' : '当地单量 ÷ 全美总单量';
   const source = selectedChannel || '全部渠道';
-  $('#usMapHint').textContent = `${source} · ${usMetricLabel[usView.metric]} · ${usView.metric === 'share' ? countNote :
-    (['p90', 'avg'].includes(usView.metric) ? usTimingLabel[usReport.basis] : '按履约单计')}`;
+  const geographyLabel = other ? '按国家' : isRegion ? '按业务区域' : '按州';
+  $('#usMapHint').textContent = `${geographyLabel} · ${source} · ${usMetricLabel[usView.metric]} · ${
+    usView.metric === 'orders' ? '按履约单计' : usTimingLabel[usReport.basis]}`;
   $('#usDetailTitle').textContent = other ? '国家明细' : isRegion ? '业务区域明细' : '州级明细';
   $('#usDetailScope').textContent = `${source} · 占比为${countNote} · 点击地域查看渠道构成`;
   $('#usPlaceColumn').textContent = other ? '目的国家' : isRegion ? '业务区域' : '目的州';
@@ -2556,7 +2565,7 @@ function renderUsReport() {
     const orders = data?.orders ?? 0;
     const share = usShare(orders, selectedChannel ? place.orders : national.orders);
     return {key, label: usPlaceLabel(key), region: isRegion ? key : usReport.geography[key]?.region || '未识别州',
-      orders, share, avg: data?.avg, p90: data?.p90, samples: data?.samples ?? 0,
+      orders, share, avg: data?.avg, p90: data?.p90, p95: data?.p95, samples: data?.samples ?? 0,
       channel: selectedChannel || place.channels?.[0]?.label || '—',
       leadingShare: !selectedChannel && place.channels?.[0] ? usShare(place.channels[0].orders, place.orders) : null};
   };
@@ -2571,8 +2580,8 @@ function renderUsReport() {
       aria-pressed="${row.key === usView.place}">${esc(row.label)}</button>${other || isRegion ? '' : `<small class="cell-sub">${esc(row.region)}</small>`}</td>
     <td>${esc(row.channel)}${row.leadingShare != null ? `<small class="cell-sub">占当地 ${usPercent(row.leadingShare)}</small>` : ''}</td>
     <td>${fmt(row.orders)}</td><td>${usPercent(row.share)}</td>
-    <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${fmt(row.samples)}</td></tr>`).join('') ||
-    blankRow(7, other ? '没有符合条件的国家' : '没有符合条件的州或区域');
+    <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${usDay(row.p95)}</td><td>${fmt(row.samples)}</td></tr>`).join('') ||
+    blankRow(8, other ? '没有符合条件的国家' : '没有符合条件的州或区域');
 
   const mapEntries = Object.entries(usReport.geography).map(([code, state]) => [
     state.name, {key: isRegion ? state.region : code, state: state.label, code, region: state.region,
@@ -2651,19 +2660,63 @@ function regionMapName(market) {
   return market === 'us' ? 'fulfillment-us' : 'fulfillment-world';
 }
 
+function sharedStateEdges(features) {
+  const edges = new Map();
+  const shared = [];
+  for (const {properties, geometry} of features) {
+    const name = properties.name;
+    const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+    for (const rings of polygons) for (const ring of rings) {
+      for (let i = 1; i < ring.length; i++) {
+        const a = ring[i - 1], b = ring[i];
+        const start = a.join(','), end = b.join(',');
+        const key = start < end ? start + '|' + end : end + '|' + start;
+        const neighbor = edges.get(key);
+        if (neighbor && neighbor !== name) shared.push({a, b, left: neighbor, right: name});
+        else edges.set(key, name);
+      }
+    }
+  }
+  return shared;
+}
+
+function drawUsRegionBorders(chart) {
+  const children = [];
+  for (const {a, b, left, right} of usSharedEdges) {
+    if (usMapPlaces.get(left)?.region === usMapPlaces.get(right)?.region) continue;
+    const [x1, y1] = chart.convertToPixel({seriesIndex: 0}, a) || [];
+    const [x2, y2] = chart.convertToPixel({seriesIndex: 0}, b) || [];
+    if (![x1, y1, x2, y2].every(Number.isFinite)) continue;
+    children.push({type:'line', silent:true, shape:{x1, y1, x2, y2}, z:3,
+      style:{stroke:'#2c493b', lineWidth:1.8, lineCap:'round'}});
+  }
+  if (children.length) chart.setOption({graphic: [{type:'group', silent:true, children}]});
+}
+
 function drawUsMap() {
   const chart = charts.usMap;
   if (!chart || !usReport || VIEW !== 'us' || !echarts.getMap(regionMapName(usReport.market))) return;
   const metric = usView.metric;
-  const shortCuts = [4, 12, 24, 48].map(hours => hours / 24);
   const other = usReport.market === 'other';
-  const cuts = {orders: other ? [10, 100, 1000, 10000] : [100, 1000, 10000, 50000],
-    share: [1, 5, 15, 35], avg: earlySegments.includes(usReport.basis) ? shortCuts : [3, 4, 5, 6],
-    p90: earlySegments.includes(usReport.basis) ? shortCuts :
-      ['paid','created'].includes(usReport.basis) ? [5, 6, 7, 8] : [4, 5, 6, 7]}[metric];
-  const format = metric === 'orders' ? n => fmt(n) + ' 单' : metric === 'share' ? usPercent : usDay;
-  const pieces = usPalette.map((color, index) => {
+  const byRegion = !other && usView.level === 'regions';
+  const compact = chart.getWidth() < 560;
+  const hourly = earlySegments.includes(usReport.basis);
+  const format = metric === 'orders' ? n => fmt(n) + ' 单' : usDay;
+  const mapValue = row => {
+    const value = row?.[metric];
+    if (!Number.isFinite(value) || value <= 0) return NaN;
+    if (metric === 'orders') return value;
+    return hourly ? Number((value * 24).toFixed(1)) / 24 : Number(value.toFixed(2));
+  };
+  const unique = [...new Set([...usMapPlaces.values()].map(place => mapValue(place.row)).filter(Number.isFinite))]
+    .sort((a, b) => a - b);
+  const bands = Math.min(usPalette.length, unique.length);
+  const cuts = Array.from({length: Math.max(0, bands - 1)}, (_, index) =>
+    unique[Math.ceil((index + 1) * unique.length / bands) - 1]);
+  const pieces = Array.from({length: bands}, (_, index) => {
+    const color = usPalette[bands === 1 ? 2 : Math.round(index * (usPalette.length - 1) / (bands - 1))];
     const min = cuts[index - 1], max = cuts[index];
+    if (bands === 1) return {value: unique[0], color, label: format(unique[0])};
     return {...(min == null ? {} : {gt: min}), ...(max == null ? {} : {lte: max}), color,
       label: min == null ? '≤ ' + format(max) : max == null ? '> ' + format(min) : `> ${format(min)} 至 ${format(max)}`};
   });
@@ -2675,17 +2728,28 @@ function drawUsMap() {
       const place = usMapPlaces.get(item.name);
       if (!place) return esc(item.name);
       const row = place.row;
-      return `<strong>${esc(place.state)}（${esc(place.code)}） · ${esc(place.region)}</strong><br>${
-        row ? `单量 ${fmt(row.orders)} · 占比 ${usPercent(row.share)}<br>平均 ${usDay(row.avg)} · P90 ${usDay(row.p90)}<br>有效样本 ${fmt(row.samples)} 单` : '当前范围无记录'}`;
+      const title = byRegion ? place.region : other ? place.state : `${place.state}（${place.code}） · ${place.region}`;
+      return `<strong>${esc(title)}</strong><br>${
+        row ? `单量 ${fmt(row.orders)} · 占比 ${usPercent(row.share)}<br>平均 ${usDay(row.avg)} · P90 ${usDay(row.p90)} · P95 ${usDay(row.p95)}<br>有效样本 ${fmt(row.samples)} 单` : '当前范围无记录'}`;
     }},
     visualMap: [{type: 'piecewise', show: false, pieces, outOfRange: {color: usBlank}}],
     series: [{type: 'map', map: regionMapName(usReport.market), roam: false, layoutCenter: ['50%', '50%'], layoutSize: '140%',
-      itemStyle: {areaColor: usBlank, borderColor: '#ffffff', borderWidth: 1},
+      itemStyle: {areaColor: usBlank, borderColor: '#fffefa', borderWidth: byRegion ? 0.6 : 1},
       emphasis: {label: {show: false}, itemStyle: {borderColor: '#182b52', borderWidth: 1.6}},
-      data: [...usMapPlaces].map(([name, place]) => ({name, value: place.row?.[metric] ?? NaN,
-        itemStyle: place.key === usView.place ? {borderColor: '#182b52', borderWidth: 2} : undefined})),
+      data: [...usMapPlaces].map(([name, place]) => {
+        const value = mapValue(place.row);
+        const selected = place.key === usView.place;
+        const anchor = byRegion ? usRegionLabels.has(place.code) : !other && usStateLabels.has(place.code) || selected;
+        const caption = byRegion ? place.region : other || !compact ? place.state : place.code;
+        const label = anchor && Number.isFinite(value) ? {show:true,
+          formatter:`${caption}\n${format(value)}`, color:'#12283b', fontSize:compact ? 10 : 12,
+          fontWeight:700, lineHeight:compact ? 12 : 15, textBorderColor:'#fffefa', textBorderWidth:3} : undefined;
+        return {name, value, label, emphasis:label ? {label} : undefined,
+          itemStyle:selected ? {borderColor:'#182b52', borderWidth:2} : undefined};
+      }),
     }],
   }, {notMerge: true});
+  if (byRegion) drawUsRegionBorders(chart);
   resizeVisibleCharts();
 }
 
@@ -2700,6 +2764,7 @@ function prepareUsMap(market) {
         return response.json();
       }),
     ]).then(([, geo]) => {
+      if (market === 'us') usSharedEdges = sharedStateEdges(geo.features);
       echarts.registerMap(mapName, geo, market === 'us' ? {
         Alaska: {left: -131, top: 25, width: 15}, Hawaii: {left: -110, top: 28, width: 5},
         'Puerto Rico': {left: -76, top: 26, width: 2},
@@ -2768,7 +2833,7 @@ function setupUsControls() {
     if (!target) return;
     usView.basis = $('#usBasis').value = target.dataset.segment;
     syncFilterPreset(UF);
-    if (['orders', 'share'].includes(usView.metric)) {
+    if (usView.metric === 'orders') {
       usView.metric = 'p90';
       $('#usMetric').querySelectorAll('button').forEach(button =>
         button.setAttribute('aria-pressed', String(button.dataset.value === 'p90')));
