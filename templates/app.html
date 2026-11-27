@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=channel-section-tabs">
+<link rel="stylesheet" href="/static/app.css?v=channel-member-lastmile">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -269,17 +269,26 @@
             <h2 id="channelMembersTitle"><span class="section-icon tone-green"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>子渠道构成与时效</h2>
             <p class="tip icon-caption" id="channelMembersScope"></p>
           </div>
-            <label class="toolbar"><span class="tip">自定义渠道</span><select id="channelMemberGroup" aria-label="子渠道所属分组"></select></label>
+            <div class="toolbar">
+              <label class="toolbar"><span class="tip">自定义渠道</span><select id="channelMemberGroup" aria-label="子渠道所属分组"></select></label>
+              <div class="tabs period-tabs" id="channelMemberDimension" role="group" aria-label="子渠道拆分维度">
+                <button type="button" data-member-dimension="current" aria-pressed="false">当前物流渠道</button>
+                <button type="button" data-member-dimension="lastmile" aria-pressed="true">C 端渠道</button>
+              </div>
+              <label class="toolbar" id="channelMemberParentWrap">
+                <span class="tip">所属当前渠道</span><select id="channelMemberParent"></select>
+              </label>
+            </div>
           </div>
           <p class="tip" id="channelMemberStatus" role="status"></p>
           <div class="channel-member-content" id="channelMemberContent" hidden>
             <div>
-              <h3>子渠道单量占比</h3><div id="channelMemberShare"></div>
+              <h3 id="channelMemberShareTitle">C 端渠道单量占比</h3><div id="channelMemberShare"></div>
             </div>
             <div>
-              <h3>子渠道时效对比</h3>
+              <h3 id="channelMemberTableTitle">C 端渠道时效对比</h3>
               <div class="tblwrap channel-member-table"><table class="tbl">
-                <thead><tr><th>子渠道（当前物流渠道）</th><th>单量</th><th>占比</th><th>有效样本</th>
+                <thead><tr><th id="channelMemberLabel">C 端渠道</th><th>单量</th><th>占比</th><th>有效样本</th>
                   <th>平均时效</th><th>P90</th><th>5 天内妥投</th><th>6 天内妥投</th><th>7 天内妥投</th></tr></thead>
                 <tbody id="channelMemberBody"></tbody>
               </table></div>
@@ -741,6 +750,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=channel-members" defer></script>
+<script src="/static/app.js?v=channel-member-lastmile" defer></script>
 </body>
 </html>

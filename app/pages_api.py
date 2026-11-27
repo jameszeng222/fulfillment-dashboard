@@ -815,9 +815,10 @@ def _channel_members(_snapshot, archive, basis, members, cond, args):
         facts = analytics_snapshot.facts(con)
         join, online_start = analytics_snapshot.scan_source(con, archive) if basis == "online" else ("", ONLINE_START)
         report_start, minutes = _channel_duration(basis, online_start)
-        rows = con.execute(f"""
+        cursor = con.execute(f"""
             WITH scoped AS (
-                SELECT trim(o.当前渠道) AS channel,{minutes} AS duration_min,
+                SELECT trim(o.当前渠道) AS channel,coalesce(nullif(o.C端承运商,''),'__empty__') AS lastmile,
+                       {minutes} AS duration_min,
                        {report_start} AS report_start,o.{DELIVERED_BJ} AS delivered
                 FROM {facts} o {join}
                 WHERE trim(o.当前渠道) IN (SELECT unnest(?::VARCHAR[])){cond}
@@ -825,25 +826,39 @@ def _channel_members(_snapshot, archive, basis, members, cond, args):
                 SELECT *,CASE WHEN duration_min>0 THEN {workday_minutes("report_start", "delivered")} END AS workday_min
                 FROM scoped
             )
-            SELECT channel,count(*) AS orders,count(*) FILTER(WHERE duration_min>0) AS samples,
+            SELECT channel,lastmile,count(*) AS orders,count(*) FILTER(WHERE duration_min>0) AS samples,
                    round(avg(duration_min) FILTER(WHERE duration_min>0)/1440.0,2) AS "avgDays",
                    round(quantile_cont(duration_min,0.90) FILTER(WHERE duration_min>0)/1440.0,2) AS "p90Days",
                    {delivery_window_counts("duration_min")},
                    {delivery_window_counts("workday_min", prefix="w", include_zero=True)}
-            FROM measured GROUP BY 1
-        """, [list(members), *args]).df().to_dict("records")
-    by_name = {row["channel"]: row for row in rows}
+            FROM measured GROUP BY GROUPING SETS ((channel),(lastmile),(channel,lastmile))
+        """, [list(members), *args])
+        names = [column[0] for column in cursor.description]
+        rows = [dict(zip(names, row)) for row in cursor.fetchall()]
     empty_rates = delivery_rates({}, 0)
-    for name in members:
-        if name not in by_name:
-            by_name[name] = {"channel": name, "orders": 0, "samples": 0, "avgDays": None, "p90Days": None,
-                             "deliveryRates": empty_rates, "workdayDeliveryRates": empty_rates}
-            continue
-        row = by_name[name]
+    by_name = {
+        name: {"channel": name, "orders": 0, "samples": 0, "avgDays": None, "p90Days": None,
+               "deliveryRates": empty_rates, "workdayDeliveryRates": empty_rates}
+        for name in members
+    }
+    lastmile_rows = []
+    by_member = {name: [] for name in members}
+    for row in rows:
+        channel = row.pop("channel")
+        lastmile = row.pop("lastmile")
         row["deliveryRates"] = delivery_rates({day: row.pop(f"d{day}") for day in DELIVERY_WINDOWS}, row["orders"])
         row["workdayDeliveryRates"] = delivery_rates({day: row.pop(f"w{day}") for day in DELIVERY_WINDOWS}, row["orders"])
+        if lastmile is None:
+            by_name[channel].update(row)
+        else:
+            row["key"] = lastmile
+            row["channel"] = "未填写 C 端渠道" if lastmile == "__empty__" else lastmile
+            (lastmile_rows if channel is None else by_member[channel]).append(row)
     ordered = sorted(by_name.values(), key=lambda row: (-row["orders"], row["channel"]))
-    return core.clean({"orders": sum(row["orders"] for row in ordered), "rows": ordered})
+    for row in ordered:
+        row["lastmileRows"] = sorted(by_member[row["channel"]], key=lambda member: (-member["orders"], member["channel"]))
+    lastmile_rows.sort(key=lambda row: (-row["orders"], row["channel"]))
+    return core.clean({"orders": sum(row["orders"] for row in ordered), "rows": ordered, "lastmileRows": lastmile_rows})
 
 
 @lru_cache(maxsize=32)

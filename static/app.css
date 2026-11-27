@@ -310,6 +310,7 @@ button:focus-visible, a:focus-visible, input:is([type=checkbox],[type=radio],[ty
 .channel-compare-expand[hidden] { display:none; }
 .channel-results { display:flex; flex-direction:column; gap:16px; }
 .channel-members .toolbar select { max-width: min(230px, 66vw); }
+.channel-members .ct { flex-wrap: wrap; }
 .channel-member-content { display: grid; grid-template-columns: minmax(230px, 1fr) minmax(0, 2.25fr); gap: 18px; }
 .channel-member-content h3 { font-size: 13px; margin-bottom: 8px; }
 #channelMemberShare { max-height: 365px; overflow-y: auto; }

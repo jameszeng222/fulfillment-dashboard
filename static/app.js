@@ -130,7 +130,8 @@ function reportPath(path) {
 }
 
 function reportStorageKey(path) {
-  const version = /^\/api\/channels(?:\?|$)/.test(path) ? 'channel-members:' :
+  const version = /^\/api\/channel-members(?:\?|$)/.test(path) ? 'member-lastmile:' :
+    /^\/api\/channels(?:\?|$)/.test(path) ? 'channel-members:' :
     /^\/api\/overview(?:\?|$)/.test(path) ? 'country-timing-p90:' :
       /^\/api\/regional-analysis(?:\?|$)/.test(path) ? 'regional-geography:' : '';
   return reportCacheBase + encodeURIComponent(`${ME?.username || 'preview'}:${ME?.role || 'preview'}:${ME?.preview ? 'preview' : 'full'}`) + ':' + version + path;
@@ -1901,6 +1902,7 @@ let channelTrendPath = '';
 let channelTrendRequest = 0;
 let channelMemberRequest = 0;
 let renderedChannelMembers = null;
+let channelMemberDimension = 'lastmile';
 /* ---------------- 组合筛选 ---------------- */
 const filterPresetWidgets = new WeakMap();
 
@@ -2389,6 +2391,7 @@ function refreshChannelMemberGroups(report) {
   else {
     channelMemberRequest++;
     renderedChannelMembers = null;
+    $('#channelMemberParent').disabled = true;
     $('#channelMemberContent').hidden = true;
     $('#channelMembersScope').textContent = '';
     $('#channelMemberStatus').textContent = report.snapshotAt ?
@@ -2406,6 +2409,7 @@ async function loadChannelMembers() {
   renderedChannelMembers = reportRecord(path)?.data || null;
   if (renderedChannelMembers) renderChannelMembers();
   else {
+    $('#channelMemberParent').disabled = true;
     $('#channelMemberContent').hidden = true;
     $('#channelMembersScope').textContent = '';
     status.textContent = '正在计算子渠道占比和时效…';
@@ -2426,23 +2430,42 @@ async function loadChannelMembers() {
 
 function renderChannelMembers() {
   if (VIEW !== 'channels' || channelDimension !== 'group' || !renderedChannelMembers) return;
-  const {group, orders, rows} = renderedChannelMembers;
-  const openMember = channel => openTracking({...renderedChannelFilters, channel_group: group, channel});
-  $('#channelMemberStatus').textContent = '';
+  const report = renderedChannelMembers;
+  const {group} = report;
+  const lastmile = channelMemberDimension === 'lastmile';
+  const selector = $('#channelMemberParent');
+  const parent = report.rows.find(row => row.channel === selector.value);
+  selector.replaceChildren(new Option('全部子渠道', ''),
+    ...report.rows.map(row => new Option(row.channel, row.channel)));
+  if (parent) selector.value = parent.channel;
+  selector.disabled = !report.rows.length;
+  const scope = lastmile && parent ? parent : report;
+  const orders = scope.orders;
+  const rows = lastmile ? scope.lastmileRows || [] : report.rows;
+  const label = lastmile ? 'C 端渠道' : '当前物流渠道';
+  const openMember = key => openTracking({...renderedChannelFilters, channel_group:group,
+    ...(lastmile ? {lastmile:key, ...(parent ? {channel:parent.channel} : {})} : {channel:key})});
+  $('#channelMemberParentWrap').hidden = !lastmile;
+  $('#channelMemberStatus').textContent = lastmile && !scope.lastmileRows ? '暂时无法读取 C 端渠道明细。' : '';
   $('#channelMemberContent').hidden = false;
-  $('#channelMembersScope').textContent = `${group} · ${fmt(orders)} 单 · ${TIMING_BASIS[renderedChannels.basis].label} · ${CHANNEL_DAY_LABELS[channelDayMode]}`;
-  if (orders) {
-    drawRank('channelMemberShare', rows.map(row => ({k:row.channel, n:row.orders, filter:row.orders ? row.channel : false})),
+  $('#channelMembersScope').textContent = [group, scope.channel, `${fmt(orders)} 单`,
+    TIMING_BASIS[renderedChannels.basis].label, CHANNEL_DAY_LABELS[channelDayMode]].filter(Boolean).join(' · ');
+  $('#channelMemberShareTitle').textContent = label + '单量占比';
+  $('#channelMemberTableTitle').textContent = label + '时效对比';
+  $('#channelMemberLabel').textContent = label;
+  if (orders && rows.length) {
+    drawRank('channelMemberShare', rows.map(row => ({k:row.channel, n:row.orders, filter:row.orders ? row.key || row.channel : false})),
       rows.length, orders, ME.preview ? null : openMember);
-  } else $('#channelMemberShare').textContent = '当前筛选无命中单量';
+  } else $('#channelMemberShare').textContent = orders ? '暂无渠道明细' : '当前筛选无命中单量';
   const share = value => orders ? (value > 0 && value / orders < 0.001 ? '&lt;0.1%' : measure(100 * value / orders, '%')) : '—';
   const days = value => value == null ? '—' : `${value.toFixed(2)} 天`;
   $('#channelMemberBody').innerHTML = rows.map(row => `<tr>
     <td>${ME.preview || !row.orders ? esc(row.channel) :
-      `<button type="button" class="order-link" data-member-channel="${esc(row.channel)}">${esc(row.channel)}</button>`}</td>
+      `<button type="button" class="order-link" data-member-channel="${esc(row.key || row.channel)}">${esc(row.channel)}</button>`}</td>
     <td><b>${fmt(row.orders)}</b></td><td>${share(row.orders)}</td><td>${fmt(row.samples)}</td>
     <td>${days(row.avgDays)}</td><td>${days(row.p90Days)}</td>
-    ${[5, 6, 7].map(day => `<td>${measure(channelDeliveryRate(row, day), '%')}</td>`).join('')}</tr>`).join('');
+    ${[5, 6, 7].map(day => `<td>${measure(channelDeliveryRate(row, day), '%')}</td>`).join('')}</tr>`).join('')
+    || '<tr><td colspan="9" class="tip">暂无可比较的渠道</td></tr>';
   $('#channelMemberBody').onclick = event => {
     const target = event.target.closest('[data-member-channel]');
     if (target) openMember(target.dataset.memberChannel);
@@ -4018,6 +4041,16 @@ run(async function boot() {
   }, {rootMargin:'100px 0px'}).observe($('#channelTrend'));
   $('#channelTrendKey').onchange = () => run(loadChannelTrend);
   $('#channelMemberGroup').onchange = () => run(loadChannelMembers);
+  $('#channelMemberParent').onchange = renderChannelMembers;
+  $('#channelMemberDimension').onclick = event => {
+    const button = event.target.closest('[data-member-dimension]');
+    if (!button || channelMemberDimension === button.dataset.memberDimension) return;
+    channelMemberDimension = button.dataset.memberDimension;
+    $('#channelMemberDimension').querySelectorAll('button').forEach(item =>
+      item.setAttribute('aria-pressed', String(item === button)));
+    $('#channelMemberParentWrap').hidden = channelMemberDimension !== 'lastmile';
+    renderChannelMembers();
+  };
   $('#channelTrendPeriod').onclick = event => {
     const selected = event.target.closest('[data-period]');
     if (!selected || selected.dataset.period === channelTrendPeriod) return;
