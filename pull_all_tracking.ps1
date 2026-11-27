@@ -6,12 +6,21 @@ param(
 $ErrorActionPreference = 'Stop'
 $log = Join-Path $PSScriptRoot 'rolling-sync.log'
 $mutex = [System.Threading.Mutex]::new($false, 'Local\FulfillmentControlTowerRolling')
+$importPriority = [System.Threading.Mutex]::new($false, 'Local\FulfillmentControlTowerImportPriority')
 $locked = $false
+$hasPriority = $false
 $previousToken = $env:TRACK17_TOKEN
 Push-Location -LiteralPath $PSScriptRoot
 try {
-    try { $locked = $mutex.WaitOne(0) }
-    catch [System.Threading.AbandonedMutexException] { $locked = $true }
+    try { $hasPriority = $importPriority.WaitOne(0) }
+    catch [System.Threading.AbandonedMutexException] { $hasPriority = $true }
+    if (-not $hasPriority) { exit 4 }
+    try {
+        try { $locked = $mutex.WaitOne(0) }
+        catch [System.Threading.AbandonedMutexException] { $locked = $true }
+    } finally {
+        $importPriority.ReleaseMutex()
+    }
     if (-not $locked) { exit 4 }
 
     if (-not $env:TRACK17_TOKEN) {
@@ -33,6 +42,7 @@ try {
 } finally {
     $env:TRACK17_TOKEN = $previousToken
     if ($locked) { $mutex.ReleaseMutex() }
+    $importPriority.Dispose()
     $mutex.Dispose()
     Pop-Location
 }

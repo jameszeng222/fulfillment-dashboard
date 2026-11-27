@@ -48,17 +48,40 @@ $log = Join-Path $root 'rolling-sync.log'
 $stage = Join-Path $root ('.rolling-' + [guid]::NewGuid().ToString('N') + '.duckdb')
 $manifest = [System.IO.Path]::ChangeExtension($stage, '.json')
 $mutex = [System.Threading.Mutex]::new($false, 'Local\FulfillmentControlTowerRolling')
+$importPriority = [System.Threading.Mutex]::new($false, 'Local\FulfillmentControlTowerImportPriority')
 $ownsLock = $false
+$ownsPriority = $false
 $previewStopped = $false
 $runId = $null
 $failure = 'prepare'
 
+function Enter-SyncMutex([System.Threading.Mutex]$Mutex, [int]$TimeoutMilliseconds) {
+    try { return $Mutex.WaitOne($TimeoutMilliseconds) }
+    catch [System.Threading.AbandonedMutexException] { return $true }
+}
+
 Push-Location -LiteralPath $root
 try {
-    try {
-        $ownsLock = $mutex.WaitOne(0)
-    } catch [System.Threading.AbandonedMutexException] {
-        $ownsLock = $true
+    $isErpImport = -not $TrackLimit -and -not $ImportArchive
+    $wait = [int][TimeSpan]::FromMinutes(15).TotalMilliseconds
+    if (-not $ImportArchive) {
+        # Keep new tracking batches behind any ERP import waiting for the database.
+        $ownsPriority = Enter-SyncMutex $importPriority $wait
+        if (-not $ownsPriority) {
+            throw '等待履约单导入超时，下次任务继续'
+        }
+    }
+    $ownsLock = Enter-SyncMutex $mutex 0
+    if ($isErpImport -and -not $ownsLock) {
+        Add-Content -LiteralPath $log -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] 履约单更新排队，等待当前写入完成" -Encoding utf8
+        $ownsLock = Enter-SyncMutex $mutex $wait
+        if (-not $ownsLock) {
+            throw '等待当前数据更新超时，履约单将在下次检查重试'
+        }
+    }
+    if ($TrackLimit -and $ownsPriority) {
+        $importPriority.ReleaseMutex()
+        $ownsPriority = $false
     }
     if (-not $ownsLock) {
         if ($ImportArchive) { throw '另一个数据更新任务正在运行，请稍后再导入历史轨迹' }
@@ -135,6 +158,8 @@ try {
             if (Test-Path -LiteralPath $path -PathType Leaf) { Remove-Item -LiteralPath $path }
         }
         if ($ownsLock) { $mutex.ReleaseMutex() }
+        if ($ownsPriority) { $importPriority.ReleaseMutex() }
+        $importPriority.Dispose()
         $mutex.Dispose()
         Pop-Location
     }
