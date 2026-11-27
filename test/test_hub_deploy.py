@@ -43,6 +43,7 @@ class HubDeploymentTest(unittest.TestCase):
             os.environ.update(ICS_TLS_CERT_FILE=str(cert), ICS_TLS_KEY_FILE=str(key))
             args = run_site.launch_args()
             self.assertIn("--no-proxy-headers", args)
+            self.assertIn("--no-access-log", args)
             self.assertEqual(args[-4:], ["--ssl-certfile", str(cert), "--ssl-keyfile", str(key)])
 
     def test_lifespan_runs_startup_hook(self):

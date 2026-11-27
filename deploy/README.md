@@ -4,7 +4,7 @@
 
 1. 选择获授权的中枢站点，使用受管发布或 SSH 工具，启用站点绑定 TLS 证书。
 2. 只发布 `app/`、`templates/`、`static/`、`public/`、`deploy/run_site.py`，以及 `requirements.txt`、`init_ops.py`、`alerts.py`、`track17.py` 和所需的 `reference/` 参考资源。不要上传数据目录、数据库、业务导出文件、日志、`.env`、凭据或本地虚拟环境。不要拿整仓覆盖运行目录；确认旧发布没有遗留的代理、通用透传或隧道配置。
-3. 使用平台启动包装器运行 `python3 deploy/run_site.py`，由受管运行环境提供 `PORT`、`ICS_TLS_CERT_FILE` 和 `ICS_TLS_KEY_FILE`。应用在本站端口直接提供 HTTPS，不在 TLS 缺失时退回 HTTP。平台启动器重启时也应注入这两个 TLS 路径。
+3. 使用平台启动包装器运行 `python3 deploy/run_site.py`，由受管运行环境提供 `PORT`、`ICS_TLS_CERT_FILE` 和 `ICS_TLS_KEY_FILE`。应用在本站端口直接提供 HTTPS，不在 TLS 缺失时退回 HTTP。平台启动器重启时也应注入这两个 TLS 路径。关闭逐请求访问日志，避免记录订单标识与登录回调参数。
 
 ## 配置与数据
 

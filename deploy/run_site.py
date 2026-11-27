@@ -122,7 +122,8 @@ def tls_args() -> list[str]:
 
 def launch_args() -> list[str]:
     return [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0",
-            "--port", os.environ["PORT"], "--no-proxy-headers", "--log-level", "info", *tls_args()]
+            "--port", os.environ["PORT"], "--no-proxy-headers", "--no-access-log",
+            "--log-level", "info", *tls_args()]
 
 
 def summary() -> None:
