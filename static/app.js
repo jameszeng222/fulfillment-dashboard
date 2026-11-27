@@ -12,6 +12,8 @@ const dt = s => s ? String(s).replace('T', ' ').slice(0, 16) : '—';
 const trackTime = (local, utc) => local ||
   (utc && utc !== 'NaT' ? `${String(utc).replace('T', ' ').slice(0, 19)} UTC` : '时间未提供');
 const measure = (value, unit = '') => value == null ? '—' : fmt1(value) + unit;
+const DELIVERY_WINDOWS = [2, 3, 5, 6, 7];
+const deliveryRate = (row, days) => row.deliveryRates?.[days];
 const durationText = value => {
   if (value == null || !Number.isFinite(value) || value < 0) return '—';
   const minutes = Math.floor(value);
@@ -50,6 +52,7 @@ const reportMemory = new Map();
 const reportInflight = new Map();
 const reportCacheBase = 'fulfillment-report-v2:';
 const reportTtl = 120_000;
+const metaPath = '/api/meta';
 const reportTimers = new Map();
 let resizeFrame = 0;
 let toastTimer;
@@ -127,7 +130,10 @@ function reportPath(path) {
 }
 
 function reportStorageKey(path) {
-  return reportCacheBase + encodeURIComponent(`${ME?.username || 'preview'}:${ME?.role || 'preview'}:${ME?.preview ? 'preview' : 'full'}`) + ':' + path;
+  const version = /^\/api\/channels(?:\?|$)/.test(path) ? 'channel-workday-rates:' :
+    /^\/api\/overview(?:\?|$)/.test(path) ? 'delivery-rates:' :
+      /^\/api\/regional-analysis(?:\?|$)/.test(path) ? 'regional-online-p95:' : '';
+  return reportCacheBase + encodeURIComponent(`${ME?.username || 'preview'}:${ME?.role || 'preview'}:${ME?.preview ? 'preview' : 'full'}`) + ':' + version + path;
 }
 
 function reportRecord(path) {
@@ -165,14 +171,14 @@ function persistReport(path, record) {
   else setTimeout(save, 0);
 }
 
-function reportFresh(record) {
+function reportFresh(record, maxAge = reportTtl) {
   return record && dataRevision && record.revision === dataRevision &&
-    performance.now() - revisionCheckedAt < 40_000 && Date.now() - record.at < reportTtl;
+    performance.now() - revisionCheckedAt < 40_000 && Date.now() - record.at < maxAge;
 }
 
 function fetchReport(path, options = {}, force = false) {
   const saved = reportRecord(path);
-  if (!force && reportFresh(saved)) return Promise.resolve(saved);
+  if (!force && reportFresh(saved, path === metaPath ? Infinity : reportTtl)) return Promise.resolve(saved);
   const revision = dataRevision;
   const pending = reportInflight.get(path);
   if (pending?.revision === revision) return pending.promise;
@@ -243,25 +249,6 @@ function scheduleReport(key, refresh) {
   }, 180));
 }
 
-async function warmReports() {
-  const base = {date_basis: 'shipped'};
-  const paths = ['/api/overview?' + qs(base), '/api/channels?' + qs({...base,basis:'shipped'}),
-    '/api/channels?' + qs({...base,basis:'shipped',dimension:'group'}),
-    '/api/regional-analysis?' + qs({...base,market:'us',basis:'paid',dimension:'lastmile'}),
-    '/api/regional-analysis?' + qs({...base,market:'us',dimension:'lastmile',detail:'segments',level:'all'}),
-    '/api/regional-analysis?' + qs({...base,market:'other',basis:'paid',dimension:'lastmile'}),
-    '/api/regional-analysis?' + qs({...base,market:'other',dimension:'lastmile',detail:'segments',level:'all'}),
-    '/api/health','/api/rules','/api/overview/channel-groups','/api/17track/sync-status'];
-  for (const path of paths) {
-    if (document.hidden) break;
-    try { await fetchReport(reportPath(path), {priority:'low'}); } catch { /* Warmup never blocks normal navigation. */ }
-    await new Promise(resolve => setTimeout(resolve, 120));
-  }
-  if (!document.hidden) for (const market of ['us','other']) {
-    try { await prepareUsMap(market); } catch { /* Load again on the user's next visit. */ }
-  }
-}
-
 function applyMeta(data) {
   if (META === data) return data;
   META = data;
@@ -287,7 +274,7 @@ function applyMeta(data) {
 function revalidateMeta(force = false) {
   if (!metaFetch || metaFetchRevision !== dataRevision) {
     const revision = dataRevision;
-    const request = fetchReport('/api/meta', {signal: AbortSignal.timeout(12_000)}, force)
+    const request = fetchReport(metaPath, {signal: AbortSignal.timeout(12_000)}, force)
       .then(record => metaFetch === request ? applyMeta(record.data) : META || record.data)
       .finally(() => { if (metaFetch === request) metaFetch = null; });
     metaFetch = request;
@@ -297,10 +284,10 @@ function revalidateMeta(force = false) {
 }
 
 function loadMeta() {
-  const saved = reportRecord('/api/meta');
+  const saved = reportRecord(metaPath);
   if (saved) {
     applyMeta(saved.data);
-    if (!reportFresh(saved)) revalidateMeta().catch(() => {});
+    if (!reportFresh(saved, Infinity)) revalidateMeta().catch(() => {});
     return Promise.resolve(META);
   }
   return revalidateMeta();
@@ -310,7 +297,7 @@ function loadChartLibrary() {
   if (window.echarts) return Promise.resolve();
   if (!chartsFetch) chartsFetch = new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = '/static/echarts.min.js';
+    script.src = '/static/echarts.min.js?v=1';
     const fail = () => {
       clearTimeout(deadline);
       chartsFetch = null;
@@ -362,11 +349,12 @@ async function refreshDataRevision() {
     dataRevision = revision;
     revisionCheckedAt = performance.now();
     if (changed && !document.querySelector('dialog[open]')) {
-      revalidateMeta(true).catch(() => {});
+      if (usesFilterMeta()) revalidateMeta().catch(() => {});
       const refresh = {dash: loadDash, channels: channelMode === 'timing' ? loadChannels : loadTrackExceptions,
         us: loadUs, rules: loadRules}[VIEW];
       if (refresh) run(refresh);
-      if (VIEW === 'us' && usReport && currentSegmentScope) run(() => loadRegionSegments(currentSegmentScope));
+      if (VIEW === 'dash' || VIEW === 'track') run(loadActivity);
+      if (VIEW === 'us') loadVisibleRegionSegments();
     }
   } catch {
     revisionCheckedAt = -Infinity;
@@ -422,8 +410,19 @@ let VIEW = 'dash';
 let trackMode = 'tracking';
 let channelMode = 'timing';
 
-function showView(v) {
-  if (ME.preview && ['rules', 'us'].includes(v)) v = 'dash';
+function routeView(route) {
+  if (['alerts', 'archive', 'detailed'].includes(route)) return 'track';
+  if (route === 'channel-exceptions') return 'channels';
+  if (['regions', 'regions-other'].includes(route)) return 'us';
+  return Object.hasOwn(VIEW_META, route) ? route : 'dash';
+}
+
+function usesFilterMeta() {
+  return ['dash','track','us'].includes(VIEW) || (VIEW === 'channels' && channelMode === 'timing') ||
+    (VIEW === 'rules' && !$('#rules-sla').hidden);
+}
+
+function displayView(v) {
   if (VIEW === 'us' && v !== 'us') segmentPath = '';
   VIEW = v;
   $('#reportCacheStatus').hidden = true;
@@ -435,14 +434,21 @@ function showView(v) {
   });
   $('#crumb').textContent = VIEW_META[v];
   setTopMeta(META?.range.end);
+}
+
+function showView(v) {
+  if (ME.preview && ['rules', 'us'].includes(v)) v = 'dash';
+  displayView(v);
   const route = v === 'track' && trackMode !== 'tracking' ? trackMode :
     v === 'channels' && channelMode === 'exceptions' ? 'channel-exceptions' :
       v === 'us' ? (usView.market === 'us' ? 'regions' : 'regions-other') : v;
   history.replaceState(null, '', '#' + route);
   window.scrollTo({ top: 0 });
   resizeVisibleCharts();
+  if (META && usesFilterMeta()) loadMeta().catch(() => {});
   run({ dash: loadDash, track: trackMode === 'tracking' ? loadTrack : loadAlerts,
     channels: channelMode === 'exceptions' ? loadTrackExceptions : loadChannels, us: loadUs, rules: loadRules }[v]);
+  if (!ME.preview && (v === 'dash' || v === 'track')) run(loadActivity);
 }
 
 function initChart(id) {
@@ -456,7 +462,10 @@ function resizeVisibleCharts() {
     for (const chart of Object.values(charts)) {
       const host = chart.getDom();
       if (host.clientWidth && host.clientHeight &&
-          (host.clientWidth !== chart.getWidth() || host.clientHeight !== chart.getHeight())) chart.resize();
+          (host.clientWidth !== chart.getWidth() || host.clientHeight !== chart.getHeight())) {
+        chart.resize();
+        if (chart === charts.usMap) drawUsMap();
+      }
     }
   });
 }
@@ -488,9 +497,9 @@ function multiFilter(def, onChange) {
   const root = el('details', 'multi-filter tone-' + filterVisual(def.key)[1]);
   root.dataset.filter = def.key;
   const trigger = el('summary', 'multi-trigger');
-  const name = el('span');
+  const name = el('strong', 'filter-name');
   name.textContent = def.label;
-  const badge = el('strong');
+  const badge = el('span', 'filter-value');
   trigger.append(filterGlyph(def.key), name, badge, el('span', 'multi-caret'));
   const panel = el('div', 'multi-popover');
   const search = el('input');
@@ -760,17 +769,49 @@ function qs(o, page, size) {
   return p.toString();
 }
 
-function pager(host, total, page, size, go) {
+function pager(host, total, page, size, go, {sizes, changeSize} = {}) {
   const pages = Math.max(1, Math.ceil(total / size));
   host.innerHTML = `<span>第 ${page} / ${pages} 页 · 共 ${fmt(total)} 条</span><span class="sp"></span>`;
-  const mk = (t, p, dis) => { const b = el('button', '', t); b.disabled = dis; b.onclick = () => go(p); return b; };
+  const mk = (t, p, dis) => { const b = el('button', '', t); b.type = 'button'; b.disabled = dis; b.onclick = () => go(p); return b; };
+  if (sizes) {
+    const perPage = el('label', 'pager-field', '每页');
+    const select = el('select');
+    select.setAttribute('aria-label', '每页显示数量');
+    select.replaceChildren(...sizes.map(n => new Option(`${n} 条`, n)));
+    select.value = String(size);
+    select.onchange = () => changeSize(Number(select.value));
+    perPage.append(select);
+    host.append(perPage);
+  }
   host.appendChild(mk('‹ 上一页', page - 1, page <= 1));
   host.appendChild(mk('下一页 ›', page + 1, page >= pages));
+  if (sizes) {
+    host.append(mk('末页', pages, page >= pages));
+    const jump = el('form', 'pager-field');
+    const field = el('input');
+    field.type = 'number';
+    field.min = 1;
+    field.max = pages;
+    field.required = true;
+    field.placeholder = '页码';
+    field.setAttribute('aria-label', '跳转页码');
+    field.disabled = pages === 1;
+    const submit = el('button', '', '跳转');
+    submit.type = 'submit';
+    submit.disabled = field.disabled;
+    jump.append(field, submit);
+    jump.onsubmit = event => {
+      event.preventDefault();
+      if (field.valueAsNumber !== page) go(field.valueAsNumber);
+    };
+    host.append(jump);
+  }
 }
 
 /* ================= 数据总览 ================= */
 let DF = null;
 let renderedDash = null;
+let paintedOverview = null;
 const DEFAULT_DATE_BASIS = 'shipped';
 const dateBasisLabel = {paid: '支付时间', created: '创建时间', shipped: '出库时间'};
 const commonFilterLabels = {month:'月份', week:'周次', wh:'仓库', pf:'平台', cr:'后台物流商',
@@ -876,10 +917,9 @@ async function saveChannelGroup(remove) {
   toast(remove ? '已删除分组' : '已保存渠道分组');
   await Promise.all([revalidateMeta(true), loadChannelGroups()]);
 }
-function drawWeekCalendar() {
+function drawWeekCalendar(weeks) {
   const body = $('#weekCalendarBody');
   if (body.rows.length) return;
-  const weeks = META.filterOptions.week || [];
   body.innerHTML = weeks.map(week => {
     const sunday = Date.parse(week.start + 'T00:00:00Z');
     const days = Array.from({length: 7}, (_, offset) =>
@@ -915,9 +955,22 @@ function commonDateFilters() {
 }
 
 async function loadDash() {
-  if (!DF) fetchReport(reportPath('/api/overview?' + qs(defaultFilterPreset('overview')?.criteria.filters ||
-    {date_basis:DEFAULT_DATE_BASIS}))).catch(() => {});
-  await Promise.all([loadMeta(), loadChartLibrary()]);
+  const initial = !DF && !META && !defaultFilterPreset('overview') ?
+    loadOverview({date_basis: DEFAULT_DATE_BASIS}) : null;
+  initial?.catch(() => {});
+  loadChartLibrary().catch(() => {});
+  try {
+    await loadMeta();
+  } catch (error) {
+    if (!initial) throw error;
+    if (VIEW === 'dash') {
+      const retry = el('button', 'btn ghost sm', '重试筛选项');
+      retry.type = 'button';
+      retry.onclick = () => run(loadDash);
+      $('#dashFilters').replaceChildren(retry);
+    }
+    return initial;
+  }
   if (VIEW !== 'dash') return;
   if (!DF) {
     const host = $('#dashFilters');
@@ -926,16 +979,33 @@ async function loadDash() {
   }
   const f = readF(DF);
   updateDateOptions(DF, f.date_basis);
+  if (initial) {
+    if (renderedDash) syncOverviewFilterNote(renderedDash);
+    return initial;
+  }
+  return loadOverview(f);
+}
+
+function loadOverview(f) {
   return presentReport('dash', '/api/overview?' + qs(f), d => renderDash(d, f), {}, {oldVisible: Boolean(renderedDash)});
 }
 
-function renderDash(d, f) {
-  if (VIEW !== 'dash' || renderedDash === d) return;
-  renderedDash = d;
-  const dateBasis = d.dateBasis || (d.snapshotAt ? 'created' : f.date_basis);
-  $('#monthlyScope').textContent = `按${dateBasisLabel[dateBasis]}所属月份统计 · 物流时效为出库到妥投`;
+function syncOverviewFilterNote(d) {
+  if (!DF) return;
   DF._info.hidden = !d.snapshotFiltersSkipped;
   DF._info.textContent = d.snapshotFiltersSkipped ? '实时筛选暂不可用，图表显示全量快照' : '';
+}
+
+function renderDash(d, f) {
+  if (VIEW !== 'dash') return;
+  syncOverviewFilterNote(d);
+  if (renderedDash === d) {
+    void loadOverviewCharts(d);
+    return;
+  }
+  renderedDash = d;
+  const dateBasis = d.dateBasis || (d.snapshotAt ? 'created' : f.date_basis);
+  $('#monthlyScope').textContent = `按${dateBasisLabel[dateBasis].replace('时间', '')}月份统计 · 出库 → 妥投`;
   setTopMeta(d.asof);
 
   const k = d.kpi;
@@ -945,14 +1015,57 @@ function renderDash(d, f) {
     ['妥投覆盖率', measure(k.signRate, '%'), `含 WMS 补算 ${fmt(k.fallbackSigned)} 单`, 'check', 'green'],
     ['仓内处理', k.inboundHours == null ? '—' : `${fmt1(k.inboundHours)} <small>小时</small>`, '履约单创建 → 出库', 'warehouse', 'violet'],
     ['物流运输', k.transitDays == null ? '—' : `${fmt1(k.transitDays)} <small>天</small>`, `出库 → 妥投 · ${fmt(k.transitSamples)} 单`, 'truck', 'cyan'],
-    ['6 天达成率', measure(k.rate6, '%'), '出库 → 签收 · 有效样本中 ≤6 天', 'clock', 'green'],
+    ['6 天内妥投率', measure(deliveryRate(k, 6), '%'),
+      k.deliveryRates ? `出库起算 · 2 天内 ${measure(deliveryRate(k, 2), '%')}` : '妥投率待同步', 'clock', 'green'],
   ];
   $('#dashKpi').innerHTML = defs.map(row => metricCard(...row)).join('');
 
   drawOverviewMixes(d);
 
-  const c = initChart('cMonthly');
-  c.setOption({
+  if (trend.globalBasis !== dateBasis) {
+    trend.globalBasis = trend.basis = dateBasis;
+    document.querySelectorAll('#dailyBasis button').forEach(button =>
+      button.setAttribute('aria-pressed', String(button.dataset.dateBasis === dateBasis)));
+  }
+  trend.created = d.daily;
+  trend.shipped = d.dailyShipped;
+  trend.paid = d.dailyPaid;
+  trend.filters = f;
+  void loadOverviewCharts(d);
+
+  drawRank('cCarrier', d.byCarrier, 10, k.orders,
+    ME.preview ? null : value => openTracking({ ...f, cr: value }));
+  drawRank('cLastMile', d.byLastMile.map(r => ({ ...r, k: r.k || '未填写 C 端渠道', filter: r.k || '__empty__' })), 10, k.orders,
+    ME.preview ? null : value => openTracking({ ...f, lastmile: value }));
+  drawRank('cTrackingStatus', d.byTrackingStatus, 10, k.orders,
+    ME.preview ? null : value => filterByTrackStatus(value, f));
+  drawRank('cWarehouse', d.byWarehouse, 10, k.orders,
+    ME.preview ? null : value => openTracking({ ...f, wh: value }));
+  drawRank('cCountry', d.byCountry, 15, k.orders);
+  drawRank('cCurrentChannel', d.byCurrentChannel || [], 10, k.orders,
+    ME.preview ? null : value => openTracking({ ...f, channel: value }));
+  drawRank('cChannelGroup', (d.byChannelGroup || []).map(row => ({...row, filter: row.group || false})),
+    Number.POSITIVE_INFINITY, k.orders, ME.preview ? null : group => openTracking({...f, channel_group: group}));
+  drawDispatchStatus(d.byStatus);
+}
+
+async function loadOverviewCharts(d) {
+  if (paintedOverview === d) return;
+  const status = $('#overviewChartStatus');
+  try {
+    await loadChartLibrary();
+  } catch {
+    if (VIEW !== 'dash' || renderedDash !== d) return;
+    const retry = el('button', 'btn ghost sm', '重试图表');
+    retry.type = 'button';
+    retry.onclick = () => loadOverviewCharts(d);
+    status.replaceChildren('趋势图暂时无法加载。 ', retry);
+    status.hidden = false;
+    return;
+  }
+  if (VIEW !== 'dash' || renderedDash !== d || paintedOverview === d) return;
+  status.hidden = true;
+  initChart('cMonthly').setOption({
     animation: chartMotion, animationDuration: 230, animationDurationUpdate: 140, animationEasing: 'quarticOut',
     grid: { left: 6, right: 10, top: 32, bottom: 5, containLabel: true },
     tooltip: { ...chartTip, trigger: 'axis', valueFormatter: fmt },
@@ -972,32 +1085,8 @@ function renderDash(d, f) {
         tooltip: { valueFormatter: value => measure(value, ' 天') } },
     ],
   });
-
-  if (trend.globalBasis !== dateBasis) {
-    trend.globalBasis = trend.basis = dateBasis;
-    document.querySelectorAll('#dailyBasis button').forEach(button =>
-      button.setAttribute('aria-pressed', String(button.dataset.dateBasis === dateBasis)));
-  }
-  trend.created = d.daily;
-  trend.shipped = d.dailyShipped;
-  trend.paid = d.dailyPaid;
-  trend.filters = f;
   drawDailyVolume();
-
-  drawRank('cCarrier', d.byCarrier, 10, k.orders,
-    ME.preview ? null : value => openTracking({ ...f, cr: value }));
-  drawRank('cLastMile', d.byLastMile.map(r => ({ ...r, k: r.k || '未填写 C 端渠道', filter: r.k || '__empty__' })), 10, k.orders,
-    ME.preview ? null : value => openTracking({ ...f, lastmile: value }));
-  drawRank('cTrackingStatus', d.byTrackingStatus, 10, k.orders,
-    ME.preview ? null : value => filterByTrackStatus(value, f));
-  drawRank('cWarehouse', d.byWarehouse, 10, k.orders,
-    ME.preview ? null : value => openTracking({ ...f, wh: value }));
-  drawRank('cCountry', d.byCountry, 15, k.orders);
-  drawRank('cCurrentChannel', d.byCurrentChannel || [], 10, k.orders,
-    ME.preview ? null : value => openTracking({ ...f, channel: value }));
-  drawRank('cChannelGroup', (d.byChannelGroup || []).map(row => ({...row, filter: row.group || false})),
-    Number.POSITIVE_INFINITY, k.orders, ME.preview ? null : group => openTracking({...f, channel_group: group}));
-  drawDispatchStatus(d.byStatus);
+  paintedOverview = d;
 }
 
 function drawOverviewMixes(data) {
@@ -1005,7 +1094,7 @@ function drawOverviewMixes(data) {
   const orders = data.orderSplit;
   if (shipping) {
     drawMix('warehouseShippingMix', shipping.overseas, shipping.total,
-      `${fmt(shipping.overseas)} / ${fmt(shipping.total)} 个已出库履约单`,
+      `已出库合计 ${fmt(shipping.total)} 单`,
       [
         ['海外仓', shipping.overseas, 'primary'], ['国内仓', shipping.domestic, 'secondary'],
         ...(shipping.unknown ? [['仓库未归类', shipping.unknown, 'unknown']] : []),
@@ -1019,8 +1108,8 @@ function drawOverviewMixes(data) {
       [
         ['同仓拆单', orders.same, 'teal'], ['异仓拆单', orders.cross, 'primary'],
         ...(orders.unknown ? [['仓库待确认', orders.unknown, 'unknown']] : []),
-      ], orders.split, { note: '拆单构成按拆单订单数计算。' +
-        (orders.missingFulfillments ? `另有 ${fmt(orders.missingFulfillments)} 个履约单缺少订单号。` : '') });
+      ], orders.split, { note: '构成占比以拆单订单为分母' +
+        (orders.missingFulfillments ? ` · ${fmt(orders.missingFulfillments)} 个履约单缺订单号` : '') });
   } else {
     $('#orderSplitMix').textContent = '等待快照同步';
   }
@@ -1072,6 +1161,7 @@ function drawDispatchStatus(rows) {
 }
 
 function drawDailyVolume() {
+  if (!renderedDash || !window.echarts) return;
   const clock = day => Date.parse(day + 'T00:00:00Z');
   const dayMs = 86_400_000;
   const series = trend[trend.basis] || [];
@@ -1172,6 +1262,7 @@ let AF = null;
 const alertFiltersByMode = {};
 let trackRows = [];
 let trackPage = 1;
+let trackPageSize = 40;
 let renderedTrack = null;
 let alertRows = [];
 let alertPage = 1;
@@ -1205,7 +1296,7 @@ const coverageOptions = [
 ];
 
 function setTrackMode(mode) {
-  if (ME.preview) mode = 'tracking';
+  if (ME?.preview) mode = 'tracking';
   if (trackMode !== mode && mode !== 'tracking') {
     $('#alertBody').replaceChildren();
     $('#alertChips').replaceChildren();
@@ -1305,6 +1396,7 @@ function openTracking(values = {}) {
 }
 
 function filterByTrackStatus(label, scope = {}) {
+  if (!META) return run(async () => { await loadMeta(); filterByTrackStatus(label, scope); });
   const state = trackingGroups().find(row => row.t === label);
   const coverage = coverageOptions.find(([, name]) => name === label)?.[0];
   if (state || coverage) openTracking({ ...scope, tstat: state?.v, coverage });
@@ -1341,8 +1433,103 @@ function trackRowsOnly(filters) {
     ['签出时间', '创建时间', '履约单号', '解决时间'].includes(filters.sort);
 }
 
-function trackRowsPath(filters, page) {
-  return '/api/track?' + qs({...filters, part: 'rows'}, page, 40);
+function trackRowsPath(filters, page, size) {
+  return '/api/track?' + qs({...filters, part: 'rows'}, page, size);
+}
+
+let trackAnalysisRequest;
+let trackAnalysisScope;
+
+function renderTrackAnalysis(report) {
+  const stats = report.summary;
+  const stamp = value => value?.replace('T', ' ').slice(0, 16) || '—';
+  const day = value => value.slice(0, 10);
+  const range = stats.first_ship ? `${day(stats.first_ship)} 至 ${day(stats.last_ship)} 出库` : '无出库时间';
+  const percent = (n, total) => total ? `${fmt1(100 * n / total)}%` : '—';
+  const details = {
+    scan: row => `${fmt(row.affected)} / ${fmt(row.total)} 单 · ${percent(row.affected, row.total)}` +
+      (row.hours == null ? '' : ` · 已有扫描的中位数 ${fmt1(row.hours)} 小时`) +
+      (row.missing ? ` · ${fmt(row.missing)} 单仍无实物扫描` : '') + ` · ${fmt(row.open)} 单未确认妥投`,
+    stale: row => `${fmt(row.affected)} 单未确认妥投 · 最短断更 ${fmt1(row.hours)} 小时 · 最后扫描 ${stamp(row.first_seen)} 至 ${stamp(row.last_seen).slice(-5)}`,
+    station: row => `超 72 小时 ${fmt(row.affected)} / ${fmt(row.total)} 单 · ${percent(row.affected, row.total)}` +
+      `（此前 8 天 ${percent(row.baseline_affected, row.baseline_total)}） · 中位数 ${fmt1(row.hours)} 小时`,
+    exception: row => `${fmt(row.affected)} 单曾出现 · ${fmt(row.open)} 单未确认妥投`,
+  };
+  const groups = ['stale', 'scan', 'station', 'exception'].map(key => report.groups.find(group => group.name === key));
+  const metrics = [['匹配履约单', stats.total], ['有逐条轨迹', stats.tracked],
+    ['17TRACK 已妥投', stats.confirmed], ['未妥投且断更 ≥72 小时', stats.stale]];
+  $('#trackAnalysisStatus').textContent = report.aiAvailable ? '' : '当前显示本机统计。智能中枢 AI 解读暂不可用。';
+  $('#trackAnalysisResult').innerHTML = `
+    <div class="track-analysis-metrics">${metrics.map(([label, value]) =>
+      `<div><span>${esc(label)}</span><strong>${fmt(value)}</strong></div>`).join('')}</div>
+    <p class="tip track-analysis-window">${esc(range)} · 最近轨迹同步 ${esc(stamp(stats.checked))} · 分析于 ${esc(stamp(report.asOf))}（北京时间）</p>
+    ${stats.tracked ? groups.map(group => `
+      <section class="track-analysis-group"><h3>${esc(group.label)}</h3>
+        ${group.rows.length ? group.rows.map(row => {
+          const period = group.name === 'scan' ? stamp(row.first_shipped) +
+            (stamp(row.first_shipped) === stamp(row.last_shipped) ? '' : ` 至 ${stamp(row.last_shipped).slice(-5)}`) : day(row.period);
+          const origin = group.name === 'scan' || group.name === 'station' ? '出库' : '轨迹';
+          const parts = [`${period} ${origin}`, row.carrier_name, row.warehouse, row.channel, row.place, row.stage, row.issue];
+          return `<div class="track-analysis-row">
+            <strong>${esc(parts.filter(Boolean).join(' · '))}</strong>
+            <span>${esc(details[group.name](row))}</span>
+            <div class="track-analysis-examples" aria-label="样单">${row.examples.map(no =>
+              `<button type="button" class="order-link mono" data-track-analysis-order="${esc(no)}">${esc(no)}</button>`).join('')}</div>
+          </div>`;
+        }).join('') : '<p class="tip">当前筛选下未发现达到批次判定条件的记录。</p>'}
+      </section>`).join('') : '<p class="tip">筛选范围内没有可分析的逐条轨迹。</p>'}
+    ${stats.tracked ? '<p class="tip track-analysis-window">首条实物扫描排除面单创建和待接收通知。各类异常可能重叠。</p>' : ''}`;
+  $('#interpretTrackAnalysis').hidden = !report.aiAvailable || !stats.tracked;
+}
+
+async function analyzeTrack({interpret = false} = {}) {
+  trackAnalysisRequest?.abort();
+  const controller = new AbortController();
+  trackAnalysisRequest = controller;
+  const status = $('#trackAnalysisStatus');
+  const reading = $('#trackAnalysisReading');
+  const text = $('#trackAnalysisText');
+  const refresh = $('#refreshTrackAnalysis');
+  const ai = $('#interpretTrackAnalysis');
+  refresh.disabled = ai.disabled = true;
+  if (interpret) {
+    reading.hidden = false;
+    text.textContent = '正在生成 AI 解读…';
+    reading.scrollIntoView({block: 'nearest'});
+  } else {
+    reading.hidden = ai.hidden = true;
+    $('#trackAnalysisResult').replaceChildren();
+    status.textContent = '正在汇总当前筛选范围的轨迹…';
+  }
+  try {
+    const report = await api('/api/track-analysis' + (interpret ? '?interpret=true' : ''), {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(trackAnalysisScope), signal: controller.signal,
+    });
+    if (trackAnalysisRequest !== controller) return;
+    renderTrackAnalysis(report);
+    if (interpret) text.textContent = report.interpretation || '当前范围没有可解读的轨迹。';
+  } catch (error) {
+    if (controller.signal.aborted) return;
+    (interpret ? text : status).textContent = error.message;
+  } finally {
+    if (trackAnalysisRequest === controller) refresh.disabled = ai.disabled = false;
+  }
+}
+
+function openTrackAnalysis() {
+  const {sort, ...selection} = readF(TF || {});
+  trackAnalysisScope = Object.fromEntries(new URLSearchParams(qs(selection)));
+  const scopeItems = [
+    ...(selection.pf || []).map(platformName),
+    ...(selection.lastmile || []),
+    ...(selection.month || []),
+    ...(selection.week || []),
+    [selection.start, selection.end].filter(Boolean).join(' 至 '),
+  ].filter(Boolean);
+  $('#trackAnalysisScope').textContent = ['按当前日期或单号筛选 · 最多 10,000 笔', ...scopeItems].join(' · ');
+  $('#trackAnalysisDialog').showModal();
+  run(analyzeTrack);
 }
 
 async function loadTrackSummary(filters, available = null) {
@@ -1374,7 +1561,7 @@ async function loadTrackSummary(filters, available = null) {
   }
 }
 
-async function loadTrack(page = 1, fromSearch = false) {
+async function loadTrack(page = 1, fromSearch = false, size = trackPageSize) {
   if (!TF && !ME.preview && defaultFilterPreset('tracking')) {
     await loadTrackFilters();
     if (!TF || VIEW !== 'track' || trackMode !== 'tracking') return;
@@ -1386,17 +1573,17 @@ async function loadTrack(page = 1, fromSearch = false) {
   const status = $('#trackListStatus');
   const retry = $('#retryTrack');
   retry.hidden = true;
-  retry.onclick = () => run(() => loadTrack(page, fromSearch));
+  retry.onclick = () => run(() => loadTrack(page, fromSearch, size));
   status.textContent = page > 1 ? `正在加载第 ${page} 页…` : query ? '正在搜索…' : ME.preview ? '' : '正在读取履约单…';
   const pageLabel = $('#trackPager > span');
   if (pageLabel && page > 1) pageLabel.textContent = status.textContent;
-  const fetchRows = (filters, number) => latest('track', trackRowsPath(filters, number),
+  const fetchRows = (filters, number) => latest('track', trackRowsPath(filters, number, size),
     {signal: AbortSignal.timeout(18_000)});
   let d, clearedFilters = false;
   try {
     if (ME.preview && !query) {
       pendingRequests.delete('track');
-      d = {rows: [], total: 0, page: 1, size: 40};
+      d = {rows: [], total: 0, page: 1, size};
     } else {
       d = await fetchRows(f, page);
     }
@@ -1423,17 +1610,21 @@ async function loadTrack(page = 1, fromSearch = false) {
     }
     return;
   }
-  if (f.resolved_only && !d.rows.length && d.total && page > 1) {
-    return loadTrack(Math.ceil(d.total / d.size));
+  const lastPage = Math.max(1, Math.ceil(d.total / d.size));
+  if (d.page > lastPage) {
+    return loadTrack(lastPage, false, d.size);
   }
   trackRows = d.rows;
   trackPage = d.page;
+  trackPageSize = d.size;
   lastTrackingQuery = query || '';
   status.textContent = ME.preview && !query ? '' :
     `${d.snapshotFiltersSkipped ? '离线快照暂不可应用当前筛选 · ' :
       clearedFilters ? '已切换至全部履约单搜索 · ' : ''}共 ${fmt(d.total)} 单`;
   if (!ME.preview) run(() => loadTrackSummary(f, !d.total ? d : null));
-  pager($('#trackPager'), d.total, d.page, d.size, p => run(() => loadTrack(p)));
+  pager($('#trackPager'), d.total, d.page, d.size, p => run(() => loadTrack(p)), {
+    sizes:[20, 40, 100, 200], changeSize:n => run(() => loadTrack(1, false, n)),
+  });
   if (renderedTrack === d) return;
   renderedTrack = d;
 
@@ -1467,7 +1658,7 @@ async function loadTrack(page = 1, fromSearch = false) {
   if (!ME.preview && !query && trackRowsOnly(f) && d.page * d.size < d.total) {
     const selection = pendingRequests.get('track');
     const generation = readGeneration;
-    const next = trackRowsPath(f, d.page + 1);
+    const next = trackRowsPath(f, d.page + 1, d.size);
     setTimeout(() => {
       if (VIEW === 'track' && trackMode === 'tracking' && !document.hidden &&
           selection === pendingRequests.get('track') && generation === readGeneration) {
@@ -1603,14 +1794,18 @@ async function applyBatch() {
 
 /* ================= 渠道时效 ================= */
 const TIMING_BASIS = {
-  paid: { label: '支付到签收', note: '从支付时间（北京时间）到妥投。优先 17TRACK，缺失时按仓库时间口径用 WMS 补算。' },
-  shipped: { label: '出库到签收', note: '从签出时间（北京时间）到妥投。优先 17TRACK，缺失时按仓库时间口径用 WMS 补算。' },
-  online: { label: '上网到签收', note: '从 17TRACK 首条有效揽收或运输扫描到妥投。妥投时间优先 17TRACK，缺失时用 WMS 补算。' },
+  paid: { label: '支付到签收', note: '支付 → 妥投' },
+  shipped: { label: '出库到签收', note: '签出 → 妥投' },
+  online: { label: '上网到签收', note: '上网 → 妥投' },
 };
 let CF = null;
 let channelRows = [];
 let channelBasis = 'shipped';
 let channelDimension = 'lastmile';
+let channelDayMode = 'calendar';
+const CHANNEL_DAY_LABELS = {calendar:'自然日', workday:'工作日'};
+const channelDeliveryRates = row => channelDayMode === 'workday' ? row.workdayDeliveryRates : row.deliveryRates;
+const channelDeliveryRate = (row, days) => channelDeliveryRates(row)?.[days];
 let channelComparisonExpanded = false;
 const CHANNEL_DIMENSIONS = {lastmile:'C 端渠道',group:'自定义渠道'};
 const CHANNEL_BASE_CRITERIA = {filters:{date_basis:DEFAULT_DATE_BASIS}, basis:'shipped', dimension:'lastmile'};
@@ -1866,6 +2061,8 @@ function syncChannelTimingControls() {
     button.setAttribute('aria-pressed', String(button.dataset.basis === channelBasis)));
   $('#channelDimension').querySelectorAll('button').forEach(button =>
     button.setAttribute('aria-pressed', String(button.dataset.dimension === channelDimension)));
+  $('#channelDayMode').querySelectorAll('button').forEach(button =>
+    button.setAttribute('aria-pressed', String(button.dataset.dayMode === channelDayMode)));
 }
 
 async function loadChannelFilters() {
@@ -1892,22 +2089,28 @@ async function loadChannelFilters() {
   updateDateOptions(CF, CF.date_basis.value);
   attachFilterPresets('channels', '渠道时效', host, CF, {
     onApply:() => scheduleReport('channels',loadChannels),
-    readExtra:() => ({basis:channelBasis, dimension:channelDimension}),
-    writeExtra:({basis, dimension}, base) => {
+    readExtra:() => ({basis:channelBasis, dimension:channelDimension,
+      ...(channelDayMode === 'workday' ? {dayMode:channelDayMode} : {})}),
+    writeExtra:({basis, dimension, dayMode}, base) => {
       channelBasis = Object.hasOwn(TIMING_BASIS, basis) ? basis : base.basis;
       channelDimension = Object.hasOwn(CHANNEL_DIMENSIONS, dimension) ? dimension : base.dimension;
+      channelDayMode = dayMode === 'workday' ? 'workday' : 'calendar';
       channelComparisonExpanded = false;
       syncChannelTimingControls();
+      if (renderedChannels) renderChannelRates(renderedChannels, channelRows);
     },
-    describeExtra:({basis, dimension}) => [CHANNEL_DIMENSIONS[dimension], TIMING_BASIS[basis]?.label].filter(Boolean),
+    describeExtra:({basis, dimension, dayMode}) =>
+      [CHANNEL_DIMENSIONS[dimension], TIMING_BASIS[basis]?.label, CHANNEL_DAY_LABELS[dayMode || 'calendar']].filter(Boolean),
   });
   if (renderedChannels) showChannelDataDate(renderedChannels);
 }
 
 function showChannelDataDate(data) {
   if (!CF) return;
-  CF._info.textContent = data.snapshotFiltersSkipped ? '实时筛选暂不可用，表格显示全量快照' :
+  const date = data.snapshotFiltersSkipped ? '实时筛选暂不可用，表格显示全量快照' :
     `${data.snapshotAt ? '离线快照 · ' : ''}数据截止 ${data.asof}`;
+  const missing = [...(data.rows || []), ...(data.byCountry || [])].some(row => !channelDeliveryRates(row));
+  CF._info.textContent = date + (missing ? ` · ${CHANNEL_DAY_LABELS[channelDayMode]}妥投率待同步` : '');
 }
 
 function renderChannelPeriod(data, filters) {
@@ -1961,17 +2164,16 @@ function channelMeasure(label, value, unit, tone, meter = false) {
 
 function renderChannelComparison(data, rows) {
   const isGroup = data.dimension === 'group';
-  const eligible = rows.filter(row => row.samples > 0);
-  const visible = isGroup && channelComparisonExpanded ? eligible : eligible.slice(0, 8);
-  const expand = isGroup && eligible.length > 8;
+  const visible = isGroup && channelComparisonExpanded ? rows : rows.slice(0, 8);
+  const expand = isGroup && rows.length > 8;
   $('#channelCompareExpand').hidden = !expand;
-  $('#channelCompareToggle').textContent = channelComparisonExpanded ? '收起其余分组' : `展开其余 ${eligible.length - 8} 个分组`;
+  $('#channelCompareToggle').textContent = channelComparisonExpanded ? '收起其余分组' : `展开其余 ${rows.length - 8} 个分组`;
   $('#channelCompareToggle').setAttribute('aria-expanded', String(isGroup && channelComparisonExpanded));
   $('#channelCompareHead').hidden = !visible.length;
   $('#channelChartEmpty').hidden = Boolean(visible.length);
   const label = TIMING_BASIS[data.basis].label;
   $('#channelChartScope').textContent = visible.length ?
-    `${label} · ${isGroup ? '按当前渠道归组 · ' : ''}${visible.length === eligible.length ? '全部' : '单量靠前的'} ${visible.length} 个有样本${isGroup ? '分组' : '渠道'} · P90 表示约 90% 的有效样本在该用时内签收` : label;
+    `${label} · ${visible.length === rows.length ? '共' : '单量前'} ${visible.length} 个${isGroup ? '分组' : '渠道'} · ${CHANNEL_DAY_LABELS[channelDayMode]}妥投率按全部有效单` : label;
   $('#channelComparisonRows').innerHTML = visible.map(row => `<li class="compare-grid compare-row">
     <div class="compare-name">${channelLink(row)}</div>
     <div class="compare-samples"><span class="compare-metric-label">有效样本 / 单量</span>
@@ -1979,14 +2181,13 @@ function renderChannelComparison(data, rows) {
     </div>
     ${channelMeasure('平均用时', row.avgDays, ' 天', 'average')}
     ${channelMeasure('P90 用时', row.p90Days, ' 天', 'p90')}
-    ${[3, 5, 6, 7].map(days => channelMeasure(`${days} 天内签收`, row[`rate${days}`], '%', days === 6 ? 'rate-primary' : 'rate', days === 6)).join('')}
+    ${DELIVERY_WINDOWS.map(days => channelMeasure(`${days} 天内妥投`, channelDeliveryRate(row, days), '%', days === 6 ? 'rate-primary' : 'rate', days === 6)).join('')}
   </li>`).join('');
 }
 
 async function loadChannels() {
   if (!CF) {
-    const preset = defaultFilterPreset('channels');
-    fetchReport(channelQuery(preset?.criteria || CHANNEL_BASE_CRITERIA)).catch(() => {});
+    if (!defaultFilterPreset('channels')) fetchReport(channelQuery(CHANNEL_BASE_CRITERIA)).catch(() => {});
     await loadChannelFilters();
   }
   if (!CF || VIEW !== 'channels' || channelMode !== 'timing' || !CF.validate()) return;
@@ -2034,12 +2235,10 @@ function renderChannels(d, filters) {
   $('#channelCountryTitle').textContent = dimensionLabel + ' × 国家';
   $('#channelCountryLabel').textContent = dimensionLabel;
   renderedChannelFilters = d.snapshotFiltersSkipped ? {} : {...filters, date_basis: d.dateBasis || filters.date_basis};
-  showChannelDataDate(d);
   renderChannelPeriod(d, renderedChannelFilters);
 
   const rows = d.rows || [];
   channelRows = rows;
-  renderChannelComparison(d, rows);
   const totalOrders = rows.reduce((a, r) => a + r.orders, 0);
   const signed = rows.reduce((a, r) => a + r.signed, 0);
   const samples = rows.reduce((a, r) => a + r.samples, 0);
@@ -2053,23 +2252,32 @@ function renderChannels(d, filters) {
     ['SLA 在途超时', fmt(overAll), inAll ? `占可计时在途 ${fmt1(100 * overAll / inAll)}%` : '当前范围无可计时的在途单','clock',overAll ? 'warn' : 'green'],
   ].map(row => metricCard(...row)).join('');
 
+  renderChannelRates(d, rows);
+}
+
+function renderChannelRates(d, rows) {
+  showChannelDataDate(d);
+  renderChannelComparison(d, rows);
+  const dayLabel = CHANNEL_DAY_LABELS[channelDayMode];
+  $('#channelDetailedRateScope').textContent =
+    `${dayLabel}妥投率按全部有效单 · SLA 按当前渠道配置及有效签收样本 · 超时占比按可计时在途单`;
+  $('#channelCountryRateScope').textContent = `单量 ≥ 200 的组合 · ${dayLabel}妥投率`;
   $('#channelBody').innerHTML = rows.length ? rows.map(r => {
     return `<tr>
       <td>${channelLink(r)}</td>
       <td>${fmt(r.orders)}</td><td>${fmt(r.signed)}</td><td>${fmt(r.samples)}</td>
       <td>${measure(r.avgDays, ' 天')}</td><td>${measure(r.p90Days, ' 天')}</td>
-      <td>${measure(r.rate3, '%')}</td><td>${measure(r.rate5, '%')}</td>
-      <td><b>${measure(r.rate6, '%')}</b></td><td>${measure(r.rate7, '%')}</td>
+      ${DELIVERY_WINDOWS.map(days => `<td>${measure(channelDeliveryRate(r, days), '%')}</td>`).join('')}
       <td title="SLA 有效签收样本 ${fmt(r.sla_samples)} 单"><b>${measure(r.slaRate, '%')}</b></td>
       <td>${fmt(r.inTransit)}</td>
       <td class="${r.overRate > 20 ? 'neg' : ''}">${fmt(r.overdue)}${r.overRate != null ? ` (${fmt1(r.overRate)}%)` : ''}</td>
     </tr>`;
-  }).join('') : blankRow(13, '没有满足条件的渠道');
+  }).join('') : blankRow(14, '没有满足条件的渠道');
 
   $('#chanCountryBody').innerHTML = (d.byCountry || []).map(r => `
     <tr><td><b>${esc(r.ch)}</b></td><td>${esc(r.ctry || '—')}</td><td>${fmt(r.n)}</td><td>${fmt(r.samples)}</td>
-    <td>${measure(r.avgDays, ' 天')}</td><td>${measure(r.rate6, '%')}</td></tr>`).join('')
-    || blankRow(6, '当前筛选无达到样本量的渠道组合');
+    <td>${measure(r.avgDays, ' 天')}</td><td>${measure(channelDeliveryRate(r, 2), '%')}</td><td>${measure(channelDeliveryRate(r, 6), '%')}</td></tr>`).join('')
+    || blankRow(7, '当前筛选无达到样本量的渠道组合');
 
 }
 
@@ -2078,6 +2286,7 @@ function renderChannels(d, filters) {
 let trajectorySettings;
 let editingTrackRule = null;
 let exceptionFilters;
+let exceptionPageSize = 40;
 let exceptionSearchTimer;
 const trajectoryPath = '/api/channel-track-rules';
 const trajectoryWeekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
@@ -2085,7 +2294,7 @@ const readTrackWords = value => value.split(/\r?\n/).map(word => word.trim()).fi
 const eventWallClock = value => value ? value.replace('T', ' ').slice(0, 16) + ' ' + value.slice(-6) : '—';
 
 function setChannelMode(mode) {
-  channelMode = ME.preview ? 'timing' : mode;
+  channelMode = ME?.preview ? 'timing' : mode;
   $('#channelTimingPane').hidden = channelMode !== 'timing';
   $('#channelExceptionPane').hidden = channelMode !== 'exceptions';
   $('#channelTabs').querySelectorAll('button').forEach(button =>
@@ -2099,7 +2308,6 @@ function renderTrackRuleOptions() {
     .map(rule => new Option(rule.name, rule.key)));
   select.value = current;
   if (select.selectedIndex < 0) select.value = '';
-  syncFilterPreset(exceptionFilters);
 }
 
 function renderTrackRuleCards(counts) {
@@ -2122,7 +2330,7 @@ function renderTrackRuleCards(counts) {
   }).join('') || '<p class="tip">暂无规则</p>';
 }
 
-async function loadTrackExceptions(page = 1) {
+async function loadTrackExceptions(page = 1, size = exceptionPageSize) {
   const status = $('#trackExceptionStatus');
   status.textContent = '正在核对轨迹…';
   let data;
@@ -2134,20 +2342,18 @@ async function loadTrackExceptions(page = 1) {
     if (!exceptionFilters) {
       exceptionFilters = {days:$('#trackExceptionDays'), rule:$('#trackExceptionRule'),
         state:$('#trackExceptionState'), q:$('#trackExceptionSearch')};
-      attachFilterPresets('exceptions', '轨迹异常', $('.track-exception-filters'), exceptionFilters, {
-        before:$('#refreshTrackExceptions'),
-        onApply:() => { clearTimeout(exceptionSearchTimer); run(loadTrackExceptions); },
-      });
     }
     const filters = {...readF(exceptionFilters), q:exceptionFilters.q.value.trim()};
-    data = await latest('trackExceptions', '/api/channel-track-exceptions?' + qs(filters, page, 40),
+    data = await latest('trackExceptions', '/api/channel-track-exceptions?' + qs(filters, page, size),
       {signal: AbortSignal.timeout(20_000)});
   } catch (error) {
     if (VIEW === 'channels' && channelMode === 'exceptions') status.textContent = error.message;
     return;
   }
   if (!data || VIEW !== 'channels' || channelMode !== 'exceptions') return;
-  if (!data.rows.length && data.total && page > 1) return loadTrackExceptions(Math.ceil(data.total / data.size));
+  const lastPage = Math.max(1, Math.ceil(data.total / data.size));
+  if (data.page > lastPage) return loadTrackExceptions(lastPage, data.size);
+  exceptionPageSize = data.size;
   renderTrackRuleCards(data.counts);
   status.textContent = `出库自 ${data.from} 起 · 截至 ${syncTime(data.asof)} · 共 ${fmt(data.total)} 条`;
   $('#trackExceptionBody').innerHTML = data.rows.map(row => `<tr>
@@ -2160,7 +2366,9 @@ async function loadTrackExceptions(page = 1) {
     <td class="mono">${esc(row.due)} 日终<small class="cell-sub">${esc(row.deadline.slice(-6))}</small></td>
     <td class="mono">${esc(eventWallClock(row.event_at))}<small class="cell-sub">${row.event_text ? esc(row.event_text) :
       `最近核对 ${esc(syncTime(row.checked_at))}`}</small></td></tr>`).join('') || blankRow(6, '没有符合条件的轨迹异常');
-  pager($('#trackExceptionPager'), data.total, data.page, data.size, next => run(() => loadTrackExceptions(next)));
+  pager($('#trackExceptionPager'), data.total, data.page, data.size, next => run(() => loadTrackExceptions(next)), {
+    sizes:[20, 40, 100], changeSize:n => run(() => loadTrackExceptions(1, n)),
+  });
 }
 
 function addTrackRuleSite(site = {name: '', warehouses: [], cutoff: '14:30'}) {
@@ -2267,12 +2475,10 @@ function setupTrackExceptionControls() {
   };
   for (const id of ['trackExceptionDays', 'trackExceptionRule', 'trackExceptionState']) {
     document.getElementById(id).onchange = () => {
-      syncFilterPreset(exceptionFilters);
       run(loadTrackExceptions);
     };
   }
   $('#trackExceptionSearch').oninput = () => {
-    syncFilterPreset(exceptionFilters);
     clearTimeout(exceptionSearchTimer);
     exceptionSearchTimer = setTimeout(() => run(loadTrackExceptions), 250);
   };
@@ -2303,17 +2509,20 @@ const regionTimingByMarket = {};
 let usReport = null;
 const usMapLoads = new Map();
 let usMapPlaces = new Map();
+let usSharedEdges = [];
 let regionalFilters = {};
 let segmentPath = '';
 let segmentGeneration = -1;
 const usView = {market: 'us', basis: 'paid', dimension: 'lastmile', level: 'states', metric: 'p90', place: null, channel: ''};
-const usMetricLabel = {orders: '单量', share: '单量占比', avg: '平均时效', p90: 'P90 时效'};
+const usMetricLabel = {orders: '单量', avg: '平均时效', p90: 'P90 时效', p95: 'P95 时效'};
 const usTimingLabel = {paid: '支付到签收', created: '创建到签收', shipped: '出库到签收',
-  paid_create: '支付到创建', create_ship: '创建到出库', ship_pickup: '出库到提取', pickup_delivered: '提取到签收'};
+  paid_create: '支付到创建', create_ship: '创建到出库', ship_pickup: '出库到上网', pickup_delivered: '上网到签收'};
 const earlySegments = ['paid_create', 'create_ship', 'ship_pickup'];
 const lateSegments = ['pickup_delivered', 'shipped', 'created', 'paid'];
-const usPalette = ['#e6ede3', '#c5d4c4', '#9fb5a1', '#72947c', '#456651'];
+const usPalette = ['#e0ebe4', '#b3cbbd', '#80a995', '#4e7c68', '#264938'];
 const usBlank = '#eeede7';
+const usRegionLabels = new Set(['CA', 'CO', 'IA', 'TX', 'GA', 'VA', 'NY', 'PR']);
+const usStateLabels = new Set(['WA', 'CA', 'CO', 'TX', 'IL', 'FL', 'NY']);
 const regionalDuration = (minutes, basis) => Number.isFinite(minutes) ?
   earlySegments.includes(basis) ? (minutes / 60).toFixed(1) + ' 小时' : (minutes / 1440).toFixed(2) + ' 天' : '—';
 const usDay = value => Number.isFinite(value) ? regionalDuration(value * 1440, usReport.basis) : '—';
@@ -2323,10 +2532,9 @@ const usShare = (part, total) => total > 0 ? 100 * part / total : null;
 async function loadUs() {
   const market = usView.market;
   const scope = 'region-' + market;
-  if (!UF) {
-    const preset = defaultFilterPreset(scope)?.criteria;
-    fetchReport(reportPath('/api/regional-analysis?' + qs({...(preset?.filters || {date_basis:DEFAULT_DATE_BASIS}), market,
-      basis:preset?.basis || usView.basis, dimension:preset?.dimension || usView.dimension}))).catch(() => {});
+  if (!UF && !defaultFilterPreset(scope)) {
+    fetchReport(reportPath('/api/regional-analysis?' + qs({date_basis:DEFAULT_DATE_BASIS, market,
+      basis:usView.basis, dimension:usView.dimension}))).catch(() => {});
   }
   await loadMeta();
   if (VIEW !== 'us' || usView.market !== market) return;
@@ -2378,9 +2586,13 @@ function renderRegionalData(report, filters) {
   const prior = usReport;
   usReport = report;
   regionalFilters = filters;
-  $('#usStatus').textContent = `筛选按${dateBasisLabel[report.dateBasis]}（北京时间） · 时效按${usTimingLabel[report.basis]}`;
+  $('#usStatus').textContent = `按${dateBasisLabel[report.dateBasis]}筛选（北京时间） · ${usTimingLabel[report.basis]}`;
   $('#usResults').hidden = false;
-  if (prior === report) return;
+  if (prior === report) {
+    loadVisibleRegionSegments();
+    if (!charts.usMap) void loadUsMap(report.market);
+    return;
+  }
   const selector = $('#usMapChannel');
   selector.replaceChildren(new Option('全部渠道', ''), ...report.channels.map(row => new Option(row.label, row.label)));
   selector.value = usView.channel;
@@ -2408,12 +2620,13 @@ function renderUsReport() {
   const scope = usView.place === null ? whole : usPlaceLabel(usView.place);
   const mix = usView.place === null ? channels : selected?.channels || [];
   const selectedChannel = usView.channel;
+  const tail = usView.metric === 'p95' ? 'p95' : 'p90';
   $('#usKpi').innerHTML = [
     [other ? '其他国家履约单' : '美国履约单', fmt(national.orders), '单量含在途单','globe','blue'],
     ['有效时效样本', fmt(national.samples), earlySegments.includes(usReport.basis) ?
       `有效覆盖 ${usPercent(usShare(national.samples, national.orders))}` : `含 WMS 补算 ${fmt(national.fallback)} 单`,'check','green'],
     ['平均时效', usDay(national.avg), usTimingLabel[usReport.basis],'clock','cyan'],
-    ['P90 时效', usDay(national.p90), '约 90% 的有效样本在该时长内完成该阶段','history','violet'],
+    [usMetricLabel[tail], usDay(national[tail]), `约 ${tail.slice(1)}% 的有效样本在此时长内完成`,'history','violet'],
   ].map(row => metricCard(...row)).join('');
 
   $('#usMixTitle').textContent = scope + '渠道构成';
@@ -2429,13 +2642,14 @@ function renderUsReport() {
     return `<tr><td><button class="order-link" type="button" data-us-channel="${esc(row.label)}"
       aria-label="在地图查看 ${esc(row.label)}">${esc(row.label)}</button></td><td>${fmt(row.orders)}</td>
       <td>${usPercent(share)}<div class="us-share-meter" aria-hidden="true"><i style="width:${share ?? 0}%"></i></div></td>
-      <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${fmt(row.samples)}</td></tr>`;
-  }).join('') || blankRow(6, '当前范围无渠道数据');
+      <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${usDay(row.p95)}</td><td>${fmt(row.samples)}</td></tr>`;
+  }).join('') || blankRow(7, '当前范围无渠道数据');
 
   const countNote = selectedChannel ? '渠道单量 ÷ 当地总单量' : other ? '当地单量 ÷ 其他国家总单量' : '当地单量 ÷ 全美总单量';
   const source = selectedChannel || '全部渠道';
-  $('#usMapHint').textContent = `${source} · ${usMetricLabel[usView.metric]} · ${usView.metric === 'share' ? countNote :
-    (['p90', 'avg'].includes(usView.metric) ? usTimingLabel[usReport.basis] : '按履约单计')}`;
+  const geographyLabel = other ? '按国家' : isRegion ? '按业务区域' : '按州';
+  $('#usMapHint').textContent = `${geographyLabel} · ${source} · ${usMetricLabel[usView.metric]} · ${
+    usView.metric === 'orders' ? '按履约单计' : usTimingLabel[usReport.basis]}`;
   $('#usDetailTitle').textContent = other ? '国家明细' : isRegion ? '业务区域明细' : '州级明细';
   $('#usDetailScope').textContent = `${source} · 占比为${countNote} · 点击地域查看渠道构成`;
   $('#usPlaceColumn').textContent = other ? '目的国家' : isRegion ? '业务区域' : '目的州';
@@ -2446,7 +2660,7 @@ function renderUsReport() {
     const orders = data?.orders ?? 0;
     const share = usShare(orders, selectedChannel ? place.orders : national.orders);
     return {key, label: usPlaceLabel(key), region: isRegion ? key : usReport.geography[key]?.region || '未识别州',
-      orders, share, avg: data?.avg, p90: data?.p90, samples: data?.samples ?? 0,
+      orders, share, avg: data?.avg, p90: data?.p90, p95: data?.p95, samples: data?.samples ?? 0,
       channel: selectedChannel || place.channels?.[0]?.label || '—',
       leadingShare: !selectedChannel && place.channels?.[0] ? usShare(place.channels[0].orders, place.orders) : null};
   };
@@ -2461,8 +2675,8 @@ function renderUsReport() {
       aria-pressed="${row.key === usView.place}">${esc(row.label)}</button>${other || isRegion ? '' : `<small class="cell-sub">${esc(row.region)}</small>`}</td>
     <td>${esc(row.channel)}${row.leadingShare != null ? `<small class="cell-sub">占当地 ${usPercent(row.leadingShare)}</small>` : ''}</td>
     <td>${fmt(row.orders)}</td><td>${usPercent(row.share)}</td>
-    <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${fmt(row.samples)}</td></tr>`).join('') ||
-    blankRow(7, other ? '没有符合条件的国家' : '没有符合条件的州或区域');
+    <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${usDay(row.p95)}</td><td>${fmt(row.samples)}</td></tr>`).join('') ||
+    blankRow(8, other ? '没有符合条件的国家' : '没有符合条件的州或区域');
 
   const mapEntries = Object.entries(usReport.geography).map(([code, state]) => [
     state.name, {key: isRegion ? state.region : code, state: state.label, code, region: state.region,
@@ -2475,11 +2689,18 @@ function renderUsReport() {
   }
   usMapPlaces = new Map(mapEntries.filter(([name]) => !duplicateNames.has(name)));
   drawUsMap();
-  void loadRegionSegments(scope);
+  currentSegmentScope = scope;
+  loadVisibleRegionSegments();
+}
+
+function loadVisibleRegionSegments() {
+  if (regionSegmentsVisible && VIEW === 'us' && currentSegmentScope && usReport?.market === usView.market &&
+      usReport.basis === usView.basis && usReport.dimension === usView.dimension) {
+    void loadRegionSegments(currentSegmentScope);
+  }
 }
 
 async function loadRegionSegments(scope) {
-  currentSegmentScope = scope;
   const filters = {...regionalFilters, market: usReport.market, dimension: usReport.dimension, detail: 'segments',
     level: usView.place === null ? 'all' : usView.level, place: usView.place || '', focus: usView.channel};
   const path = '/api/regional-analysis?' + qs(filters);
@@ -2504,7 +2725,7 @@ async function loadRegionSegments(scope) {
   }
 }
 
-let renderedSegments = null, currentSegmentScope = '';
+let renderedSegments = null, currentSegmentScope = '', regionSegmentsVisible = false;
 function renderRegionSegments(report, path, selection) {
     if (!report || segmentPath !== path || VIEW !== 'us' || usView.market !== report.market) return;
     $('#regionalSegmentStatus').textContent = selection + ' · ' + fmt(report.total) + ' 单';
@@ -2534,19 +2755,63 @@ function regionMapName(market) {
   return market === 'us' ? 'fulfillment-us' : 'fulfillment-world';
 }
 
+function sharedStateEdges(features) {
+  const edges = new Map();
+  const shared = [];
+  for (const {properties, geometry} of features) {
+    const name = properties.name;
+    const polygons = geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+    for (const rings of polygons) for (const ring of rings) {
+      for (let i = 1; i < ring.length; i++) {
+        const a = ring[i - 1], b = ring[i];
+        const start = a.join(','), end = b.join(',');
+        const key = start < end ? start + '|' + end : end + '|' + start;
+        const neighbor = edges.get(key);
+        if (neighbor && neighbor !== name) shared.push({a, b, left: neighbor, right: name});
+        else edges.set(key, name);
+      }
+    }
+  }
+  return shared;
+}
+
+function drawUsRegionBorders(chart) {
+  const children = [];
+  for (const {a, b, left, right} of usSharedEdges) {
+    if (usMapPlaces.get(left)?.region === usMapPlaces.get(right)?.region) continue;
+    const [x1, y1] = chart.convertToPixel({seriesIndex: 0}, a) || [];
+    const [x2, y2] = chart.convertToPixel({seriesIndex: 0}, b) || [];
+    if (![x1, y1, x2, y2].every(Number.isFinite)) continue;
+    children.push({type:'line', silent:true, shape:{x1, y1, x2, y2}, z:3,
+      style:{stroke:'#2c493b', lineWidth:1.8, lineCap:'round'}});
+  }
+  if (children.length) chart.setOption({graphic: [{type:'group', silent:true, children}]});
+}
+
 function drawUsMap() {
   const chart = charts.usMap;
   if (!chart || !usReport || VIEW !== 'us' || !echarts.getMap(regionMapName(usReport.market))) return;
   const metric = usView.metric;
-  const shortCuts = [4, 12, 24, 48].map(hours => hours / 24);
   const other = usReport.market === 'other';
-  const cuts = {orders: other ? [10, 100, 1000, 10000] : [100, 1000, 10000, 50000],
-    share: [1, 5, 15, 35], avg: earlySegments.includes(usReport.basis) ? shortCuts : [3, 4, 5, 6],
-    p90: earlySegments.includes(usReport.basis) ? shortCuts :
-      ['paid','created'].includes(usReport.basis) ? [5, 6, 7, 8] : [4, 5, 6, 7]}[metric];
-  const format = metric === 'orders' ? n => fmt(n) + ' 单' : metric === 'share' ? usPercent : usDay;
-  const pieces = usPalette.map((color, index) => {
+  const byRegion = !other && usView.level === 'regions';
+  const compact = chart.getWidth() < 560;
+  const hourly = earlySegments.includes(usReport.basis);
+  const format = metric === 'orders' ? n => fmt(n) + ' 单' : usDay;
+  const mapValue = row => {
+    const value = row?.[metric];
+    if (!Number.isFinite(value) || value <= 0) return NaN;
+    if (metric === 'orders') return value;
+    return hourly ? Number((value * 24).toFixed(1)) / 24 : Number(value.toFixed(2));
+  };
+  const unique = [...new Set([...usMapPlaces.values()].map(place => mapValue(place.row)).filter(Number.isFinite))]
+    .sort((a, b) => a - b);
+  const bands = Math.min(usPalette.length, unique.length);
+  const cuts = Array.from({length: Math.max(0, bands - 1)}, (_, index) =>
+    unique[Math.ceil((index + 1) * unique.length / bands) - 1]);
+  const pieces = Array.from({length: bands}, (_, index) => {
+    const color = usPalette[bands === 1 ? 2 : Math.round(index * (usPalette.length - 1) / (bands - 1))];
     const min = cuts[index - 1], max = cuts[index];
+    if (bands === 1) return {value: unique[0], color, label: format(unique[0])};
     return {...(min == null ? {} : {gt: min}), ...(max == null ? {} : {lte: max}), color,
       label: min == null ? '≤ ' + format(max) : max == null ? '> ' + format(min) : `> ${format(min)} 至 ${format(max)}`};
   });
@@ -2558,17 +2823,28 @@ function drawUsMap() {
       const place = usMapPlaces.get(item.name);
       if (!place) return esc(item.name);
       const row = place.row;
-      return `<strong>${esc(place.state)}（${esc(place.code)}） · ${esc(place.region)}</strong><br>${
-        row ? `单量 ${fmt(row.orders)} · 占比 ${usPercent(row.share)}<br>平均 ${usDay(row.avg)} · P90 ${usDay(row.p90)}<br>有效样本 ${fmt(row.samples)} 单` : '当前范围无记录'}`;
+      const title = byRegion ? place.region : other ? place.state : `${place.state}（${place.code}） · ${place.region}`;
+      return `<strong>${esc(title)}</strong><br>${
+        row ? `单量 ${fmt(row.orders)} · 占比 ${usPercent(row.share)}<br>平均 ${usDay(row.avg)} · P90 ${usDay(row.p90)} · P95 ${usDay(row.p95)}<br>有效样本 ${fmt(row.samples)} 单` : '当前范围无记录'}`;
     }},
     visualMap: [{type: 'piecewise', show: false, pieces, outOfRange: {color: usBlank}}],
     series: [{type: 'map', map: regionMapName(usReport.market), roam: false, layoutCenter: ['50%', '50%'], layoutSize: '140%',
-      itemStyle: {areaColor: usBlank, borderColor: '#ffffff', borderWidth: 1},
+      itemStyle: {areaColor: usBlank, borderColor: '#fffefa', borderWidth: byRegion ? 0.6 : 1},
       emphasis: {label: {show: false}, itemStyle: {borderColor: '#182b52', borderWidth: 1.6}},
-      data: [...usMapPlaces].map(([name, place]) => ({name, value: place.row?.[metric] ?? NaN,
-        itemStyle: place.key === usView.place ? {borderColor: '#182b52', borderWidth: 2} : undefined})),
+      data: [...usMapPlaces].map(([name, place]) => {
+        const value = mapValue(place.row);
+        const selected = place.key === usView.place;
+        const anchor = byRegion ? usRegionLabels.has(place.code) : !other && usStateLabels.has(place.code) || selected;
+        const caption = byRegion ? place.region : other || !compact ? place.state : place.code;
+        const label = anchor && Number.isFinite(value) ? {show:true,
+          formatter:`${caption}\n${format(value)}`, color:'#12283b', fontSize:compact ? 10 : 12,
+          fontWeight:700, lineHeight:compact ? 12 : 15, textBorderColor:'#fffefa', textBorderWidth:3} : undefined;
+        return {name, value, label, emphasis:label ? {label} : undefined,
+          itemStyle:selected ? {borderColor:'#182b52', borderWidth:2} : undefined};
+      }),
     }],
   }, {notMerge: true});
+  if (byRegion) drawUsRegionBorders(chart);
   resizeVisibleCharts();
 }
 
@@ -2583,6 +2859,7 @@ function prepareUsMap(market) {
         return response.json();
       }),
     ]).then(([, geo]) => {
+      if (market === 'us') usSharedEdges = sharedStateEdges(geo.features);
       echarts.registerMap(mapName, geo, market === 'us' ? {
         Alaska: {left: -131, top: 25, width: 15}, Hawaii: {left: -110, top: 28, width: 5},
         'Puerto Rico': {left: -76, top: 26, width: 2},
@@ -2651,7 +2928,7 @@ function setupUsControls() {
     if (!target) return;
     usView.basis = $('#usBasis').value = target.dataset.segment;
     syncFilterPreset(UF);
-    if (['orders', 'share'].includes(usView.metric)) {
+    if (usView.metric === 'orders') {
       usView.metric = 'p90';
       $('#usMetric').querySelectorAll('button').forEach(button =>
         button.setAttribute('aria-pressed', String(button.dataset.value === 'p90')));
@@ -2741,13 +3018,69 @@ const syncTime = value => value && Number.isFinite(Date.parse(value)) ? syncCloc
 const sourceRows = rows => rows.map(([label, value]) =>
   `<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('');
 
+const syncStatusPath = '/api/17track/sync-status';
+
 async function loadSyncStatus() {
-  return presentReport('trackSync', '/api/17track/sync-status', renderSyncStatus,
+  return presentReport('trackSync', syncStatusPath, renderSyncStatus,
     {cache: 'no-store'}, {force: true, oldVisible: Boolean($('#pollSummary').children.length)});
+}
+
+let fullPullStarting = false;
+let fullPullState = null;
+let fullPullAvailable = false;
+
+function renderFullPull(job, available) {
+  fullPullState = job;
+  fullPullAvailable = available;
+  const button = $('#startFullPull');
+  const progress = $('#fullPullProgress');
+  const detail = job?.detail || {};
+  const active = ['queued', 'running'].includes(job?.status);
+  const resume = job?.status === 'failed' && detail.total != null;
+  button.disabled = !ME.can_edit || !available || active || fullPullStarting;
+  button.textContent = active ? '全量拉取中' : resume ? '继续拉取轨迹' : '全量拉取轨迹';
+  progress.hidden = !detail.total;
+  if (detail.total) {
+    progress.max = detail.total;
+    progress.value = detail.processed;
+  }
+  const reason = {credentials:'本机 17TRACK 凭据不可用', launch:'本机任务启动失败', batch:'批次处理失败'};
+  const label = !job ? '暂无全量拉取任务' : job.status === 'queued' ? '已排队，等待本机运行' :
+    job.status === 'running' ? '正在分批查询与入库' : job.status === 'ok' ? '本轮已完成' :
+      reason[detail.reason] || '任务失败';
+  const counts = detail.total == null ? '' :
+    ` · 已处理 ${fmt(detail.processed)} / ${fmt(detail.total)} 个运单 · 取回逐条轨迹 ${fmt(detail.with_events)}`;
+  const outcomes = [['账号未登记', detail.unmatched], ['承运商不匹配', detail.carrier_conflict],
+    ['未返回轨迹', detail.empty], ['查询失败', detail.read_error], ['本地轨迹较新', detail.older],
+    ['已不符合查询范围', detail.skipped]].filter(([, count]) => count)
+    .map(([name, count]) => `${name} ${fmt(count)}`).join(' · ');
+  const importSummary = detail.lastImportWaybills ? ` · ${detail.trigger === 'import' ? '入库自动触发' : '已并入入库更新'}` +
+    ` · 最近导入有 ${fmt(detail.lastImportWaybills)} 个运单进入追踪范围` : '';
+  const unavailable = available ? '' : '本站不执行本机批量拉取，请在数据源侧同步。';
+  $('#fullPullStatus').textContent = [unavailable, job || available ? label + counts + importSummary + (outcomes ? ' · ' + outcomes : '') : ''].filter(Boolean).join(' ') +
+    (job?.finished_at ? ' · ' + syncTime(job.finished_at) : '');
+}
+
+async function startFullPull() {
+  if (fullPullStarting || $('#startFullPull').disabled) return;
+  fullPullStarting = true;
+  $('#startFullPull').disabled = true;
+  try {
+    const job = await api('/api/17track/full-pull', {method:'POST', signal:AbortSignal.timeout(12_000)});
+    renderFullPull(job, true);
+    const previous = reportRecord(syncStatusPath);
+    if (previous) persistReport(syncStatusPath, {...previous, data:{...previous.data, fullPull:job}});
+    reportInflight.delete(syncStatusPath);
+    await loadSyncStatus();
+  } finally {
+    fullPullStarting = false;
+    renderFullPull(fullPullState, fullPullAvailable);
+  }
 }
 
 function renderSyncStatus(state) {
   const { poll, webhook } = state;
+  renderFullPull(state.fullPull || null, Boolean(state.fullPullAvailable));
   const run = poll.runs[0];
   let pollBadge = run ? syncRunStates[run.status] : ['gray', '等待首次同步'];
   if (poll.schedule?.state === 'Running' && run?.status !== 'running') pollBadge = syncRunStates.running;
@@ -2867,17 +3200,24 @@ function setRulePane(pane) {
   run(loadRules);
 }
 
+async function loadRuleReference() {
+  const path = '/api/reference?v=1';
+  const record = reportRecord(path) || await fetchReport(path);
+  return record.data;
+}
+
 async function loadRules() {
   if (!$('#rules-definitions').hidden) {
-    await loadMeta();
-    return drawWeekCalendar();
+    if (!$('#weekCalendarBody').rows.length) drawWeekCalendar((await loadRuleReference()).weeks);
+    return;
   }
   if (!$('#rules-data').hidden) return loadHealth();
   if (!$('#rules-sync').hidden) return refreshSyncStatus();
   if (!$('#rules-channel-groups').hidden) return loadChannelGroups();
   if (!$('#rules-dictionary').hidden) {
-    await loadMeta();
-    $('#dictionaryBody').innerHTML = META.trackStatuses.map(row =>
+    if ($('#dictionaryBody').rows.length) return;
+    const {trackStatuses} = await loadRuleReference();
+    $('#dictionaryBody').innerHTML = trackStatuses.map(row =>
       `<tr><td>${esc(row.label)}</td><td class="mono">${esc(row.status)}</td><td>${esc(row.sub_label)}</td>
         <td class="mono">${esc(row.sub)}</td></tr>`).join('') || blankRow(4, '暂无状态字典');
     return;
@@ -3331,8 +3671,18 @@ function closeDrawer() {
 
 /* ================= 启动 ================= */
 run(async function boot() {
+  const v = location.hash.slice(1);
+  if (v === 'alerts' || v === 'archive') setTrackMode(v);
+  if (v === 'channel-exceptions') setChannelMode('exceptions');
+  if (v === 'regions-other') setRegionMarket('other');
+  displayView(routeView(v));
   ME = await api('/api/me');
-  setTopMeta(null);
+  if (ME.dataRevision) {
+    dataRevision = ME.dataRevision;
+    revisionCheckedAt = performance.now();
+  }
+  if (v === 'alerts' || v === 'archive') setTrackMode(v);
+  if (v === 'channel-exceptions') setChannelMode('exceptions');
   $('#opsAssistant').hidden = !ME.opsAssistant;
   $('#openChannelGroups').hidden = !ME.can_edit;
   $('#channelGroupAction').hidden = !ME.can_edit;
@@ -3344,7 +3694,7 @@ run(async function boot() {
       '#trackTabs', '#showDetailed', '#exportTrack', '#trackAlertHeading']) {
       $(selector).hidden = true;
     }
-    $('#trackIntro').textContent = '输入完整的履约单号、运单号、订单号或平台订单号，查看物流状态和时间线。';
+    $('#trackIntro').textContent = '输入完整单号查看物流状态和时间线';
   }
   $('#who').textContent = ME.preview || ME.openTest ? ME.display_name : `${ME.display_name} · ${ME.role_label}`;
   $('#batchAction').append(...allowedActions().map(([key, label]) => new Option(label, key)));
@@ -3352,6 +3702,10 @@ run(async function boot() {
   $('#applyBatch').hidden = !ME.can_edit;
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => showView(b.dataset.v));
   setupUsControls();
+  new IntersectionObserver(([entry]) => {
+    regionSegmentsVisible = entry.isIntersecting;
+    if (regionSegmentsVisible) loadVisibleRegionSegments();
+  }, {rootMargin:'120px 0px'}).observe($('#regionSegmentsPanel'));
   setupTrackExceptionControls();
   const periods = [...document.querySelectorAll('#dailyPeriod button')];
   periods.forEach(button => button.onclick = () => {
@@ -3373,14 +3727,12 @@ run(async function boot() {
     showView('track');
   });
   document.querySelectorAll('#ruleTabs [data-rule-pane]').forEach(btn => btn.onclick = () => setRulePane(btn.dataset.rulePane));
+  $('#startFullPull').onclick = () => run(startFullPull);
   setInterval(() => {
     if (VIEW === 'rules' && !$('#rules-sync').hidden && !document.hidden) refreshSyncStatus();
   }, 30_000);
   setInterval(() => { if (!ME.preview && !document.hidden) refreshDataRevision(); }, 15_000);
-  if (!ME.preview) {
-    refreshDataRevision();
-    setTimeout(() => warmReports(), 1500);
-  }
+  if (!ME.preview && !dataRevision) refreshDataRevision();
   $('#openPending').onclick = () => run(async () => {
     await loadMeta();
     setTrackMode('alerts');
@@ -3409,6 +3761,20 @@ run(async function boot() {
     list.addEventListener('focusin', watchOrderIntent);
   }
   $('#showDetailed').onclick = () => openTracking({ coverage: 'detailed', sort: '逐条事件数' });
+  $('#openTrackAnalysis').hidden = ME.preview;
+  $('#openTrackAnalysis').onclick = () => run(async () => {
+    await loadTrackFilters();
+    if (TF && VIEW === 'track' && trackMode === 'tracking') openTrackAnalysis();
+  });
+  $('#refreshTrackAnalysis').onclick = () => run(analyzeTrack);
+  $('#interpretTrackAnalysis').onclick = () => run(() => analyzeTrack({interpret: true}));
+  $('#trackAnalysisDialog').addEventListener('close', () => trackAnalysisRequest?.abort());
+  $('#trackAnalysisResult').onclick = event => {
+    const button = event.target.closest('[data-track-analysis-order]');
+    if (!button) return;
+    $('#trackAnalysisDialog').close();
+    run(() => openOrder(button.dataset.trackAnalysisOrder, $('#openTrackAnalysis')));
+  };
   $('#alertBody').onchange = refreshSelection;
   $('#batchAction').onchange = refreshSelection;
   $('#applyBatch').onclick = () => run(applyBatch);
@@ -3436,6 +3802,14 @@ run(async function boot() {
     if (renderedChannels?.dimension !== 'group') return;
     channelComparisonExpanded = !channelComparisonExpanded;
     renderChannelComparison(renderedChannels,channelRows);
+  };
+  $('#channelDayMode').onclick = event => {
+    const button = event.target.closest('button[data-day-mode]');
+    if (!button || channelDayMode === button.dataset.dayMode) return;
+    channelDayMode = button.dataset.dayMode;
+    syncChannelTimingControls();
+    syncFilterPreset(CF);
+    if (renderedChannels) renderChannelRates(renderedChannels, channelRows);
   };
   $('#channelBasis').onclick = event => {
     const button = event.target.closest('button[data-basis]');
@@ -3529,13 +3903,14 @@ run(async function boot() {
     if (!renderedChannels) return;
     const basis = TIMING_BASIS[renderedChannels.basis].label;
     const dimension = CHANNEL_DIMENSIONS[renderedChannels.dimension || 'lastmile'];
-    exportCsv(`渠道时效-${dimension}-${basis}`, [
+    const dayLabel = CHANNEL_DAY_LABELS[channelDayMode];
+    exportCsv(`渠道时效-${dimension}-${basis}-${dayLabel}`, [
     ['时效口径', () => basis],
+    ['妥投率计时', () => dayLabel],
     [dimension, row => row.channel], ['单量', row => row.orders], ['有妥投时间', row => row.signed],
     ['有效签收样本', row => row.samples], ['WMS 补算样本', row => row.fallbackSamples],
     ['平均时效（天）', row => row.avgDays], ['P90（天）', row => row.p90Days],
-    ['3天达成率（%）', row => row.rate3], ['5天达成率（%）', row => row.rate5],
-    ['6天达成率（%）', row => row.rate6], ['7天达成率（%）', row => row.rate7],
+    ...DELIVERY_WINDOWS.map(days => [`${days}天内妥投率（${dayLabel}，%，按总单量）`, row => channelDeliveryRate(row, days)]),
     ['SLA 在途超时', row => row.overdue], ['SLA 有效签收样本', row => row.sla_samples], ['SLA达成率（%）', row => row.slaRate],
     ], channelRows);
   };
@@ -3555,13 +3930,7 @@ run(async function boot() {
     }
   });
   $('#logout').onclick = () => run(async () => { await api('/api/logout', { method: 'POST' }); location.href = '/login'; });
-  const v = (location.hash || '').replace('#', '');
-  if (v === 'alerts' || v === 'archive') setTrackMode(v);
-  if (v === 'channel-exceptions') setChannelMode('exceptions');
-  if (v === 'regions-other') setRegionMarket('other');
   if (v === 'detailed') openTracking({ coverage: 'detailed', sort: '逐条事件数' });
-  else showView(v === 'alerts' || v === 'archive' ? 'track' :
-    v === 'channel-exceptions' ? 'channels' : ['regions', 'regions-other'].includes(v) ? 'us' : VIEW_META[v] ? v : 'dash');
-  if (!ME.preview && v !== 'rules') run(loadActivity);
+  else showView(routeView(v));
   window.addEventListener('resize', resizeVisibleCharts);
 });

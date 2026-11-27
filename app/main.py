@@ -1,6 +1,8 @@
 """应用入口：uvicorn app.main:app --reload"""
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from html import escape
 import logging
@@ -10,7 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import cloud_login, cloud_sharing, core, ops_auth, ops_assistant
+from . import cloud_login, cloud_sharing, core, ops_auth, ops_assistant, tracking_full
 from .ops_gateway import GatewayError
 from .api import router
 from .pages_api import router as pages_router
@@ -21,7 +23,19 @@ ROOT = Path(__file__).resolve().parent.parent
 TPL = ROOT / "templates"
 STATIC = ROOT / "static"
 
-app = FastAPI(title="履约监控系统", version="0.2.0", docs_url="/api/docs", redoc_url=None)
+@asynccontextmanager
+async def lifespan(_app):
+    _startup()
+    worker = asyncio.create_task(tracking_full.dispatch())
+    try:
+        yield
+    finally:
+        worker.cancel()
+        with suppress(asyncio.CancelledError):
+            await worker
+
+
+app = FastAPI(title="履约监控系统", version="0.2.0", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
 
 
 def protect_site_mutations(request: Request):
@@ -121,9 +135,10 @@ def favicon():
     return HTMLResponse(status_code=204)
 
 
-@app.on_event("startup")
 def _startup():
-    logging.getLogger("uvicorn.access").addFilter(HideCallbackQuery())
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(item, HideCallbackQuery) for item in access.filters):
+        access.addFilter(HideCallbackQuery())
     if not core.OPS_DB.exists():
         print("[warn] ops.db 不存在，先运行: python init_ops.py")
     elif core.DUCK_DB.exists():

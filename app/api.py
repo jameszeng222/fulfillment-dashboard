@@ -10,6 +10,7 @@ from unicodedata import normalize
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
+from track17 import OFFICIAL_STATUS
 
 from . import alert_history, channel_groups, cloud_login, core, ops_auth, ops_assistant, public_preview
 from .carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts, transport_minutes
@@ -25,17 +26,24 @@ router = APIRouter(prefix="/api")
 ALERT_CHANNEL_VALUE = "coalesce(nullif(a.current_channel,''),'__empty__')"
 
 
-@router.get("/data-revision")
-def data_revision(request: Request):
-    core.require_reader(request)
-    stamps = [core.snapshot_key()]
+def _revision():
+    try:
+        stamps = [core.snapshot_key()]
+    except FileNotFoundError:
+        return None
     for path in (core.OPS_DB, core.OPS_DB.with_name(core.OPS_DB.name + "-wal")):
         try:
             stat = path.stat()
             stamps.append((stat.st_size,stat.st_mtime_ns))
         except FileNotFoundError:
             stamps.append(None)
-    return {"revision": sha256(repr(stamps).encode()).hexdigest()}
+    return sha256(repr(stamps).encode()).hexdigest()
+
+
+@router.get("/data-revision")
+def data_revision(request: Request):
+    core.require_reader(request)
+    return {"revision": _revision()}
 
 # ---------------------------------------------------------------- 认证
 
@@ -91,15 +99,57 @@ def me(request: Request, response: Response):
         return {**u, "cloudSharing": False, "opsAssistant": False}
     session = {} if u.get("openTest") else {"csrf": core.csrf_token(request.cookies[core.SESSION_COOKIE])}
     return {**u, **session,
+            "dataRevision": _revision(),
             "cloudSharing": u["role"] == "admin" and cloud_login.enabled() and not core.public_preview_enabled(),
             "opsAssistant": ops_assistant.can_use(u) and any(ops_assistant.configured().values())}
 
 
 # ---------------------------------------------------------------- 元数据（筛选项）
 
+@router.get("/reference")
+def reference(request: Request):
+    core.require_reader(request)
+    return {
+        "weeks": [{"v": code, "start": start.isoformat(), "end": (end - timedelta(days=1)).isoformat()}
+                  for code, (start, end) in REPORTING_WEEKS.items()],
+        "trackStatuses": [{"status": status, "sub": sub, "label": label, "sub_label": sub_label}
+                          for status, sub, label, sub_label in sorted(OFFICIAL_STATUS)],
+    }
+
+
 @router.get("/meta")
 def meta(request: Request):
     preview = core.require_reader(request)["preview"]
+    fact_meta = _fact_meta(core.snapshot_key())
+    dimension_counts = dict(fact_meta["filterOptions"])
+    rules, states, alert_channels = [], [], []
+    with core.ops() as o:
+        dimension_counts["channel_group"] = channel_groups.distribution(
+            channel_groups.load(o)["groups"],
+            ((row["v"], row["n"]) for row in dimension_counts["channel"]), fact_meta["range"]["orders"])
+        if not preview:
+            rules = [dict(r) for r in o.execute(
+                f"SELECT rule, rule_cn, category, level, count(*) n FROM alerts WHERE {visible_alerts()} "
+                "GROUP BY 1,2,3,4 ORDER BY n DESC").fetchall()]
+            states = [dict(r) for r in o.execute(
+                "SELECT coalesce(s.status,'open') status, count(*) n FROM alerts a "
+                "LEFT JOIN alert_state s ON s.order_no=a.order_no AND s.rule=a.rule "
+                f"WHERE {visible_alerts('a.carrier')} "
+                "GROUP BY 1 ORDER BY n DESC").fetchall()]
+            if "current_channel" in {row[1] for row in o.execute("PRAGMA table_info(alerts)")}:
+                alert_channels = [{"v": value, "t": "未填写当前渠道" if value == "__empty__" else value, "n": count}
+                                  for value, count in o.execute(f"""
+                    SELECT {ALERT_CHANNEL_VALUE} AS channel, count(DISTINCT a.order_no) AS n
+                    FROM alerts a WHERE {visible_alerts('a.carrier')}
+                    GROUP BY 1 ORDER BY n DESC, channel
+                """)]
+    return {**fact_meta, "filterOptions": dimension_counts,
+            "rules": rules, "alertStates": states, "alertChannels": alert_channels,
+            "ruleOptions": [] if preview else [{"v": rule["key"], "t": rule["name"]} for rule in BUSINESS_RULES]}
+
+
+@lru_cache(maxsize=1)
+def _fact_meta(_snapshot):
     con = core.duck()
     try:
         facts = core.active_facts(core.order_facts(con))
@@ -170,35 +220,11 @@ def meta(request: Request):
     finally:
         con.close()
 
-    rules, states, alert_channels = [], [], []
-    with core.ops() as o:
-        dimension_counts["channel_group"] = channel_groups.distribution(
-            channel_groups.load(o)["groups"],
-            ((row["v"], row["n"]) for row in dimension_counts["channel"]), b[2])
-        if not preview:
-            rules = [dict(r) for r in o.execute(
-                f"SELECT rule, rule_cn, category, level, count(*) n FROM alerts WHERE {visible_alerts()} "
-                "GROUP BY 1,2,3,4 ORDER BY n DESC").fetchall()]
-            states = [dict(r) for r in o.execute(
-                "SELECT coalesce(s.status,'open') status, count(*) n FROM alerts a "
-                "LEFT JOIN alert_state s ON s.order_no=a.order_no AND s.rule=a.rule "
-                f"WHERE {visible_alerts('a.carrier')} "
-                "GROUP BY 1 ORDER BY n DESC").fetchall()]
-            if "current_channel" in {row[1] for row in o.execute("PRAGMA table_info(alerts)")}:
-                alert_channels = [{"v": value, "t": "未填写当前渠道" if value == "__empty__" else value, "n": count}
-                                  for value, count in o.execute(f"""
-                    SELECT {ALERT_CHANNEL_VALUE} AS channel, count(DISTINCT a.order_no) AS n
-                    FROM alerts a WHERE {visible_alerts('a.carrier')}
-                    GROUP BY 1 ORDER BY n DESC, channel
-                """)]
-
     return {
         "warehouses": whs, "platforms": pfs, "carriers": crs, "countries": cns,
         "months": months, "orderStatuses": sts,
         "lastMileCarriers": last_mile, "countryItems": countries, "trackStatuses": tracking_statuses,
         "filterOptions": dimension_counts, "dateOptions": date_options, "platformNames": platform_names,
-        "rules": rules, "alertStates": states, "alertChannels": alert_channels,
-        "ruleOptions": [] if preview else [{"v": rule["key"], "t": rule["name"]} for rule in BUSINESS_RULES],
         "range": {"start": str(b[0]), "end": str(b[1]), "orders": b[2]},
     }
 

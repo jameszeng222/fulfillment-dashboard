@@ -15,8 +15,9 @@ from pathlib import Path
 
 from app.alert_history import HISTORY_SCHEMA
 
-ROOT = Path(__file__).resolve().parent
-OPS_DB = ROOT / "ops.db"
+from app.datapaths import operations_database
+
+OPS_DB = operations_database()
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -157,7 +158,7 @@ def verify_pw(password: str, stored: str) -> bool:
         return False
 
 
-def init(db: Path = OPS_DB, seed: bool = True):
+def init(db: Path = OPS_DB, seed: bool = False):
     con = sqlite3.connect(db)
     con.executescript(SCHEMA)
     con.commit()
@@ -171,7 +172,7 @@ def init(db: Path = OPS_DB, seed: bool = True):
                 "VALUES (?,?,?,?,?,?)",
                 (username, hash_pw(pw), display, role, team,
                  datetime.now(timezone.utc).isoformat(timespec="seconds")))
-            print(f"  建用户 {username} / {pw}  ({role})")
+            print(f"  建测试用户 {username}  ({role})")
         con.commit()
     n = con.execute("SELECT count(*) FROM users").fetchone()[0]
     con.close()
@@ -181,6 +182,8 @@ def init(db: Path = OPS_DB, seed: bool = True):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=str(OPS_DB))
-    ap.add_argument("--no-seed", action="store_true")
+    seed_choice = ap.add_mutually_exclusive_group()
+    seed_choice.add_argument("--no-seed", action="store_true")
+    seed_choice.add_argument("--seed-test-users", action="store_true", help="仅用于本地测试")
     a = ap.parse_args()
-    init(Path(a.db), seed=not a.no_seed)
+    init(Path(a.db), seed=a.seed_test_users)

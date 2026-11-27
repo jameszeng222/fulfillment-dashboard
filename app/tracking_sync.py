@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from . import core, tracking_freshness
+from . import core, ops_auth, tracking_freshness, tracking_full
 from .waybill import normalized
 
 
@@ -246,6 +246,7 @@ def sync_status(request: Request):
         pushes = [dict(row) for row in db.execute("""
             SELECT event,received_at,processed_at,state,reason FROM track17_inbox ORDER BY id DESC LIMIT 10
         """)]
+        full_pull = tracking_full.latest(db)
     for run in runs:
         try:
             run["detail"] = json.loads(run["detail"] or "null")
@@ -255,7 +256,17 @@ def sync_status(request: Request):
     if core.DUCK_DB.is_file():
         with closing(core.duck()) as con:
             coverage, conflicts = tracking_freshness.coverage(con), tracking_freshness.carrier_conflicts(con)
-    return {"now": core.now_iso(), "poll": {"schedule": windows_schedule(int(time.monotonic() // 30)),
+    return {"now": core.now_iso(), "fullPull": full_pull, "fullPullAvailable": tracking_full.available(),
+            "poll": {"schedule": windows_schedule(int(time.monotonic() // 30)),
                                            "coverage": coverage, "carrierConflicts": conflicts,
                                            "lastSuccess": success[0] if success else None, "runs": runs},
             "webhook": {**totals, "url": public_url(), "ready": bool(webhook_key()), "pushes": pushes}}
+
+
+@router.post("/api/17track/full-pull", status_code=202)
+def start_full_pull(request: Request):
+    ops_auth.require_csrf(request)
+    user = core.require_editor(request)
+    if not tracking_full.available():
+        raise HTTPException(503, "当前服务未连接本机拉取任务")
+    return tracking_full.enqueue(user["username"])

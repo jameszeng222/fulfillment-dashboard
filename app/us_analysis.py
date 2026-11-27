@@ -11,7 +11,6 @@ import pandas as pd
 from . import core, analytics_snapshot
 from .carrier_delivery import DELIVERED_BJ, DELIVERY_SOURCE, elapsed_minutes, reporting_facts
 from .order_time import delivery_facts
-from .regional_pickup import build_pickups
 
 ChannelDimension = Literal["lastmile", "current", "group"]
 TransitBasis = Literal["paid", "created", "shipped", "paid_create", "create_ship", "ship_pickup", "pickup_delivered"]
@@ -23,8 +22,8 @@ US_COUNTRIES = "('united states', 'united states of america', 'us', 'usa')"
 SEGMENTS = {
     "paid_create": ("o.支付时间", "o.创建时间"),
     "create_ship": ("o.创建时间", "o.签出时间"),
-    "ship_pickup": ("o.签出时间", "o.analytics_pickup"),
-    "pickup_delivered": ("o.analytics_pickup", f"o.{DELIVERED_BJ}"),
+    "ship_pickup": ("o.签出时间", "o.regional_online"),
+    "pickup_delivered": ("o.regional_online", f"o.{DELIVERED_BJ}"),
     "shipped": ("o.签出时间", f"o.{DELIVERED_BJ}"),
     "created": ("o.创建时间", f"o.{DELIVERED_BJ}"),
     "paid": ("o.支付时间", f"o.{DELIVERED_BJ}"),
@@ -111,8 +110,8 @@ def _build_scope(con, market, dimension, cond, args, settings, level="all", plac
     params = list(args) if stored else []
     if stored:
         state, region = ("o.analytics_state", "o.analytics_region") if market == "us" else ("o.目的国", "o.目的国")
-        scope = f"""SELECT o.履约单号,o.目的国,o.目的国中文,o.支付时间,o.创建时间,o.签出时间,
-                         o.{DELIVERED_BJ},o.{DELIVERY_SOURCE},o.analytics_pickup,
+        scope = f"""SELECT o.履约单号,o.单号归一,o.目的国,o.目的国中文,o.支付时间,o.创建时间,o.签出时间,
+                         o.{DELIVERED_BJ},o.{DELIVERY_SOURCE},o.analytics_online,
                          {state} AS geo_state,{region} AS geo_region,{channel} AS geo_channel
                     FROM {orders} o {group_join}
                     WHERE {country_filter} AND nullif(trim(o.目的国),'') IS NOT NULL {cond}"""
@@ -145,36 +144,34 @@ def _build_scope(con, market, dimension, cond, args, settings, level="all", plac
             for country, label in countries}
 
 
-def _metric_sources(con, keys):
+def _metric_sources(con, keys, archive_version):
     delivery = any(SEGMENTS[key][1] == f"o.{DELIVERED_BJ}" for key in keys)
-    pickup = any(key in ("ship_pickup", "pickup_delivered") for key in keys)
-    if analytics_snapshot.available(con):
-        return "regional_scope", "", f"o.{DELIVERY_SOURCE}" if delivery else "NULL"
-    facts = reporting_facts(con, "regional_scope", page_only=True) if delivery else "regional_scope"
-    pickup_join = ""
-    if pickup:
-        build_pickups(con)
-        facts = f"(SELECT o.*,p.pickup AS analytics_pickup FROM {facts} o LEFT JOIN regional_pickups p USING (履约单号))"
-    return facts, pickup_join, f"o.{DELIVERY_SOURCE}" if delivery else "NULL"
+    facts = "regional_scope"
+    if delivery and not analytics_snapshot.available(con):
+        facts = reporting_facts(con, facts, page_only=True)
+    if any(key in ("ship_pickup", "pickup_delivered") for key in keys):
+        join, start = analytics_snapshot.scan_source(con, archive_version)
+        facts = f"(SELECT o.*, {start} AS regional_online FROM {facts} o {join})"
+    return facts, f"o.{DELIVERY_SOURCE}" if delivery else "NULL"
 
 
 @lru_cache(maxsize=16)
-def report(_snapshot, date_basis, basis, dimension, cond, args, settings, market="us"):
+def report(_snapshot, date_basis, basis, dimension, cond, args, settings, market="us", archive_version=None):
     with core.duck() as con:
         states = _build_scope(con, market, dimension, cond, args, settings)
-        facts, pickup_join, delivery_source = _metric_sources(con, [basis])
+        facts, delivery_source = _metric_sources(con, [basis], archive_version)
         duration = elapsed_minutes(*SEGMENTS[basis])
         grouping = "((), (state), (region), (channel), (state,channel), (region,channel))"
         rows = con.execute(f"""
             WITH scoped AS (
                 SELECT o.geo_state AS state,o.geo_region AS region,o.geo_channel AS channel,
                        {duration} AS minutes, {delivery_source} AS delivery_source
-                FROM {facts} o {pickup_join}
+                FROM {facts} o
             )
             SELECT grouping_id(state,region,channel), state, region, channel, count(*),
                    count(*) FILTER (WHERE minutes>0), count(*) FILTER (WHERE minutes>0 AND delivery_source='WMS'),
                    avg(minutes) FILTER (WHERE minutes>0)/1440.0,
-                   quantile_cont(minutes, 0.9) FILTER (WHERE minutes>0)/1440.0
+                   quantile_cont(minutes, [0.90, 0.95]) FILTER (WHERE minutes>0)
             FROM scoped
             GROUP BY GROUPING SETS {grouping}
             ORDER BY count(*) DESC, state NULLS LAST, region NULLS LAST, channel NULLS LAST
@@ -182,8 +179,9 @@ def report(_snapshot, date_basis, basis, dimension, cond, args, settings, market
     result = {"dateBasis": date_basis, "basis": basis, "dimension": dimension, "market": market, "national": {},
               "states": {}, "regions": {}, "channels": []}
     place_channels = {}
-    for flags, state, region, channel, orders, samples, fallback, average, p90 in rows:
-        metrics = {"orders": orders, "samples": samples, "fallback": fallback, "avg": average, "p90": p90}
+    for flags, state, region, channel, orders, samples, fallback, average, percentiles in rows:
+        p90, p95 = (value / 1440.0 for value in percentiles) if percentiles else (None, None)
+        metrics = {"orders": orders, "samples": samples, "fallback": fallback, "avg": average, "p90": p90, "p95": p95}
         if flags == 7:
             result["national"] = metrics
         elif flags == 6:
@@ -203,17 +201,17 @@ def report(_snapshot, date_basis, basis, dimension, cond, args, settings, market
 
 
 @lru_cache(maxsize=24)
-def segments(_snapshot, market, date_basis, dimension, cond, args, settings, level, place, focus):
+def segments(_snapshot, market, date_basis, dimension, cond, args, settings, level, place, focus, archive_version=None):
     with core.duck() as con:
         _build_scope(con, market, dimension, cond, args, settings, level, place, focus)
-        facts, pickup_join, delivery_source = _metric_sources(con, SEGMENTS)
+        facts, _ = _metric_sources(con, SEGMENTS, archive_version)
         minutes = ", ".join(f"{elapsed_minutes(*endpoints)} AS {key}" for key, endpoints in SEGMENTS.items())
         metrics = ", ".join(
             f"count(*) FILTER (WHERE {key}>0),avg({key}) FILTER (WHERE {key}>0),"
             f"quantile_cont({key},0.9) FILTER (WHERE {key}>0)" for key in SEGMENTS)
         summary = con.execute(f"""
             WITH measured AS (
-                SELECT {minutes} FROM {facts} o {pickup_join}
+                SELECT {minutes} FROM {facts} o
             ) SELECT count(*), {metrics} FROM measured
         """).fetchone()
     records = []

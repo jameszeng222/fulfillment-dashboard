@@ -6,7 +6,7 @@
 2. 补齐站点运行需要的非密钥默认值（监听端口、中枢服务地址、OAuth 公开参数）；
 3. 以前台进程启动 uvicorn。
 
-密钥（OPS_CLIENT_SECRET、OPS_SITE_MCP_KEY、OPS_SITE_AI_KEY）只从环境变量读取，
+密钥（OPS_CLIENT_SECRET、OPS_SITE_AI_KEY）只从环境变量读取，
 平台在受管部署时注入；本脚本不生成、不落盘、不打印任何密钥。
 """
 from __future__ import annotations
@@ -19,12 +19,15 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from app.datapaths import fact_database, operations_database
+
 VENV = ROOT / ".venv"
 PACKAGES = ("fastapi", "uvicorn", "duckdb", "pandas", "openpyxl")
 DEFAULT_ORIGIN = "https://biz.htwig.com:18700"
 CALLBACK_PATH = "/ops/auth/callback"
 SERVICES = {
-    "OPS_SITE_MCP_URL": "https://ops.htwig.com:10000/api/assistant/ai/sites/11/mcp",
     "OPS_SITE_AI_URL": "https://ops.htwig.com:10000/api/assistant/ai/v1",
     "OPS_SITE_SKILLS_URL": "https://ops.htwig.com:10000/api/assistant/ai/sites/11/skills",
 }
@@ -85,6 +88,12 @@ def configure() -> None:
     for name, url in SERVICES.items():
         os.environ.setdefault(name, url)
     os.environ.setdefault("PORT", "18700")
+    if not os.environ.get("OPS_DATA_DIR", "").strip():
+        os.environ["OPS_DATA_DIR"] = str(ROOT / "data")
+    # The managed site requires real sessions. Local preview flags must not carry over.
+    os.environ.update(FULFILLMENT_HUB_SITE="true", FULFILLMENT_OPEN_TEST="false",
+                      FULFILLMENT_PUBLIC_PREVIEW="false", FULFILLMENT_CLOUD_TICKETS="false",
+                      OPS_LOCAL_LOGIN="false")
     # 中枢登记的站点访问权即授权范围；首次登录按 OPS_SIGNUP_ROLE 建档。
     os.environ.setdefault("OPS_ALLOW_VIEWER_SIGNUP", "true")
     os.environ.setdefault("OPS_SIGNUP_ROLE", "viewer")
@@ -93,39 +102,62 @@ def configure() -> None:
 
 
 def init_database() -> None:
-    """Create the empty operations schema on first start; never seeds passwords."""
-    if (ROOT / "ops.db").is_file():
+    """Create an empty operations DB on first start; never overwrite an existing DB."""
+    path = operations_database()
+    if path.is_file():
         return
+    path.parent.mkdir(parents=True, exist_ok=True)
     log("初始化操作库 ops.db（不创建本地口令账号）")
-    subprocess.run([sys.executable, str(ROOT / "init_ops.py"), "--no-seed"], check=True)
+    subprocess.run([sys.executable, str(ROOT / "init_ops.py"), "--db", str(path), "--no-seed"], check=True)
+
+
+def tls_args() -> list[str]:
+    # Select only this site's injected pair. Never search for another site's keys.
+    cert = os.environ.get("ICS_TLS_CERT_FILE", "").strip()
+    key = os.environ.get("ICS_TLS_KEY_FILE", "").strip()
+    if not cert or not key or not Path(cert).is_file() or not Path(key).is_file():
+        raise SystemExit("缺少平台注入的 TLS 证书配置，停止启动（不降级为 HTTP）。")
+    return ["--ssl-certfile", cert, "--ssl-keyfile", key]
+
+
+def launch_args() -> list[str]:
+    return [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0",
+            "--port", os.environ["PORT"], "--no-proxy-headers", "--no-access-log",
+            "--log-level", "info", *tls_args()]
 
 
 def summary() -> None:
-    keys = ("OPS_SITE_ORIGIN", "OPS_REDIRECT_URI", "OPS_AUTHORIZE_URL", "OPS_TOKEN_URL", "OPS_USERINFO_URL",
-            "OPS_SITE_MCP_URL", "OPS_SITE_AI_URL", "OPS_SITE_SKILLS_URL", "OPS_SIGNUP_ROLE", "OPS_ASSISTANT_ROLES")
-    for name in keys:
-        log(f"{name}={os.environ.get(name, '')}")
-    for name in ("OPS_CLIENT_ID", "OPS_CLIENT_SECRET", "OPS_SITE_MCP_KEY", "OPS_SITE_AI_KEY"):
-        log(f"{name}={'已配置' if os.environ.get(name) else '未配置'}")
-    log(f"数据文件 履约单.duckdb={'存在' if (ROOT / '履约单.duckdb').is_file() else '缺失'}")
+    from app.ops_auth import enabled
+
+    log(f"中枢登录={'已配置' if enabled() else '未配置或回调不匹配'}")
+    log(f"事实库={'存在' if fact_database().is_file() else '缺失'}")
+    log(f"操作库={'存在' if operations_database().is_file() else '缺失'}")
+    log(f"助手 AI 配置={'存在' if os.environ.get('OPS_SITE_AI_KEY') else '未配置'}")
+    try:
+        tls_args()
+    except SystemExit:
+        log("平台 TLS 配置缺失")
+    else:
+        log("平台 TLS 文件存在（尚未验证 HTTPS）")
 
 
 def main() -> None:
     os.chdir(ROOT)
     ensure_runtime()
-    if "--check" in sys.argv:
-        configure()
-        summary()
-        return
     configure()
-    init_database()
     summary()
-    port = os.environ["PORT"]
-    log(f"启动服务 0.0.0.0:{port}")
-    reexec([sys.executable, "-m", "uvicorn", "app.main:app",
-            "--host", "0.0.0.0", "--port", port,
-            "--proxy-headers", "--forwarded-allow-ips=127.0.0.1",
-            "--log-level", "info"])
+    if "--check" in sys.argv:
+        return
+    args = launch_args()
+    from app.ops_auth import enabled
+
+    if not enabled():
+        raise SystemExit("智能中枢登录配置缺失或 OAuth 回调不匹配，停止启动。")
+    if not fact_database().is_file():
+        raise SystemExit("缺少履约事实库，停止启动。请按现有授权的数据流程准备站点数据。")
+    init_database()
+    log(f"启动 HTTPS 服务，端口 {os.environ['PORT']}")
+    reexec(args)
 
 
 if __name__ == "__main__":

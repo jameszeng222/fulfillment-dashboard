@@ -43,8 +43,10 @@ import duckdb
 from app.tracking_clock import carrier_wall_time, ensure_display_columns
 from app.waybill import key_sql, normalized, shipped_waybill_sql, strip_quantity
 
+from app.datapaths import fact_database
+
 ROOT = Path(__file__).resolve().parent
-DB = ROOT / "履约单.duckdb"
+DB = fact_database()
 API = "https://api.17track.net/track/v2.2"
 BATCH = 40
 RATE_SLEEP = 0.35
