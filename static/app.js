@@ -132,7 +132,7 @@ function reportPath(path) {
 function reportStorageKey(path) {
   const version = /^\/api\/channels(?:\?|$)/.test(path) ? 'channel-workday-rates:' :
     /^\/api\/overview(?:\?|$)/.test(path) ? 'country-timing-p90:' :
-      /^\/api\/regional-analysis(?:\?|$)/.test(path) ? 'regional-online-p95:' : '';
+      /^\/api\/regional-analysis(?:\?|$)/.test(path) ? 'regional-geography:' : '';
   return reportCacheBase + encodeURIComponent(`${ME?.username || 'preview'}:${ME?.role || 'preview'}:${ME?.preview ? 'preview' : 'full'}`) + ':' + version + path;
 }
 
@@ -195,10 +195,10 @@ function fetchReport(path, options = {}, force = false) {
 }
 
 const cacheKeyView = {dash: 'dash', channels: 'channels', us: 'us', health: 'rules', rules: 'rules',
-  trackSync: 'rules', channelGroups: 'rules', trackExceptions: 'channels'};
+  trackSync: 'rules', channelGroups: 'rules', trackExceptions: 'track'};
 function reportStatus(key, text) {
   if (cacheKeyView[key] !== VIEW) return;
-  if (key === 'channels' && channelMode !== 'timing') return;
+  if (key === 'trackExceptions' && trackMode !== 'special-tracking') return;
   if (VIEW === 'rules') {
     const pane = {health:'data', trackSync:'sync', channelGroups:'channel-groups'}[key];
     if ((pane && $('#rules-' + pane).hidden) || (key === 'rules' && $('#rules-sla').hidden && $('#rules-business').hidden)) return;
@@ -350,7 +350,8 @@ async function refreshDataRevision() {
     revisionCheckedAt = performance.now();
     if (changed && !document.querySelector('dialog[open]')) {
       if (usesFilterMeta()) revalidateMeta().catch(() => {});
-      const refresh = {dash: loadDash, channels: channelMode === 'timing' ? loadChannels : loadTrackExceptions,
+      const refresh = {dash: loadDash, channels: loadChannels,
+        track: trackMode === 'special-tracking' ? loadTrackExceptions : null,
         us: loadUs, rules: loadRules}[VIEW];
       if (refresh) run(refresh);
       if (VIEW === 'dash' || VIEW === 'track') run(loadActivity);
@@ -412,17 +413,15 @@ function downloadBlob(blob, name) {
 const VIEW_META = { dash: '数据总览', track: '轨迹监控', channels: '渠道时效', us: '区域分析', rules: '数据与规则' };
 let VIEW = 'dash';
 let trackMode = 'tracking';
-let channelMode = 'timing';
 
 function routeView(route) {
-  if (['alerts', 'archive', 'detailed'].includes(route)) return 'track';
-  if (route === 'channel-exceptions') return 'channels';
+  if (['alerts', 'archive', 'detailed', 'special-tracking', 'channel-exceptions'].includes(route)) return 'track';
   if (['regions', 'regions-other'].includes(route)) return 'us';
   return Object.hasOwn(VIEW_META, route) ? route : 'dash';
 }
 
 function usesFilterMeta() {
-  return ['dash','track','us'].includes(VIEW) || (VIEW === 'channels' && channelMode === 'timing') ||
+  return ['dash','track','us','channels'].includes(VIEW) ||
     (VIEW === 'rules' && !$('#rules-sla').hidden);
 }
 
@@ -444,14 +443,13 @@ function showView(v) {
   if (ME.preview && ['rules', 'us'].includes(v)) v = 'dash';
   displayView(v);
   const route = v === 'track' && trackMode !== 'tracking' ? trackMode :
-    v === 'channels' && channelMode === 'exceptions' ? 'channel-exceptions' :
       v === 'us' ? (usView.market === 'us' ? 'regions' : 'regions-other') : v;
   history.replaceState(null, '', '#' + route);
   window.scrollTo({ top: 0 });
   resizeVisibleCharts();
   if (META && usesFilterMeta()) loadMeta().catch(() => {});
-  run({ dash: loadDash, track: trackMode === 'tracking' ? loadTrack : loadAlerts,
-    channels: channelMode === 'exceptions' ? loadTrackExceptions : loadChannels, us: loadUs, rules: loadRules }[v]);
+  const tracking = {tracking: loadTrack, alerts: loadAlerts, archive: loadAlerts, 'special-tracking': loadTrackExceptions};
+  run({dash: loadDash, track: tracking[trackMode], channels: loadChannels, us: loadUs, rules: loadRules}[v]);
   if (!ME.preview && (v === 'dash' || v === 'track')) run(loadActivity);
 }
 
@@ -1102,9 +1100,12 @@ async function loadOverviewCharts(d) {
   }
   if (VIEW !== 'dash' || renderedDash !== d || paintedOverview === d) return;
   status.hidden = true;
-  initChart('cMonthly').setOption({
+  $('#cMonthly').style.minWidth = `${d.monthly.length * 65 + 100}px`;
+  const chart = initChart('cMonthly');
+  chart.resize();
+  chart.setOption({
     animation: chartMotion, animationDuration: 230, animationDurationUpdate: 140, animationEasing: 'quarticOut',
-    grid: { left: 6, right: 10, top: 32, bottom: 5, containLabel: true },
+    grid: { left: 6, right: 10, top: 52, bottom: 6, containLabel: true },
     tooltip: { ...chartTip, trigger: 'axis', valueFormatter: fmt },
     legend: { right: 4, top: 0, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11, color: chartTheme.text } },
     xAxis: { type: 'category', data: d.monthly.map(r => r.m), axisTick: { show: false },
@@ -1114,11 +1115,17 @@ async function loadOverviewCharts(d) {
     { type: 'value', min: 0, splitLine: { show: false },
       axisLabel: { color: chartTheme.muted, formatter: '{value} 天' } }],
     series: [
-      { name: '单量', type: 'bar', barMaxWidth: 34, data: d.monthly.map(r => r.n),
+      { name: '单量', type: 'bar', barMaxWidth: 48, data: d.monthly.map(r => r.n),
         itemStyle: { color: chartTheme.series[0], borderRadius: [3, 3, 0, 0] },
+        label: { show: true, position: 'insideBottom', distance: 7, color: chartTheme.ink, fontSize: 11,
+          formatter: point => fmt(point.value) },
+        labelLayout: { hideOverlap: true },
         tooltip: { valueFormatter: value => `${fmt(value)} 单` } },
-      { name: '平均物流天数', type: 'line', yAxisIndex: 1, symbolSize: 6, data: d.monthly.map(r => r.d),
+      { name: '平均物流天数', type: 'line', smooth: 0.35, yAxisIndex: 1, symbolSize: 6, data: d.monthly.map(r => r.d),
         itemStyle: { color: chartTheme.ink }, lineStyle: { width: 1.5 },
+        label: { show: true, position: 'top', distance: 22, fontSize: 11, color: chartTheme.ink,
+          formatter: point => measure(point.value, ' 天') },
+        labelLayout: { hideOverlap: true },
         tooltip: { valueFormatter: value => measure(value, ' 天') } },
     ],
   });
@@ -1345,7 +1352,8 @@ function setTrackMode(mode) {
   trackMode = mode;
   if (mode !== 'tracking') AF = alertFiltersByMode[mode] || null;
   $('#trackingPane').hidden = mode !== 'tracking';
-  $('#alertsPane').hidden = mode === 'tracking';
+  $('#alertsPane').hidden = mode === 'tracking' || mode === 'special-tracking';
+  $('#specialTrackingPane').hidden = mode !== 'special-tracking';
   const archived = mode === 'archive';
   $('#alertFilters').hidden = archived;
   $('#archiveFilters').hidden = !archived;
@@ -1847,7 +1855,8 @@ async function changeAlerts(action, items) {
   }
   invalidatePages();
   await Promise.all([loadActivity(), drawerOrder ? refreshOrder(drawerOrder) : null,
-    VIEW === 'track' ? trackMode === 'tracking' ? loadTrack(trackPage) : loadAlerts(alertPage) : null]);
+    VIEW === 'track' && trackMode !== 'special-tracking' ?
+      (trackMode === 'tracking' ? loadTrack(trackPage) : loadAlerts(alertPage)) : null]);
 }
 
 async function applyBatch() {
@@ -1882,6 +1891,11 @@ const CHANNEL_DIMENSIONS = {lastmile:'C 端渠道',group:'自定义渠道'};
 const CHANNEL_BASE_CRITERIA = {filters:{date_basis:DEFAULT_DATE_BASIS}, basis:'shipped', dimension:'lastmile'};
 let renderedChannels = null;
 let renderedChannelFilters = {};
+let channelTrendPeriod = 'month';
+let channelTrendVisible = false;
+let channelTrendData = null;
+let channelTrendPath = '';
+let channelTrendRequest = 0;
 /* ---------------- 组合筛选 ---------------- */
 const filterPresetWidgets = new WeakMap();
 
@@ -2261,7 +2275,7 @@ async function loadChannels() {
     if (!defaultFilterPreset('channels')) fetchReport(channelQuery(CHANNEL_BASE_CRITERIA)).catch(() => {});
     await loadChannelFilters();
   }
-  if (!CF || VIEW !== 'channels' || channelMode !== 'timing' || !CF.validate()) return;
+  if (!CF || VIEW !== 'channels' || !CF.validate()) return;
   const criteria = {filters:readF(CF), basis:channelBasis, dimension:channelDimension};
   const {dimension, filters} = criteria;
   const loading = $('#channelLoading');
@@ -2289,7 +2303,7 @@ async function loadChannels() {
 }
 
 function renderChannels(d, filters) {
-  if (VIEW !== 'channels' || channelMode !== 'timing') return;
+  if (VIEW !== 'channels') return;
   const loading = $('#channelLoading'), results = $('#channelResults');
   loading.hidden = true;
   results.hidden = false;
@@ -2324,6 +2338,120 @@ function renderChannels(d, filters) {
   ].map(row => metricCard(...row)).join('');
 
   renderChannelRates(d, rows);
+  const selector = $('#channelTrendKey');
+  const key = selector.value;
+  selector.replaceChildren(...rows.map(row => new Option(row.channel, row.key)));
+  if (rows.some(row => row.key === key)) selector.value = key;
+  selector.disabled = !rows.length;
+  $('#channelTrendScope').textContent = `按${dateBasisLabel[d.dateBasis || DEFAULT_DATE_BASIS]}分组 · ${TIMING_BASIS[d.basis].label}`;
+  if (!rows.length) {
+    channelTrendRequest++;
+    channelTrendData = null;
+    $('#channelTrendStatus').textContent = '当前筛选没有可比较的渠道。';
+    $('#channelTrendData').hidden = true;
+  } else if (channelTrendVisible) {
+    run(loadChannelTrend);
+  }
+}
+
+async function loadChannelTrend() {
+  const key = $('#channelTrendKey').value;
+  if (VIEW !== 'channels' || !channelTrendVisible || !renderedChannels || !key) return;
+  const {min_n, ...filters} = renderedChannelFilters;
+  const d = renderedChannels;
+  const path = reportPath('/api/channel-trends?' + qs({...filters, key, basis:d.basis, dimension:d.dimension}));
+  const request = ++channelTrendRequest;
+  const status = $('#channelTrendStatus');
+  const saved = reportRecord(path);
+  if (path !== channelTrendPath || !channelTrendData) {
+    channelTrendPath = path;
+    channelTrendData = saved?.data || null;
+    if (channelTrendData) renderChannelTrend();
+    else {
+      $('#channelTrendData').hidden = true;
+      status.textContent = '正在计算渠道各期时效…';
+    }
+  }
+  try {
+    const record = await fetchReport(path);
+    if (request !== channelTrendRequest || VIEW !== 'channels') return;
+    channelTrendData = record.data;
+    renderChannelTrend();
+  } catch {
+    if (request !== channelTrendRequest || VIEW !== 'channels') return;
+    const retry = el('button', 'btn ghost sm', '重试');
+    retry.type = 'button';
+    retry.onclick = () => run(loadChannelTrend);
+    status.replaceChildren(channelTrendData ? '更新失败，显示已有趋势。 ' : '暂时无法读取渠道趋势。 ', retry);
+  }
+}
+
+function renderChannelTrend() {
+  if (!channelTrendData || VIEW !== 'channels') return;
+  const data = channelTrendData[channelTrendPeriod] || [];
+  const host = $('#channelTrendData');
+  const status = $('#channelTrendStatus');
+  host.hidden = !data.length;
+  status.textContent = data.length ? '' : '当前渠道在筛选范围内没有数据。';
+  if (!data.length) return;
+  const month = channelTrendPeriod === 'month';
+  const against = month ? '较上月' : '较上周';
+  const rate = channelDayMode === 'workday' ? 'workdayRate6' : 'rate6';
+  const rateTitle = `6 天内妥投率（${CHANNEL_DAY_LABELS[channelDayMode]}）`;
+  const label = row => month ? row.start.slice(0,7) : row.start + ' 起';
+  const days = value => value == null ? '—' : `${value.toFixed(2)} 天`;
+  const delta = (next, previous, unit, decimals) => {
+    if (!Number.isFinite(next) || !Number.isFinite(previous)) return '';
+    const diff = Number((next - previous).toFixed(decimals));
+    return `<small class="cell-sub">${against} ${diff > 0 ? '+' : ''}${diff.toFixed(decimals)}${unit}</small>`;
+  };
+  $('#channelTrendBody').innerHTML = data.map((row, index) => {
+    const prior = data[index - 1];
+    const previous = !row.partial && !prior?.partial && prior?.end === row.start ? prior : null;
+    const volumeChange = previous?.orders ? delta(100 * row.orders / previous.orders, 100, '%', 1) : '';
+    return `<tr><td><b>${esc(label(row))}</b>${row.partial ? '<span class="badge gray">部分周期</span>' : ''}</td>
+      <td>${fmt(row.orders)}${volumeChange}</td><td>${fmt(row.samples)}</td>
+      <td>${days(row.avg)}${delta(row.avg, previous?.avg, ' 天', 2)}</td>
+      <td>${days(row.p90)}${delta(row.p90, previous?.p90, ' 天', 2)}</td>
+      <td>${measure(row[rate], '%')}${delta(row[rate], previous?.[rate], ' 个百分点', 1)}</td></tr>`;
+  }).reverse().join('');
+  $('#channelTrendNote').textContent = `${month ? '按自然月' : '周日为每周起点（北京时间）'} · 相邻完整周期显示环比 · ${rateTitle}按全部有效履约单计算`;
+  void drawChannelTrendCharts(data, month, rate, rateTitle);
+}
+
+async function drawChannelTrendCharts(data, month, rate, rateTitle) {
+  try { await loadChartLibrary(); } catch { return; }
+  if (VIEW !== 'channels' || data !== channelTrendData?.[channelTrendPeriod] ||
+      rate !== (channelDayMode === 'workday' ? 'workdayRate6' : 'rate6')) return;
+  const periods = [];
+  for (const row of data) {
+    if (periods.length && periods.at(-1).end !== row.start) periods.push({start:periods.at(-1).end, missing:true});
+    periods.push(row);
+  }
+  const xLabels = periods.map(row => (month ? row.start.slice(0,7) : row.start.slice(5)) + (row.partial ? '*' : ''));
+  const common = {
+    animation: chartMotion,
+    grid: {left:5, right:8, top:34, bottom:5, containLabel:true},
+    tooltip: {...chartTip, trigger:'axis'},
+    legend: {top:0, right:5, textStyle:{color:chartTheme.muted, fontSize:11}},
+    xAxis: {type:'category', data:xLabels, axisTick:{show:false}, axisLabel:{color:chartTheme.muted, hideOverlap:true}},
+  };
+  const axis = formatter => ({type:'value', min:0, axisLabel:{color:chartTheme.muted, formatter},
+    splitLine:{lineStyle:{color:chartTheme.grid}}});
+  const line = (name, field, color, unit, yAxisIndex = 0) => ({name,type:'line',smooth:0.25,showSymbol:periods.length <= 22,
+    yAxisIndex, data:periods.map(row => row[field] ?? null), itemStyle:{color},
+    tooltip:{valueFormatter:value => measure(value,unit)}});
+  initChart('channelTrendDuration').setOption({...common, yAxis:axis('{value} 天'), series:[
+    line('平均时效','avg',chartTheme.series[2],' 天'),
+    line('P90','p90',chartTheme.ink,' 天'),
+  ]}, {notMerge:true});
+  initChart('channelTrendVolume').setOption({...common, yAxis:[axis(compactCount),
+    {...axis('{value}%'),max:100,splitLine:{show:false}}], series:[
+    {name:'履约单量',type:'bar',barMaxWidth:29,data:periods.map(row => row.orders ?? null),
+      itemStyle:{color:chartTheme.series[0],borderRadius:[3,3,0,0]},tooltip:{valueFormatter:fmt}},
+    line(rateTitle,rate,chartTheme.series[2],'%',1),
+  ]}, {notMerge:true});
+  resizeVisibleCharts();
 }
 
 function renderChannelRates(d, rows) {
@@ -2352,7 +2480,7 @@ function renderChannelRates(d, rows) {
 
 }
 
-/* ================= 渠道轨迹异常 ================= */
+/* ================= 特殊轨迹监控 ================= */
 
 let trajectorySettings;
 let editingTrackRule = null;
@@ -2363,14 +2491,6 @@ const trajectoryPath = '/api/channel-track-rules';
 const trajectoryWeekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 const readTrackWords = value => value.split(/\r?\n/).map(word => word.trim()).filter(Boolean);
 const eventWallClock = value => value ? value.replace('T', ' ').slice(0, 16) + ' ' + value.slice(-6) : '—';
-
-function setChannelMode(mode) {
-  channelMode = ME?.preview ? 'timing' : mode;
-  $('#channelTimingPane').hidden = channelMode !== 'timing';
-  $('#channelExceptionPane').hidden = channelMode !== 'exceptions';
-  $('#channelTabs').querySelectorAll('button').forEach(button =>
-    button.setAttribute('aria-pressed', String(button.dataset.pane === channelMode)));
-}
 
 function renderTrackRuleOptions() {
   const select = $('#trackExceptionRule');
@@ -2418,10 +2538,10 @@ async function loadTrackExceptions(page = 1, size = exceptionPageSize) {
     data = await latest('trackExceptions', '/api/channel-track-exceptions?' + qs(filters, page, size),
       {signal: AbortSignal.timeout(20_000)});
   } catch (error) {
-    if (VIEW === 'channels' && channelMode === 'exceptions') status.textContent = error.message;
+    if (VIEW === 'track' && trackMode === 'special-tracking') status.textContent = error.message;
     return;
   }
-  if (!data || VIEW !== 'channels' || channelMode !== 'exceptions') return;
+  if (!data || VIEW !== 'track' || trackMode !== 'special-tracking') return;
   const lastPage = Math.max(1, Math.ceil(data.total / data.size));
   if (data.page > lastPage) return loadTrackExceptions(lastPage, data.size);
   exceptionPageSize = data.size;
@@ -2532,12 +2652,6 @@ async function saveTrackRule(remove) {
 }
 
 function setupTrackExceptionControls() {
-  $('#channelTabs').onclick = event => {
-    const button = event.target.closest('[data-pane]');
-    if (!button) return;
-    setChannelMode(button.dataset.pane);
-    showView('channels');
-  };
   $('#addTrackRule').hidden = !ME.can_edit;
   $('#addTrackRule').onclick = () => run(() => openTrackRule(null));
   $('#trackRuleCards').onclick = event => {
@@ -3764,8 +3878,8 @@ function closeDrawer() {
 /* ================= 启动 ================= */
 run(async function boot() {
   const v = location.hash.slice(1);
-  if (v === 'alerts' || v === 'archive') setTrackMode(v);
-  if (v === 'channel-exceptions') setChannelMode('exceptions');
+  if (['alerts','archive','special-tracking','channel-exceptions'].includes(v))
+    setTrackMode(v === 'channel-exceptions' ? 'special-tracking' : v);
   if (v === 'regions-other') setRegionMarket('other');
   displayView(routeView(v));
   ME = await api('/api/me');
@@ -3773,8 +3887,8 @@ run(async function boot() {
     dataRevision = ME.dataRevision;
     revisionCheckedAt = performance.now();
   }
-  if (v === 'alerts' || v === 'archive') setTrackMode(v);
-  if (v === 'channel-exceptions') setChannelMode('exceptions');
+  if (['alerts','archive','special-tracking','channel-exceptions'].includes(v))
+    setTrackMode(v === 'channel-exceptions' ? 'special-tracking' : v);
   $('#opsAssistant').hidden = !ME.opsAssistant;
   $('#openChannelGroups').hidden = !ME.can_edit;
   $('#channelGroupAction').hidden = !ME.can_edit;
@@ -3782,7 +3896,7 @@ run(async function boot() {
   $('#logout').hidden = ME.preview || ME.openTest;
   if (!ME.preview) $('#currentChannelTip').textContent += ' · 点击渠道查看履约单';
   if (ME.preview) {
-    for (const selector of ['[data-v="rules"]', '[data-v="us"]', '#channelTabs', '#openPending',
+    for (const selector of ['[data-v="rules"]', '[data-v="us"]', '#openPending',
       '#trackTabs', '#showDetailed', '#exportTrack', '#trackAlertHeading']) {
       $(selector).hidden = true;
     }
@@ -3799,6 +3913,19 @@ run(async function boot() {
     if (regionSegmentsVisible) loadVisibleRegionSegments();
   }, {rootMargin:'120px 0px'}).observe($('#regionSegmentsPanel'));
   setupTrackExceptionControls();
+  new IntersectionObserver(([entry]) => {
+    channelTrendVisible = entry.isIntersecting;
+    if (channelTrendVisible) run(loadChannelTrend);
+  }, {rootMargin:'100px 0px'}).observe($('#channelTrend'));
+  $('#channelTrendKey').onchange = () => run(loadChannelTrend);
+  $('#channelTrendPeriod').onclick = event => {
+    const selected = event.target.closest('[data-period]');
+    if (!selected || selected.dataset.period === channelTrendPeriod) return;
+    channelTrendPeriod = selected.dataset.period;
+    $('#channelTrendPeriod').querySelectorAll('button').forEach(button =>
+      button.setAttribute('aria-pressed', String(button === selected)));
+    renderChannelTrend();
+  };
   const periods = [...document.querySelectorAll('#dailyPeriod button')];
   periods.forEach(button => button.onclick = () => {
     if (trend.span === Number(button.dataset.days)) return;
@@ -3902,6 +4029,7 @@ run(async function boot() {
     syncChannelTimingControls();
     syncFilterPreset(CF);
     if (renderedChannels) renderChannelRates(renderedChannels, channelRows);
+    renderChannelTrend();
   };
   $('#channelBasis').onclick = event => {
     const button = event.target.closest('button[data-basis]');

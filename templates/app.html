@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261127-country-p90">
+<link rel="stylesheet" href="/static/app.css?v=channel-period-trends">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -113,7 +113,7 @@
           <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg></span>C 端承运商单量</h2><p class="tip icon-caption">单量前 10</p></div></div><div id="cLastMile"></div></section>
         </div>
         <div class="grid overview-breakdown">
-          <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip" id="monthlyScope">按出库月份统计 · 出库 → 妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
+          <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip" id="monthlyScope">按出库月份统计 · 出库 → 妥投</p></div></div><div class="monthly-chart-scroll"><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></div></section>
           <section class="card plot-card wide" aria-labelledby="countryTimingTitle">
             <div class="ct"><div>
               <h2 id="countryTimingTitle"><span class="section-icon tone-green"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span>各国平均时效</h2>
@@ -155,6 +155,7 @@
           <button type="button" class="tab-toned tone-cyan" data-mode="tracking" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>运单轨迹</button>
           <button type="button" class="tab-toned tone-warn" data-mode="alerts" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg>预警处理 <span class="nav-count" id="alertTabCount"></span></button>
           <button type="button" class="tab-toned tone-violet" data-mode="archive" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg>归档列表</button>
+          <button type="button" class="tab-toned tone-warn" data-mode="special-tracking" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg>特殊轨迹监控</button>
         </div>
         <div class="workspace-stack" id="trackingPane">
         <div class="filters" id="trackFilters"></div>
@@ -209,15 +210,41 @@
           </div>
           <div class="pager" id="alertPager"></div>
         </div>
+        <div class="workspace-stack" id="specialTrackingPane" hidden>
+          <section class="card plot-card" aria-labelledby="trackRulesTitle">
+            <div class="ct">
+              <div><h2 id="trackRulesTitle">特殊轨迹规则</h2><p class="tip">按入库轨迹核对 · 超过截止时间后标记</p></div>
+              <button type="button" class="btn ghost sm" id="addTrackRule" hidden>新增规则</button>
+            </div>
+            <div id="trackRuleCards" class="trajectory-rule-cards"></div>
+            <p class="tip track-rule-note">3PE 常见节点 · 国内揽收 → 出口扫描 → 起飞 → 落地 → 进口扫描 → 目的地设施离站（尾程提取参考）</p>
+          </section>
+          <section class="card table-card" aria-labelledby="trackExceptionTitle">
+            <div class="ct table-head"><div><h2 id="trackExceptionTitle">命中清单</h2>
+              <p class="tip" id="trackExceptionStatus" role="status">正在核对轨迹…</p></div>
+              <div class="toolbar track-exception-filters">
+                <input type="search" id="trackExceptionSearch" class="inline-search" placeholder="履约单号或运单号" aria-label="搜索履约单号或运单号">
+                <select id="trackExceptionRule" aria-label="特殊轨迹规则"><option value="">全部规则</option></select>
+                <select id="trackExceptionState" aria-label="异常类型"><option value="">全部命中</option>
+                  <option value="late">节点超时</option><option value="missing">超时未见节点</option></select>
+                <select id="trackExceptionDays" aria-label="按出库日期回看"><option value="7">近 7 天出库</option>
+                  <option value="14">近 14 天出库</option><option value="30" selected>近 30 天出库</option>
+                  <option value="60">近 60 天出库</option><option value="90">近 90 天出库</option></select>
+                <button type="button" class="btn ghost sm" id="refreshTrackExceptions">刷新</button>
+              </div>
+            </div>
+            <div class="tblwrap"><table class="tbl track-exception-table">
+              <thead><tr><th>履约单 / 运单号</th><th>命中规则</th><th>仓库 / 当前渠道</th><th>起始节点（当地）</th>
+                <th>承诺截止（当地）</th><th>实际节点（按起始地时区）</th></tr></thead>
+              <tbody id="trackExceptionBody"></tbody></table></div>
+          </section>
+          <div class="pager" id="trackExceptionPager"></div>
+        </div>
       </section>
 
       <!-- ============ 渠道时效 ============ -->
       <section class="view" id="v-channels">
         <div class="page-head"><div><h1>渠道时效</h1><p>签收时效与 SLA 对比</p></div></div>
-        <div class="tabs" id="channelTabs" aria-label="渠道时效分类">
-          <button type="button" class="tab-toned tone-blue" data-pane="timing" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg>时效对比</button>
-          <button type="button" class="tab-toned tone-warn" data-pane="exceptions" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg>轨迹异常</button>
-        </div>
         <div class="workspace-stack" id="channelTimingPane">
         <section class="report-controls" aria-label="筛选和对比口径">
         <div class="filters" id="channelFilters"></div>
@@ -257,6 +284,30 @@
           <div class="channel-compare-expand" id="channelCompareExpand" hidden><button type="button" id="channelCompareToggle" class="btn ghost sm"></button></div>
           <p class="tip compare-empty" id="channelChartEmpty" hidden>暂无符合条件的渠道。</p>
         </section>
+        <section class="card plot-card channel-trend" id="channelTrend" aria-labelledby="channelTrendTitle">
+          <div class="ct table-head">
+            <div><h2 id="channelTrendTitle">单渠道时效趋势</h2><p class="tip" id="channelTrendScope"></p></div>
+            <div class="toolbar">
+              <label class="tip" for="channelTrendKey">渠道</label><select id="channelTrendKey"></select>
+              <div class="tabs period-tabs" id="channelTrendPeriod" role="group" aria-label="趋势统计周期">
+                <button type="button" data-period="month" aria-pressed="true">按月</button>
+                <button type="button" data-period="week" aria-pressed="false">按周</button>
+              </div>
+            </div>
+          </div>
+          <p class="tip" id="channelTrendStatus" role="status">正在等待渠道数据…</p>
+          <div id="channelTrendData" hidden>
+            <div class="channel-trend-charts">
+              <div><h3>平均与 P90 时效</h3><div class="chart" id="channelTrendDuration" role="img" aria-label="平均时效与 P90 趋势"></div></div>
+              <div><h3>履约单量与 6 天内妥投率</h3><div class="chart" id="channelTrendVolume" role="img" aria-label="履约单量与 6 天内妥投率趋势"></div></div>
+            </div>
+            <div class="tblwrap channel-trend-detail"><table class="tbl">
+              <thead><tr><th>统计周期</th><th>履约单量</th><th>有效样本</th><th>平均时效</th><th>P90</th><th>6 天内妥投率</th></tr></thead>
+              <tbody id="channelTrendBody"></tbody>
+            </table></div>
+            <p class="tip channel-trend-note" id="channelTrendNote"></p>
+          </div>
+        </section>
         <div class="card table-card">
           <div class="ct table-head"><div><h2 id="channelPerformanceTitle">C 端渠道表现对比</h2><p class="tip" id="channelDetailedRateScope">自然日妥投率按全部有效单 · SLA 按当前渠道配置及有效签收样本 · 超时占比按可计时在途单</p></div></div>
           <div class="channel-period" id="channelTablePeriod" aria-label="表格时间范围"></div>
@@ -282,36 +333,6 @@
           </div>
         </div>
         </div>
-        </div>
-        <div class="workspace-stack" id="channelExceptionPane" hidden>
-          <section class="card plot-card" aria-labelledby="trackRulesTitle">
-            <div class="ct">
-              <div><h2 id="trackRulesTitle">轨迹异常规则</h2><p class="tip">按入库轨迹核对 · 超过截止时间后标记</p></div>
-              <button type="button" class="btn ghost sm" id="addTrackRule" hidden>新增规则</button>
-            </div>
-            <div id="trackRuleCards" class="trajectory-rule-cards"></div>
-            <p class="tip track-rule-note">3PE 常见节点 · 国内揽收 → 出口扫描 → 起飞 → 落地 → 进口扫描 → 目的地设施离站（尾程提取参考）</p>
-          </section>
-          <section class="card table-card" aria-labelledby="trackExceptionTitle">
-            <div class="ct table-head"><div><h2 id="trackExceptionTitle">命中清单</h2>
-              <p class="tip" id="trackExceptionStatus" role="status">正在核对轨迹…</p></div>
-              <div class="toolbar track-exception-filters">
-                <input type="search" id="trackExceptionSearch" class="inline-search" placeholder="履约单号或运单号" aria-label="搜索履约单号或运单号">
-                <select id="trackExceptionRule" aria-label="轨迹异常规则"><option value="">全部规则</option></select>
-                <select id="trackExceptionState" aria-label="异常类型"><option value="">全部命中</option>
-                  <option value="late">节点超时</option><option value="missing">超时未见节点</option></select>
-                <select id="trackExceptionDays" aria-label="按出库日期回看"><option value="7">近 7 天出库</option>
-                  <option value="14">近 14 天出库</option><option value="30" selected>近 30 天出库</option>
-                  <option value="60">近 60 天出库</option><option value="90">近 90 天出库</option></select>
-                <button type="button" class="btn ghost sm" id="refreshTrackExceptions">刷新</button>
-              </div>
-            </div>
-            <div class="tblwrap"><table class="tbl track-exception-table">
-              <thead><tr><th>履约单 / 运单号</th><th>命中规则</th><th>仓库 / 当前渠道</th><th>起始节点（当地）</th>
-                <th>承诺截止（当地）</th><th>实际节点（按起始地时区）</th></tr></thead>
-              <tbody id="trackExceptionBody"></tbody></table></div>
-          </section>
-          <div class="pager" id="trackExceptionPager"></div>
         </div>
       </section>
 
@@ -399,7 +420,7 @@
             <summary>统计与地图口径</summary>
             <p>支付取客户下单时间，创建取 ERP 履约单创建时间。上网取 17TRACK 首条有效揽收或运输扫描。统计前换算成北京时间，起止齐全且耗时大于零才纳入时效样本。</p>
             <p>妥投优先取 17TRACK，缺失时按仓库时间口径用 WMS 补算。P90、P95 表示约 90%、95% 的有效样本在该时长内完成对应阶段。地图颜色按当前范围内的实际数值分级，区间见图例。</p>
-            <p>美国按万邑通七区划分，阿拉斯加和夏威夷归太平洋，美国属地单列。优先取收件州，缺失时用 ZIP 邮编补齐。其他国家按目的国统计。地图未绘的小地区可在明细查看。 <a id="regionMapSource" href="https://github.com/apache/echarts-examples/blob/gh-pages/public/data/asset/geo/USA.json" target="_blank" rel="noopener noreferrer">地图数据</a></p>
+            <p>美国按万邑通业务区域划分，阿拉斯加归美国属地，夏威夷归太平洋。优先取收件州，缺失时用 ZIP 邮编补齐。其他国家按目的国统计。地图未绘的小地区可在明细查看。 <a id="regionMapSource" href="https://github.com/apache/echarts-examples/blob/gh-pages/public/data/asset/geo/USA.json" target="_blank" rel="noopener noreferrer">地图数据</a></p>
           </details>
         </div>
       </section>
@@ -698,6 +719,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261127-country-p90" defer></script>
+<script src="/static/app.js?v=channel-period-trends" defer></script>
 </body>
 </html>

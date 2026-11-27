@@ -1,12 +1,24 @@
+from datetime import date, datetime
 import unittest
 
 import duckdb
 
 from app.channel_timing import workday_minutes
-from app.pages_api import DELIVERY_WINDOWS, delivery_rates, delivery_window_counts
+from app.pages_api import DELIVERY_WINDOWS, _period_is_partial, delivery_rates, delivery_window_counts
 
 
 class DeliveryRatesTest(unittest.TestCase):
+    def test_trend_marks_cutoff_and_calendar_filter_edges_partial(self):
+        first, latest = datetime(2026, 1, 1, 1), datetime(2026, 11, 27, 10)
+        def partial(start, end, bounds=(None, None), months=(), weeks=()):
+            return _period_is_partial(date.fromisoformat(start), date.fromisoformat(end),
+                                      first, latest, bounds, months, weeks)
+        self.assertFalse(partial("2026-10-01", "2026-11-01", months=("2026-10",)))
+        self.assertTrue(partial("2026-11-01", "2026-12-01"))
+        self.assertTrue(partial("2026-09-27", "2026-10-04", months=("2026-10",)))
+        self.assertTrue(partial("2026-10-01", "2026-11-01", (datetime(2026, 10, 1, 8), None)))
+        self.assertTrue(partial("2026-10-01", "2026-11-01", weeks=((date(2026, 10, 4), date(2026, 10, 11)),)))
+
     def report(self, durations):
         with duckdb.connect() as db:
             total, *counts = db.execute(f"""

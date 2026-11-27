@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from functools import lru_cache
 from typing import Literal
 from unicodedata import normalize
@@ -17,7 +17,7 @@ from .carrier_delivery import (
     DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts, transport_minutes,
 )
 from .channel_timing import ONLINE_START, TimingBasis, timing_start, transport_archive_version, workday_minutes
-from .filter_time import DATE_BASIS_FIELDS, DEFAULT_DATE_BASIS, DateBasis, time_bounds, week_filter
+from .filter_time import DATE_BASIS_FIELDS, DEFAULT_DATE_BASIS, REPORTING_WEEKS, DateBasis, time_bounds, week_filter
 from .order_time import delivery_facts
 from .tracking_archive import fill_local_times
 from .waybill import key_sql, normalized as normalize_waybill
@@ -661,6 +661,99 @@ def track(request: Request,
 
 # ---------------------------------------------------------------- 渠道时效
 
+def _channel_duration(basis, online_start):
+    start = {"paid": "o.支付时间", "shipped": "o.签出时间", "online": online_start}[basis]
+    return start, "o.物流分钟" if basis == "shipped" else elapsed_minutes(start, f"o.{DELIVERED_BJ}")
+
+
+@router.get("/channel-trends")
+def channel_trends(request: Request, key: str = Query(..., min_length=1, max_length=240),
+                   month: str = "", wh: str = "", pf: str = "", cr: str = "", cn: str = "",
+                   start: str = "", end: str = "", lastmile: str = "", channel: str = "",
+                   week: str = "", basis: TimingBasis = "shipped", date_basis: DateBasis = DEFAULT_DATE_BASIS,
+                   channel_group: str = "", dimension: Literal["lastmile", "group"] = "lastmile"):
+    core.require_reader(request)
+    date_basis = date_basis or DEFAULT_DATE_BASIS
+    with core.ops() as ops:
+        groups = channel_groups.load(ops)["groups"] if channel_group or dimension == "group" else []
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel,
+                       week=week, date_basis=date_basis, require_time=True,
+                       group_selection=channel_groups.filter_values(channel_group, groups))
+    if dimension == "group":
+        selected, values = channel_groups.predicate("o.当前渠道",
+                                                    channel_groups.filter_values(json.dumps([key]), groups))
+        if selected:
+            cond += f" AND {selected}"
+            args.extend(values)
+    else:
+        cond += " AND coalesce(nullif(o.C端承运商,''),'__empty__')=?"
+        args.append(key)
+    months = tuple(core.filter_values(month))
+    weeks = tuple(REPORTING_WEEKS[value] for value in core.filter_values(week))
+    return _channel_trends(core.snapshot_key(), transport_archive_version() if basis == "online" else None,
+                           date_basis, basis, cond, tuple(args), time_bounds(start, end), months, weeks)
+
+
+def _period_is_partial(period_start, period_end, first, latest, bounds, months, weeks):
+    lower, upper = (datetime.combine(bound, time.min) if bound and not isinstance(bound, datetime)
+                    else bound for bound in bounds)
+    start = datetime.combine(period_start, time.min)
+    end = datetime.combine(period_end, time.min)
+    if period_start < first.date() or latest < end or (lower and lower > start) or (upper and upper < end):
+        return True
+    for index in range((period_end - period_start).days):
+        day = period_start + timedelta(days=index)
+        if months and day.strftime("%Y-%m") not in months:
+            return True
+        if weeks and not any(left <= day < right for left, right in weeks):
+            return True
+    return False
+
+
+@lru_cache(maxsize=64)
+def _channel_trends(_snapshot, archive, date_basis, basis, cond, args, bounds, months, weeks):
+    field = DATE_BASIS_FIELDS[date_basis]
+    with core.duck() as con:
+        raw_facts = core.active_facts(core.order_facts(con))
+        first, latest = con.execute(f"SELECT min({field}),max({field}) FROM {raw_facts}").fetchone()
+        facts = analytics_snapshot.facts(con)
+        join, online_start = analytics_snapshot.scan_source(con, archive) if basis == "online" else ("", ONLINE_START)
+        report_start, minutes = _channel_duration(basis, online_start)
+        cursor = con.execute(f"""
+            WITH scoped AS (
+                SELECT date_trunc('month',o.{field})::DATE AS month_start,
+                       time_bucket(INTERVAL '7 days',o.{field}::DATE,DATE '2000-01-02') AS week_start,
+                       {minutes} AS duration_min,{report_start} AS report_start,o.{DELIVERED_BJ} AS delivered
+                FROM {facts} o {join} WHERE o.{field} IS NOT NULL{cond}
+            ), measured AS (
+                SELECT *,CASE WHEN duration_min>0 THEN {workday_minutes("report_start", "delivered")} END AS workday_min
+                FROM scoped
+            )
+            SELECT grouping(week_start) AS by_month,coalesce(month_start,week_start) AS period,
+                   count(*) AS orders,count(*) FILTER (WHERE duration_min>0) AS samples,
+                   round(avg(duration_min) FILTER (WHERE duration_min>0)/1440.0,2) AS avg,
+                   round(quantile_cont(duration_min,0.90) FILTER (WHERE duration_min>0)/1440.0,2) AS p90,
+                   count(*) FILTER (WHERE duration_min>0 AND duration_min<=8640) AS within6,
+                   count(*) FILTER (WHERE workday_min>=0 AND workday_min<=8640) AS workdayWithin6
+            FROM measured GROUP BY GROUPING SETS ((month_start),(week_start)) ORDER BY 1,2
+        """, list(args))
+        names = [column[0] for column in cursor.description]
+        records = [dict(zip(names, row)) for row in cursor.fetchall()]
+    trend = {"month": [], "week": [], "dateBasis": date_basis, "basis": basis}
+    for row in records:
+        period = row.pop("period")
+        by_month = row.pop("by_month")
+        if by_month:
+            end = (period.replace(day=28) + timedelta(days=4)).replace(day=1)
+        else:
+            end = period + timedelta(days=7)
+        partial = _period_is_partial(period, end, first, latest, bounds, months, weeks)
+        row["rate6"] = round(100.0 * row.pop("within6") / row["orders"], 1)
+        row["workdayRate6"] = round(100.0 * row.pop("workdayWithin6") / row["orders"], 1)
+        trend["month" if by_month else "week"].append({**row, "start": period, "end": end, "partial": partial})
+    return core.clean(trend)
+
+
 @router.get("/channels")
 def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
              cn: str = "", min_n: int = Query(100, ge=1), cr: str = "", lastmile: str = "",
@@ -699,8 +792,7 @@ def _channel_report(_snapshot, _archive, saved, basis, cond, args, date_basis, d
         sla_sql, sla_values = rules.sla_table(slas)
         sla_scans = any(config["basis"] == "online" for config in slas.values())
         scan_join, online_start = analytics_snapshot.scan_source(con, _archive) if basis == "online" or sla_scans else ("", ONLINE_START)
-        report_start = {"paid": "o.支付时间", "shipped": "o.签出时间", "online": online_start}[basis]
-        minutes = "o.物流分钟" if basis == "shipped" else elapsed_minutes(report_start, f"o.{DELIVERED_BJ}")
+        report_start, minutes = _channel_duration(basis, online_start)
         sla_start = timing_start("tgt.basis", sla_scans, online_start)
         active = f"o.已签收=0 AND o.{DELIVERED_UTC} IS NULL AND (o.状态 IS DISTINCT FROM '已完成' OR o.签收时间 IS NOT NULL) AND o.签出时间 IS NOT NULL"
         group_join = ""

@@ -29,6 +29,15 @@ def regional_facts():
 
 
 class RegionalAnalysisTest(unittest.TestCase):
+    def test_saved_alaska_region_uses_the_current_geography(self):
+        with regional_facts() as con:
+            con.execute("UPDATE fct_analytics SET analytics_state='AK' WHERE 履约单号='A'")
+            with patch("app.core.duck", return_value=con):
+                report = us_analysis.report.__wrapped__(None, "shipped", "shipped", "lastmile", "", (), "")
+        self.assertEqual(report["geography"]["AK"]["region"], "美国属地")
+        self.assertEqual(report["regions"]["美国属地"]["orders"], 1)
+        self.assertEqual(report["regions"]["太平洋"]["orders"], 1)
+
     @patch("app.core.duck", side_effect=regional_facts)
     def test_online_samples_and_p95_use_the_same_durations(self, _duck):
         report = us_analysis.report.__wrapped__(None, "shipped", "ship_pickup", "lastmile", "", (), "")

@@ -312,6 +312,17 @@ button:focus-visible, a:focus-visible, input:is([type=checkbox],[type=radio],[ty
 #channelLoading.channel-refresh { padding: 6px 11px; color: var(--ink3); font-size: 12px; }
 .channel-comparison { padding: 0; overflow: hidden; }
 .channel-comparison .table-head { padding: 16px 18px 0; }
+.channel-trend-charts { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin: 12px 0; }
+.channel-trend-charts > div { border: 1px solid var(--line); border-radius: 8px; padding: 9px 8px 4px; min-width: 0; }
+.channel-trend-charts h3 { font-size: 13px; margin: 2px 6px; }
+.channel-trend-charts .chart { height: 220px; }
+.channel-trend .toolbar select { max-width: min(240px, 68vw); }
+.channel-trend-detail { max-height: 320px; }
+.channel-trend-detail th, .channel-trend-detail td { white-space: nowrap; }
+.channel-trend-detail td:not(:first-child), .channel-trend-detail th:not(:first-child) { text-align: right; }
+.channel-trend-detail .badge { margin-left: 6px; }
+.channel-trend-note { margin-top: 7px; }
+@media (max-width: 760px) { .channel-trend-charts { grid-template-columns: minmax(0,1fr); } }
 .channel-period { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 16px 12px; }
 .channel-period span {
   padding: 3px 8px; border-radius: 5px; background: #edf2fc; color: var(--ink2);
@@ -361,7 +372,8 @@ button:focus-visible, a:focus-visible, input:is([type=checkbox],[type=radio],[ty
 .overview-mixes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .overview-breakdown { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 #cDaily { height: 221px; }
-#cMonthly { height: 238px; }
+.monthly-chart-scroll { overflow-x: auto; }
+#cMonthly { height: 250px; }
 .card, .settings-dialog, .drawer { background: var(--card); }
 .card { border-radius: 12px; }
 .card h2 { font-size: 15px; }

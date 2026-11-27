@@ -109,11 +109,19 @@ def _build_scope(con, market, dimension, cond, args, settings, level="all", plac
         channel = "coalesce(nullif(trim(o.C端承运商),''), '未填写 C 端渠道')"
     params = list(args) if stored else []
     if stored:
-        state, region = ("o.analytics_state", "o.analytics_region") if market == "us" else ("o.目的国", "o.目的国")
+        if market == "us":
+            states, _ = _state_reference()
+            zones = [(code, state["region"]) for code, state in states.items()]
+            con.register("regional_state_zones", pd.DataFrame(zones, columns=["code", "region"]))
+            geography_join = "LEFT JOIN regional_state_zones z ON z.code=o.analytics_state"
+            state, region = "o.analytics_state", "coalesce(z.region,o.analytics_region)"
+        else:
+            geography_join = ""
+            state, region = "o.目的国", "o.目的国"
         scope = f"""SELECT o.履约单号,o.单号归一,o.目的国,o.目的国中文,o.支付时间,o.创建时间,o.签出时间,
                          o.{DELIVERED_BJ},o.{DELIVERY_SOURCE},o.analytics_online,
                          {state} AS geo_state,{region} AS geo_region,{channel} AS geo_channel
-                    FROM {orders} o {group_join}
+                    FROM {orders} o {group_join} {geography_join}
                     WHERE {country_filter} AND nullif(trim(o.目的国),'') IS NOT NULL {cond}"""
     else:
         con.execute(f"""CREATE TEMP TABLE regional_orders AS SELECT o.* FROM {orders} o
