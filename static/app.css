@@ -436,8 +436,8 @@ button.rank-row:hover { background: var(--surface-muted); }
 .rank-track { display: block; height: 5px; border-radius: 5px; background: var(--surface-muted); }
 .rank-track span { display: block; height: 100%; border-radius: inherit; background: var(--brand); }
 .country-timing-table { max-height: min(390px, 58vh); }
-.country-timing-table th:first-child { width: 24%; }
-.country-timing-table th:nth-child(2) { width: 42%; }
+.country-timing-table th:first-child { width: 20%; }
+.country-timing-table th:nth-child(2) { width: 34%; }
 .country-timing-table .timing-value { display: flex; align-items: center; gap: 12px; }
 .country-timing-table .rank-track { flex: 1; min-width: 24px; }
 .country-timing-table .timing-value strong { min-width: 68px; text-align: right; }

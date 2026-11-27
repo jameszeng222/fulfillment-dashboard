@@ -131,7 +131,7 @@ function reportPath(path) {
 
 function reportStorageKey(path) {
   const version = /^\/api\/channels(?:\?|$)/.test(path) ? 'channel-workday-rates:' :
-    /^\/api\/overview(?:\?|$)/.test(path) ? 'country-timing:' :
+    /^\/api\/overview(?:\?|$)/.test(path) ? 'country-timing-p90:' :
       /^\/api\/regional-analysis(?:\?|$)/.test(path) ? 'regional-online-p95:' : '';
   return reportCacheBase + encodeURIComponent(`${ME?.username || 'preview'}:${ME?.role || 'preview'}:${ME?.preview ? 'preview' : 'full'}`) + ':' + version + path;
 }
@@ -1063,23 +1063,25 @@ function drawCountryTiming(rows, filters) {
     host.innerHTML = `<p class="rank-empty tip">${rows ? '当前筛选无目的国家数据' : '当前快照暂无各国时效数据'}</p>`;
     return;
   }
-  const data = sort.value === 'days' ?
-    [...rows].sort((left, right) => (right.days ?? -1) - (left.days ?? -1)) : rows;
+  const metric = sort.value;
+  const data = metric === 'orders' ? rows :
+    [...rows].sort((left, right) => (right[metric] ?? -1) - (left[metric] ?? -1));
   const max = Math.max(1, ...rows.map(row => row.days || 0));
+  const days = value => value == null ? '—' : `${value.toFixed(2)} 天`;
   host.innerHTML = `<div class="tblwrap country-timing-table"><table class="tbl">
-    <thead><tr><th>目的国家</th><th>平均时效</th><th>有效时效样本</th><th>履约单量</th></tr></thead>
+    <thead><tr><th>目的国家</th><th>平均时效</th><th title="约 90% 的有效样本在此时长内妥投">P90 时效</th><th>有效时效样本</th><th>履约单量</th></tr></thead>
     <tbody>${data.map((row, index) => {
       const name = esc(row.name || row.code);
       return `<tr><td>${ME.preview ? `<b>${name}</b>` :
         `<button type="button" class="order-link" data-country-timing="${index}">${name}</button>`}</td>
         <td><span class="timing-value"><span class="rank-track" aria-hidden="true">
           <span style="width:${(row.days || 0) * 100 / max}%"></span></span>
-          <strong>${row.days == null ? '—' : `${row.days.toFixed(2)} 天`}</strong></span></td>
-        <td>${fmt(row.samples)}</td><td>${fmt(row.orders)}</td></tr>`;
+          <strong>${days(row.days)}</strong></span></td>
+        <td><strong>${days(row.p90)}</strong></td><td>${fmt(row.samples)}</td><td>${fmt(row.orders)}</td></tr>`;
     }).join('')}</tbody></table></div>`;
   host.onclick = event => {
     const button = event.target.closest('[data-country-timing]');
-    if (button) openTracking({...filters, cn: data[Number(button.dataset.countryTiming)].code});
+    if (button) openCountryRegion(data[Number(button.dataset.countryTiming)].code, filters);
   };
   sort.onchange = () => drawCountryTiming(rows, filters);
 }
@@ -2575,6 +2577,7 @@ function setupTrackExceptionControls() {
 let UF = null;
 const regionFiltersByMarket = {};
 const regionTimingByMarket = {};
+let regionDrilldown = null;
 let usReport = null;
 const usMapLoads = new Map();
 let usMapPlaces = new Map();
@@ -2597,11 +2600,24 @@ const regionalDuration = (minutes, basis) => Number.isFinite(minutes) ?
 const usDay = value => Number.isFinite(value) ? regionalDuration(value * 1440, usReport.basis) : '—';
 const usPercent = value => value > 0 && value < 0.1 ? '&lt;0.1%' : measure(value, '%');
 const usShare = (part, total) => total > 0 ? 100 * part / total : null;
+const isUsCountry = code => ['us', 'usa', 'united states', 'united states of america'].includes(code.trim().toLowerCase());
+
+function openCountryRegion(country, filters) {
+  const market = isUsCountry(country) ? 'us' : 'other';
+  setRegionMarket(market);
+  usView.place = null;
+  usView.channel = '';
+  $('#usSearch').value = '';
+  $('#usResults').hidden = true;
+  $('#usStatus').textContent = '正在读取区域履约数据…';
+  regionDrilldown = {market, filters: {...filters, cn: country}};
+  showView('us');
+}
 
 async function loadUs() {
   const market = usView.market;
   const scope = 'region-' + market;
-  if (!UF && !defaultFilterPreset(scope)) {
+  if (!UF && !regionDrilldown && !defaultFilterPreset(scope)) {
     fetchReport(reportPath('/api/regional-analysis?' + qs({date_basis:DEFAULT_DATE_BASIS, market,
       basis:usView.basis, dimension:usView.dimension}))).catch(() => {});
   }
@@ -2613,8 +2629,7 @@ async function loadUs() {
     const defs = commonDateFilters().filter(def => !isUS || def.key !== 'cn');
     UF = regionFiltersByMarket[market] = makeFilters(host, defs, () => scheduleReport('us',loadUs));
     if (!isUS) {
-      const others = (META.filterOptions.cn || []).filter(option =>
-        !['us', 'usa', 'united states', 'united states of america'].includes(option.v.trim().toLowerCase()));
+      const others = (META.filterOptions.cn || []).filter(option => !isUsCountry(option.v));
       UF.cn.setOptions(others, others.reduce((sum, option) => sum + option.n, 0), false);
     }
     updateDateOptions(UF, UF.date_basis.value);
@@ -2628,6 +2643,12 @@ async function loadUs() {
       },
       describeExtra:({basis, dimension}) => [usTimingLabel[basis], {current:'当前渠道', ...CHANNEL_DIMENSIONS}[dimension]].filter(Boolean),
     });
+  }
+  if (regionDrilldown?.market === market) {
+    applySavedFilters(UF, regionDrilldown.filters, {date_basis: DEFAULT_DATE_BASIS});
+    regionDrilldown = null;
+    usView.basis = $('#usBasis').value = 'shipped';
+    syncFilterPreset(UF);
   }
   const filters = readF(UF);
   updateDateOptions(UF, filters.date_basis);
@@ -2685,13 +2706,15 @@ function renderUsReport() {
   const isRegion = !other && usView.level === 'regions';
   const places = isRegion ? regions : states;
   const selected = usView.place === null ? national : places[usView.place];
-  const whole = other ? '其他国家合计' : '全美';
+  const country = other && regionalFilters.cn?.length === 1 ? regionalFilters.cn[0] : null;
+  const countryLabel = country && (usReport.geography[country]?.label || UF?.cn?.labelFor(country) || country);
+  const whole = other ? countryLabel || '其他国家合计' : '全美';
   const scope = usView.place === null ? whole : usPlaceLabel(usView.place);
   const mix = usView.place === null ? channels : selected?.channels || [];
   const selectedChannel = usView.channel;
   const tail = usView.metric === 'p95' ? 'p95' : 'p90';
   $('#usKpi').innerHTML = [
-    [other ? '其他国家履约单' : '美国履约单', fmt(national.orders), '单量含在途单','globe','blue'],
+    [other ? `${countryLabel || '其他国家'}履约单` : '美国履约单', fmt(national.orders), '单量含在途单','globe','blue'],
     ['有效时效样本', fmt(national.samples), earlySegments.includes(usReport.basis) ?
       `有效覆盖 ${usPercent(usShare(national.samples, national.orders))}` : `含 WMS 补算 ${fmt(national.fallback)} 单`,'check','green'],
     ['平均时效', usDay(national.avg), usTimingLabel[usReport.basis],'clock','cyan'],
@@ -3039,6 +3062,7 @@ function setupUsControls() {
 
 function setRegionMarket(market) {
   if (market === usView.market) return;
+  regionDrilldown = null;
   regionTimingByMarket[usView.market] = {basis:usView.basis, dimension:usView.dimension};
   usView.market = market;
   UF = regionFiltersByMarket[market] || null;

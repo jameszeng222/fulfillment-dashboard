@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261127-country-timing">
+<link rel="stylesheet" href="/static/app.css?v=20261127-country-p90">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -121,6 +121,7 @@
             </div>
               <select id="countryTimingSort" aria-label="各国平均时效排序" hidden>
                 <option value="orders">按履约单量</option><option value="days">按平均时效（从慢到快）</option>
+                <option value="p90">按 P90（从慢到快）</option>
               </select>
             </div>
             <div id="countryTiming"></div>
@@ -697,6 +698,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261127-country-timing-alert-tracks" defer></script>
+<script src="/static/app.js?v=20261127-country-p90" defer></script>
 </body>
 </html>
