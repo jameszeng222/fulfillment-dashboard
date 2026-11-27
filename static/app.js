@@ -397,10 +397,14 @@ function exportCsv(name, fields, rows) {
   };
   const content = [fields.map(([label]) => label), ...rows.map(row => fields.map(([, get]) => get(row)))]
     .map(row => row.map(csvCell).join(',')).join('\r\n');
-  const url = URL.createObjectURL(new Blob(['\ufeff', content], { type: 'text/csv;charset=utf-8' }));
+  downloadBlob(new Blob(['\ufeff', content], { type: 'text/csv;charset=utf-8' }), name + '.csv');
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = name + '.csv';
+  link.download = name;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -1266,6 +1270,7 @@ let trackPageSize = 40;
 let renderedTrack = null;
 let alertRows = [];
 let alertPage = 1;
+let renderedAlertParams = null;
 const trackingGroups = () => [...new Map(META.trackStatuses.map(row => [row.status, row.label]))]
   .map(([v, t]) => ({ v, t }));
 const ruleOptions = () => META.ruleOptions || META.rules.map(row => ({ v: row.rule, t: row.rule_cn }));
@@ -1302,6 +1307,7 @@ function setTrackMode(mode) {
     $('#alertChips').replaceChildren();
     $('#alertPager').replaceChildren();
     alertRows = [];
+    renderedAlertParams = null;
   }
   trackMode = mode;
   if (mode !== 'tracking') AF = alertFiltersByMode[mode] || null;
@@ -1719,11 +1725,14 @@ async function loadAlerts(page = 1) {
   await loadMeta();
   if (VIEW !== 'track' || trackMode !== mode) return;
   prepareAlerts();
-  const d = await latest('alerts', '/api/alerts?' + qs({ ...readF(AF), view: archived ? 'archive' : 'pending' }, page, 40));
+  const params = qs({ ...readF(AF), view: archived ? 'archive' : 'pending' }, page, 40);
+  const d = await latest('alerts', '/api/alerts?' + params);
   if (!d || VIEW !== 'track' || trackMode !== mode) return;
   if (!d.rows.length && d.total && page > 1) return loadAlerts(Math.ceil(d.total / d.size));
   alertRows = d.rows;
   alertPage = d.page;
+  renderedAlertParams = new URLSearchParams(params);
+  renderedAlertParams.set('page', d.page);
   AF._info.textContent = `共 ${fmt(d.total)} 条${archived ? '归档' : '待处理'}`;
   const categories = $('#alertChips');
   const restoreFocus = categories.contains(document.activeElement) ? document.activeElement.dataset.alertRule : '';
@@ -1758,6 +1767,35 @@ async function loadAlerts(page = 1) {
      });
    });
   refreshSelection();
+}
+
+async function exportAlertDetails(scope, button) {
+  const mode = trackMode;
+  if (scope === 'page' && (!renderedAlertParams || !alertRows.length)) {
+    return toast('当前没有可导出的预警');
+  }
+  const pageParams = scope === 'page' ? new URLSearchParams(renderedAlertParams) : null;
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = '正在导出…';
+  try {
+    await loadMeta();
+    if (VIEW !== 'track' || trackMode !== mode || mode === 'tracking') return;
+    prepareAlerts();
+    const params = pageParams ||
+      new URLSearchParams(qs({...readF(AF), view: mode === 'archive' ? 'archive' : 'pending'}));
+    params.set('export', scope);
+    const response = await fetch('/api/alerts?' + params, {credentials: 'same-origin', cache: 'no-store'});
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(typeof error.detail === 'string' ? error.detail : error.message || `导出失败（${response.status}）`);
+    }
+    const encoded = response.headers.get('Content-Disposition')?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    downloadBlob(await response.blob(), encoded ? decodeURIComponent(encoded) : '预警明细.csv');
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
 }
 
 function alertTarget({order_no, rule, first_seen_at, history_id, handle_at}) {
@@ -3891,13 +3929,8 @@ run(async function boot() {
     ['最新轨迹（当地时间或标注 UTC）', row => row.最新事件当地时间 || row.最新事件时间 ?
       trackTime(row.最新事件当地时间, row.最新事件时间) : ''],
   ]), trackRows);
-  $('#exportAlerts').onclick = () => exportCsv(trackMode === 'archive' ? '归档预警-本页' : '预警处理-本页', [
-    ['履约单号', row => row.order_no], ['运单号', row => row.tracking_no], ['预警', row => row.rule_cn],
-    ['履约出库时间（北京时间）', row => row.shipped_at || row.shipped_date],
-    ['级别', row => row.level], ['运输时间', row => durationText(row.transport_minutes)],
-    ...(trackMode === 'archive' ? [['处理人', row => row.handled_by], ['归档时间', row => syncTime(row.handle_at)]] : []),
-    ['当前物流渠道', row => row.current_channel], ['后台物流商', row => row.carrier], ['异常持续天数', row => row.days],
-  ], alertRows);
+  $('#exportAlerts').onclick = event => run(() => exportAlertDetails('page', event.target));
+  $('#exportAllAlerts').onclick = event => run(() => exportAlertDetails('all', event.target));
   $('#exportChannels').onclick = () => {
     if (!renderedChannels) return;
     const basis = TIMING_BASIS[renderedChannels.basis].label;

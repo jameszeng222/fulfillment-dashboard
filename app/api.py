@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date, datetime, timedelta
+import csv
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from hashlib import sha256
+from io import StringIO
+from math import isfinite
+import re
 from typing import Any, Literal, Optional
 from unicodedata import normalize
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -454,6 +459,64 @@ def _with_transport_times(rows):
         row["transport_minutes"] = times.get(row["order_no"])
 
 
+def _export_alerts(rows, *, pending, scope, selected_rules):
+    if not rows:
+        raise HTTPException(404, "当前没有可导出的预警")
+
+    platform_names = core.platform_names()
+    beijing = timezone(timedelta(hours=8))
+
+    def csv_cell(value):
+        text = "" if value is None else str(value)
+        if re.match(r"^\s*[=+@-]", text) or re.fullmatch(r"[0-9]{15,}", text):
+            return "'" + text
+        return text
+
+    def duration(value):
+        if value is None or not isfinite(value) or value < 0:
+            return "—"
+        hours, minutes = divmod(int(value), 60)
+        days, remainder = divmod(hours, 24)
+        if days:
+            return f"{days} 天 {remainder} 小时"
+        return f"{hours} 小时 {minutes} 分钟" if hours else f"{minutes} 分钟"
+
+    def handled_time(value):
+        if not value:
+            return ""
+        try:
+            moment = datetime.fromisoformat(value)
+        except ValueError:
+            return value
+        if moment.tzinfo is not None:
+            moment = moment.astimezone(beijing)
+        return moment.isoformat(sep=" ", timespec="minutes")[:16]
+
+    output = StringIO(newline="")
+    writer = csv.writer(output, quoting=csv.QUOTE_ALL)
+    handler_columns = [] if pending else ["处理人", "归档时间"]
+    writer.writerow(["履约单号", "运单号", "平台", "平台代码", "预警", "履约出库时间（北京时间）",
+                     "级别", "运输时间", *handler_columns, "当前物流渠道", "后台物流商", "异常持续天数"])
+    for row in rows:
+        platform = row.get("platform_code")
+        handler = [] if pending else [row.get("handled_by"), handled_time(row.get("handle_at"))]
+        writer.writerow(map(csv_cell, (
+            row["order_no"], row["tracking_no"], platform_names.get(platform, platform), platform,
+            row["rule_cn"], row["shipped_at"] or row["shipped_date"], row["level"],
+            duration(row.get("transport_minutes")), *handler, row["current_channel"], row["carrier"], row["days"],
+        )))
+
+    title = "预警处理" if pending else "归档预警"
+    rule = next((item["name"] for item in BUSINESS_RULES if selected_rules == [item["key"]]), None)
+    suffix = "本页" if scope == "page" else "全部命中"
+    filename = "-".join(part for part in (title, rule, suffix) if part) + ".csv"
+    return Response(
+        b"\xef\xbb\xbf" + output.getvalue().encode("utf-8"), media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
+                 "Cache-Control": "no-store"},
+    )
+
+
 @router.get("/alerts")
 def list_alerts(request: Request,
                 page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
@@ -464,7 +527,8 @@ def list_alerts(request: Request,
                 channel_group: str = "",
                 tstat: str = "", sub: str = "",
                 date_basis: DateBasis = DEFAULT_DATE_BASIS,
-                view: Literal["pending", "archive"] = "pending"):
+                view: Literal["pending", "archive"] = "pending",
+                export: Literal["page", "all"] | None = None):
     core.require_user(request)
     bounds = time_bounds(start, end)
     pending = view == "pending"
@@ -478,7 +542,8 @@ def list_alerts(request: Request,
         w.append(f"{col} IN ({ph})")
         a.extend(vals)
 
-    inlist("a.rule", _multi(rule))
+    selected_rules = _multi(rule)
+    inlist("a.rule", selected_rules)
     inlist("a.level", _multi(level))
     inlist("a.warehouse", _multi(wh))
     inlist("a.carrier", _multi(cr))
@@ -547,14 +612,19 @@ def list_alerts(request: Request,
         order_by = ordering.get(sort, default_sort) + ", a.order_no, a.rule"
         shipped_column = "" if has_timestamp else ", NULL AS shipped_at"
         channel_column = "" if has_channel else ", NULL AS current_channel"
-        total = o.execute(f"SELECT count(*) {base}{where}", a).fetchone()[0]
+        limit = "" if export == "all" else " LIMIT ? OFFSET ?"
+        row_args = a if export == "all" else a + [size, off]
         rows = [dict(r) for r in o.execute(
             f"SELECT a.*{shipped_column}{channel_column} "
-            f"{base}{where} ORDER BY {order_by} LIMIT ? OFFSET ?", a + [size, off]).fetchall()]
-        summ = [dict(r) for r in o.execute(
-            f"SELECT a.rule, a.rule_cn, a.level, count(*) n {base}{where} GROUP BY 1,2,3 ORDER BY n DESC",
-            a).fetchall()]
+            f"{base}{where} ORDER BY {order_by}{limit}", row_args).fetchall()]
+        if export is None:
+            total = o.execute(f"SELECT count(*) {base}{where}", a).fetchone()[0]
+            summ = [dict(r) for r in o.execute(
+                f"SELECT a.rule, a.rule_cn, a.level, count(*) n {base}{where} GROUP BY 1,2,3 ORDER BY n DESC",
+                a).fetchall()]
     _with_transport_times(rows)
+    if export is not None:
+        return _export_alerts(rows, pending=pending, scope=export, selected_rules=selected_rules)
     return {"total": total, "page": page, "size": size, "rows": rows, "summary": summ}
 
 

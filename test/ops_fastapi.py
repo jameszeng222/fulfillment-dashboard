@@ -1,10 +1,11 @@
 """Exercise the FastAPI OPS integration without network access or production data."""
 import asyncio
 from contextlib import closing
+from csv import DictReader
 from email.message import Message
 from hashlib import sha256
 from http.cookies import SimpleCookie
-from io import BytesIO
+from io import BytesIO, StringIO
 import json
 from pathlib import Path
 import sqlite3
@@ -459,6 +460,52 @@ class OpsTests(unittest.TestCase):
             self.assertEqual(sum(row["n"] for row in data["summary"]), 2)
             with core.ops() as db:
                 self.assertEqual(db.execute("SELECT count(*) FROM alerts").fetchone()[0], 5)
+
+    def test_alert_csv_exports_the_page_or_all_filtered_hits_with_platform(self):
+        with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}), patch.object(
+            core, "platform_names", return_value={"PC1": "平台一"},
+        ):
+            with core.ops() as db:
+                db.executemany("""
+                    INSERT INTO alerts(order_no,rule,rule_cn,platform_code,tracking_no,carrier,shipped_at)
+                    VALUES (?,?,?,?,?,?, '2026-11-25 10:00:00')
+                """, [
+                    ("A", "no_update", "物流断更", "PC1", "001234567890123456", "GOFO"),
+                    ("B", "no_update", "物流断更", "PC2", "+FORMULA()", "GOFO"),
+                    ("B", "transport_timeout", "运输超时", "PC2", "+FORMULA()", "GOFO"),
+                    ("C", "no_update", "物流断更", "PC1", "N3", "Postnet"),
+                ])
+
+            def export(**query):
+                status, headers, body = self.browser.request("/api/alerts?" + urlencode(query))
+                self.assertEqual(status, 200)
+                self.assertIn(b"text/csv", headers[b"content-type"])
+                self.assertIn(b"attachment", headers[b"content-disposition"])
+                self.assertTrue(body.startswith(b"\xef\xbb\xbf"))
+                return list(DictReader(StringIO(body.decode("utf-8-sig"), newline="")))
+
+            page = export(export="page", size=1, page=2)
+            self.assertEqual([(r["履约单号"], r["预警"]) for r in page], [("B", "物流断更")])
+            all_rows = export(export="all", size=1, page=2)
+            self.assertEqual(len(all_rows), 3)
+            self.assertEqual((all_rows[0]["平台"], all_rows[0]["平台代码"]), ("平台一", "PC1"))
+            self.assertEqual(all_rows[0]["运单号"], "'001234567890123456")
+            self.assertEqual(all_rows[1]["运单号"], "'+FORMULA()")
+            only_rule = export(export="all", rule="no_update", size=1)
+            self.assertEqual([r["履约单号"] for r in only_rule], ["A", "B"])
+            filtered = export(export="all", rule="no_update", pf="PC1")
+            self.assertEqual([r["履约单号"] for r in filtered], ["A"])
+            status, _, _ = self.browser.request("/api/alerts?export=all&pf=missing")
+            self.assertEqual(status, 404)
+
+            with core.ops() as db:
+                db.execute("""
+                    INSERT INTO alert_state(order_no,rule,status,updated_at,handler_name)
+                    VALUES ('A','no_update','archived','2026-11-26T12:30:00+00:00','处理员')
+                """)
+            archived = export(export="all", view="archive")[0]
+            self.assertEqual((archived["平台"], archived["处理人"], archived["归档时间"]),
+                             ("平台一", "处理员", "2026-11-26 20:30"))
 
     def test_alerts_filter_shared_dimensions_and_inclusive_minutes(self):
         with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):
