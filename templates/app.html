@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=channel-period-trends">
+<link rel="stylesheet" href="/static/app.css?v=channel-members">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -245,14 +245,14 @@
       <!-- ============ 渠道时效 ============ -->
       <section class="view" id="v-channels">
         <div class="page-head"><div><h1>渠道时效</h1><p>签收时效与 SLA 对比</p></div></div>
+        <div class="tabs" id="channelDimension" role="group" aria-label="渠道时效分类">
+          <button type="button" class="tab-toned tone-cyan" data-dimension="lastmile" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>C 端渠道</button>
+          <button type="button" class="tab-toned tone-green" data-dimension="group" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg>自定义渠道</button>
+        </div>
         <div class="workspace-stack" id="channelTimingPane">
         <section class="report-controls" aria-label="筛选和对比口径">
         <div class="filters" id="channelFilters"></div>
         <div class="channel-basis">
-          <div class="tabs" id="channelDimension" role="group" aria-label="渠道对比维度">
-            <button type="button" class="tab-toned tone-cyan" data-dimension="lastmile" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg>C 端渠道</button>
-            <button type="button" class="tab-toned tone-green" data-dimension="group" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg>自定义渠道</button>
-          </div>
           <div class="tabs" id="channelBasis" role="group" aria-label="时效统计口径">
             <button type="button" class="tab-toned tone-blue" data-basis="paid" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-wallet"/></svg>支付到签收</button>
             <button type="button" class="tab-toned tone-green" data-basis="shipped" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-warehouse"/></svg>出库到签收</button>
@@ -264,6 +264,28 @@
         <div id="channelLoading" class="card" role="status">正在读取渠道时效…</div>
         <div id="channelResults" class="channel-results" hidden>
         <div class="kpis" id="channelKpi"></div>
+        <section class="card plot-card channel-members" id="channelMembers" aria-labelledby="channelMembersTitle" hidden>
+          <div class="ct"><div>
+            <h2 id="channelMembersTitle"><span class="section-icon tone-green"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>子渠道构成与时效</h2>
+            <p class="tip icon-caption" id="channelMembersScope"></p>
+          </div>
+            <label class="toolbar"><span class="tip">自定义渠道</span><select id="channelMemberGroup" aria-label="子渠道所属分组"></select></label>
+          </div>
+          <p class="tip" id="channelMemberStatus" role="status"></p>
+          <div class="channel-member-content" id="channelMemberContent" hidden>
+            <div>
+              <h3>子渠道单量占比</h3><div id="channelMemberShare"></div>
+            </div>
+            <div>
+              <h3>子渠道时效对比</h3>
+              <div class="tblwrap channel-member-table"><table class="tbl">
+                <thead><tr><th>子渠道（当前物流渠道）</th><th>单量</th><th>占比</th><th>有效样本</th>
+                  <th>平均时效</th><th>P90</th><th>5 天内妥投</th><th>6 天内妥投</th><th>7 天内妥投</th></tr></thead>
+                <tbody id="channelMemberBody"></tbody>
+              </table></div>
+            </div>
+          </div>
+        </section>
         <section class="card channel-comparison" aria-labelledby="channelComparisonTitle">
           <div class="ct table-head"><div>
             <h2 id="channelComparisonTitle"><span id="channelComparisonName">C 端渠道时效对比</span></h2>
@@ -719,6 +741,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=channel-period-trends" defer></script>
+<script src="/static/app.js?v=channel-members" defer></script>
 </body>
 </html>

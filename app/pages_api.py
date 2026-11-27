@@ -776,7 +776,74 @@ def channels(request: Request, month: str = "", wh: str = "", pf: str = "",
     grouping = json.dumps(groups, ensure_ascii=False, sort_keys=True) if dimension == "group" else ""
     report = _channel_report(core.snapshot_key(), archive, json.dumps(saved, sort_keys=True), basis, cond, tuple(args),
                              date_basis, dimension, grouping)
-    return {**report, "dateBasis": date_basis, "rows": [row for row in report["rows"] if row["orders"] >= min_n]}
+    result = {**report, "dateBasis": date_basis, "rows": [row for row in report["rows"] if row["orders"] >= min_n]}
+    if dimension == "group":
+        selected = core.filter_values(channel_group)
+        counts = {row["key"]: row["orders"] for row in report["rows"]}
+        result["memberGroups"] = sorted(
+            ({"key": group["name"], "orders": counts.get(group["name"], 0)}
+             for group in groups if not selected or group["name"] in selected),
+            key=lambda group: (-group["orders"], group["key"]),
+        )
+    return result
+
+
+@router.get("/channel-members")
+def channel_members(request: Request, key: str = Query(..., min_length=1, max_length=240),
+                    month: str = "", wh: str = "", pf: str = "", cr: str = "", cn: str = "",
+                    start: str = "", end: str = "", lastmile: str = "", channel: str = "", week: str = "",
+                    basis: TimingBasis = "shipped", date_basis: DateBasis = DEFAULT_DATE_BASIS,
+                    channel_group: str = ""):
+    core.require_reader(request)
+    with core.ops() as ops:
+        groups = channel_groups.load(ops)["groups"]
+    group = next((group for group in groups if group["name"] == key), None)
+    if group is None:
+        raise HTTPException(404, "未找到该自定义渠道")
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel,
+                       week=week, date_basis=date_basis, require_time=True,
+                       group_selection=channel_groups.filter_values(channel_group, groups))
+    members = tuple(group["channels"])
+    result = _channel_members(core.snapshot_key(), transport_archive_version() if basis == "online" else None,
+                              basis, members, cond, tuple(args))
+    return {**result, "group": key}
+
+
+@lru_cache(maxsize=48)
+def _channel_members(_snapshot, archive, basis, members, cond, args):
+    with core.duck() as con:
+        facts = analytics_snapshot.facts(con)
+        join, online_start = analytics_snapshot.scan_source(con, archive) if basis == "online" else ("", ONLINE_START)
+        report_start, minutes = _channel_duration(basis, online_start)
+        rows = con.execute(f"""
+            WITH scoped AS (
+                SELECT trim(o.当前渠道) AS channel,{minutes} AS duration_min,
+                       {report_start} AS report_start,o.{DELIVERED_BJ} AS delivered
+                FROM {facts} o {join}
+                WHERE trim(o.当前渠道) IN (SELECT unnest(?::VARCHAR[])){cond}
+            ), measured AS (
+                SELECT *,CASE WHEN duration_min>0 THEN {workday_minutes("report_start", "delivered")} END AS workday_min
+                FROM scoped
+            )
+            SELECT channel,count(*) AS orders,count(*) FILTER(WHERE duration_min>0) AS samples,
+                   round(avg(duration_min) FILTER(WHERE duration_min>0)/1440.0,2) AS "avgDays",
+                   round(quantile_cont(duration_min,0.90) FILTER(WHERE duration_min>0)/1440.0,2) AS "p90Days",
+                   {delivery_window_counts("duration_min")},
+                   {delivery_window_counts("workday_min", prefix="w", include_zero=True)}
+            FROM measured GROUP BY 1
+        """, [list(members), *args]).df().to_dict("records")
+    by_name = {row["channel"]: row for row in rows}
+    empty_rates = delivery_rates({}, 0)
+    for name in members:
+        if name not in by_name:
+            by_name[name] = {"channel": name, "orders": 0, "samples": 0, "avgDays": None, "p90Days": None,
+                             "deliveryRates": empty_rates, "workdayDeliveryRates": empty_rates}
+            continue
+        row = by_name[name]
+        row["deliveryRates"] = delivery_rates({day: row.pop(f"d{day}") for day in DELIVERY_WINDOWS}, row["orders"])
+        row["workdayDeliveryRates"] = delivery_rates({day: row.pop(f"w{day}") for day in DELIVERY_WINDOWS}, row["orders"])
+    ordered = sorted(by_name.values(), key=lambda row: (-row["orders"], row["channel"]))
+    return core.clean({"orders": sum(row["orders"] for row in ordered), "rows": ordered})
 
 
 @lru_cache(maxsize=32)

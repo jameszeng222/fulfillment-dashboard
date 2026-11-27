@@ -130,7 +130,7 @@ function reportPath(path) {
 }
 
 function reportStorageKey(path) {
-  const version = /^\/api\/channels(?:\?|$)/.test(path) ? 'channel-workday-rates:' :
+  const version = /^\/api\/channels(?:\?|$)/.test(path) ? 'channel-members:' :
     /^\/api\/overview(?:\?|$)/.test(path) ? 'country-timing-p90:' :
       /^\/api\/regional-analysis(?:\?|$)/.test(path) ? 'regional-geography:' : '';
   return reportCacheBase + encodeURIComponent(`${ME?.username || 'preview'}:${ME?.role || 'preview'}:${ME?.preview ? 'preview' : 'full'}`) + ':' + version + path;
@@ -417,6 +417,7 @@ let trackMode = 'tracking';
 function routeView(route) {
   if (['alerts', 'archive', 'detailed', 'special-tracking', 'channel-exceptions'].includes(route)) return 'track';
   if (['regions', 'regions-other'].includes(route)) return 'us';
+  if (['channels-lastmile','channels-group'].includes(route)) return 'channels';
   return Object.hasOwn(VIEW_META, route) ? route : 'dash';
 }
 
@@ -443,6 +444,7 @@ function showView(v) {
   if (ME.preview && ['rules', 'us'].includes(v)) v = 'dash';
   displayView(v);
   const route = v === 'track' && trackMode !== 'tracking' ? trackMode :
+      v === 'channels' ? 'channels-' + channelDimension :
       v === 'us' ? (usView.market === 'us' ? 'regions' : 'regions-other') : v;
   history.replaceState(null, '', '#' + route);
   window.scrollTo({ top: 0 });
@@ -1882,6 +1884,7 @@ let CF = null;
 let channelRows = [];
 let channelBasis = 'shipped';
 let channelDimension = 'lastmile';
+let channelTabOverride = null;
 let channelDayMode = 'calendar';
 const CHANNEL_DAY_LABELS = {calendar:'自然日', workday:'工作日'};
 const channelDeliveryRates = row => channelDayMode === 'workday' ? row.workdayDeliveryRates : row.deliveryRates;
@@ -1896,6 +1899,8 @@ let channelTrendVisible = false;
 let channelTrendData = null;
 let channelTrendPath = '';
 let channelTrendRequest = 0;
+let channelMemberRequest = 0;
+let renderedChannelMembers = null;
 /* ---------------- 组合筛选 ---------------- */
 const filterPresetWidgets = new WeakMap();
 
@@ -2150,6 +2155,17 @@ function syncChannelTimingControls() {
     button.setAttribute('aria-pressed', String(button.dataset.dayMode === channelDayMode)));
 }
 
+function setChannelDimension(dimension) {
+  if (channelDimension !== dimension) {
+    channelMemberRequest++;
+    renderedChannelMembers = null;
+    channelComparisonExpanded = false;
+  }
+  channelDimension = dimension;
+  if (VIEW === 'channels') history.replaceState(null, '', '#channels-' + dimension);
+  syncChannelTimingControls();
+}
+
 async function loadChannelFilters() {
   if (CF) return;
   const host = $('#channelFilters');
@@ -2178,15 +2194,16 @@ async function loadChannelFilters() {
       ...(channelDayMode === 'workday' ? {dayMode:channelDayMode} : {})}),
     writeExtra:({basis, dimension, dayMode}, base) => {
       channelBasis = Object.hasOwn(TIMING_BASIS, basis) ? basis : base.basis;
-      channelDimension = Object.hasOwn(CHANNEL_DIMENSIONS, dimension) ? dimension : base.dimension;
       channelDayMode = dayMode === 'workday' ? 'workday' : 'calendar';
       channelComparisonExpanded = false;
-      syncChannelTimingControls();
-      if (renderedChannels) renderChannelRates(renderedChannels, channelRows);
+      setChannelDimension(channelTabOverride || (Object.hasOwn(CHANNEL_DIMENSIONS, dimension) ? dimension : base.dimension));
+      if (renderedChannels?.dimension === channelDimension) renderChannelRates(renderedChannels, channelRows);
+      renderChannelMembers();
     },
     describeExtra:({basis, dimension, dayMode}) =>
       [CHANNEL_DIMENSIONS[dimension], TIMING_BASIS[basis]?.label, CHANNEL_DAY_LABELS[dayMode || 'calendar']].filter(Boolean),
   });
+  channelTabOverride = null;
   if (renderedChannels) showChannelDataDate(renderedChannels);
 }
 
@@ -2272,7 +2289,7 @@ function renderChannelComparison(data, rows) {
 
 async function loadChannels() {
   if (!CF) {
-    if (!defaultFilterPreset('channels')) fetchReport(channelQuery(CHANNEL_BASE_CRITERIA)).catch(() => {});
+    if (!defaultFilterPreset('channels')) fetchReport(channelQuery({...CHANNEL_BASE_CRITERIA, dimension:channelDimension})).catch(() => {});
     await loadChannelFilters();
   }
   if (!CF || VIEW !== 'channels' || !CF.validate()) return;
@@ -2280,7 +2297,8 @@ async function loadChannels() {
   const {dimension, filters} = criteria;
   const loading = $('#channelLoading');
   const results = $('#channelResults');
-  const currentResult = Boolean(renderedChannels);
+  const currentResult = renderedChannels?.dimension === dimension;
+  results.hidden = !currentResult;
   loading.hidden = currentResult;
   loading.textContent = '正在读取渠道时效…';
   results.setAttribute('aria-busy', 'true');
@@ -2289,7 +2307,7 @@ async function loadChannels() {
       d => { if (dimension === channelDimension && (d.dimension || 'lastmile') === dimension) renderChannels(d, filters); },
       {signal: AbortSignal.timeout(18_000)}, {oldVisible: currentResult});
   } catch (error) {
-    if (VIEW === 'channels') {
+    if (VIEW === 'channels' && dimension === channelDimension) {
       loading.hidden = false;
       loading.textContent = error.name === 'TimeoutError' ? '渠道时效读取超时。' : '渠道时效读取失败。' + error.message;
       if (currentResult) loading.append(` 下方为上次的「${TIMING_BASIS[renderedChannels.basis].label}」结果。`);
@@ -2309,7 +2327,10 @@ function renderChannels(d, filters) {
   results.hidden = false;
   results.inert = false;
   results.setAttribute('aria-busy', 'false');
-  if (renderedChannels === d) return;
+  if (renderedChannels === d) {
+    if (d.dimension === 'group' && !renderedChannelMembers) refreshChannelMemberGroups(d);
+    return;
+  }
   renderedChannels = d;
   const dimension = d.dimension || 'lastmile';
   const dimensionLabel = CHANNEL_DIMENSIONS[dimension];
@@ -2338,6 +2359,7 @@ function renderChannels(d, filters) {
   ].map(row => metricCard(...row)).join('');
 
   renderChannelRates(d, rows);
+  refreshChannelMemberGroups(d);
   const selector = $('#channelTrendKey');
   const key = selector.value;
   selector.replaceChildren(...rows.map(row => new Option(row.channel, row.key)));
@@ -2352,6 +2374,79 @@ function renderChannels(d, filters) {
   } else if (channelTrendVisible) {
     run(loadChannelTrend);
   }
+}
+
+function refreshChannelMemberGroups(report) {
+  $('#channelMembers').hidden = report.dimension !== 'group';
+  if (report.dimension !== 'group') return;
+  const selector = $('#channelMemberGroup');
+  const group = selector.value;
+  const groups = report.memberGroups || [];
+  selector.replaceChildren(...groups.map(item => new Option(item.key, item.key)));
+  if (groups.some(item => item.key === group)) selector.value = group;
+  selector.disabled = !groups.length;
+  if (groups.length) run(loadChannelMembers);
+  else {
+    channelMemberRequest++;
+    renderedChannelMembers = null;
+    $('#channelMemberContent').hidden = true;
+    $('#channelMembersScope').textContent = '';
+    $('#channelMemberStatus').textContent = report.snapshotAt ?
+      '快照中暂无子渠道明细。' : '当前筛选范围内没有已配置的自定义渠道。';
+  }
+}
+
+async function loadChannelMembers() {
+  const key = $('#channelMemberGroup').value;
+  if (VIEW !== 'channels' || channelDimension !== 'group' || renderedChannels?.dimension !== 'group' || !key) return;
+  const {min_n, ...filters} = renderedChannelFilters;
+  const path = reportPath('/api/channel-members?' + qs({...filters, key, basis:renderedChannels.basis}));
+  const request = ++channelMemberRequest;
+  const status = $('#channelMemberStatus');
+  renderedChannelMembers = reportRecord(path)?.data || null;
+  if (renderedChannelMembers) renderChannelMembers();
+  else {
+    $('#channelMemberContent').hidden = true;
+    $('#channelMembersScope').textContent = '';
+    status.textContent = '正在计算子渠道占比和时效…';
+  }
+  try {
+    const record = await fetchReport(path);
+    if (request !== channelMemberRequest || VIEW !== 'channels') return;
+    renderedChannelMembers = record.data;
+    renderChannelMembers();
+  } catch {
+    if (request !== channelMemberRequest || VIEW !== 'channels') return;
+    const retry = el('button', 'btn ghost sm', '重试');
+    retry.type = 'button';
+    retry.onclick = () => run(loadChannelMembers);
+    status.replaceChildren('暂时无法更新子渠道数据。 ', retry);
+  }
+}
+
+function renderChannelMembers() {
+  if (VIEW !== 'channels' || channelDimension !== 'group' || !renderedChannelMembers) return;
+  const {group, orders, rows} = renderedChannelMembers;
+  const openMember = channel => openTracking({...renderedChannelFilters, channel_group: group, channel});
+  $('#channelMemberStatus').textContent = '';
+  $('#channelMemberContent').hidden = false;
+  $('#channelMembersScope').textContent = `${group} · ${fmt(orders)} 单 · ${TIMING_BASIS[renderedChannels.basis].label} · ${CHANNEL_DAY_LABELS[channelDayMode]}`;
+  if (orders) {
+    drawRank('channelMemberShare', rows.map(row => ({k:row.channel, n:row.orders, filter:row.orders ? row.channel : false})),
+      rows.length, orders, ME.preview ? null : openMember);
+  } else $('#channelMemberShare').textContent = '当前筛选无命中单量';
+  const share = value => orders ? (value > 0 && value / orders < 0.001 ? '&lt;0.1%' : measure(100 * value / orders, '%')) : '—';
+  const days = value => value == null ? '—' : `${value.toFixed(2)} 天`;
+  $('#channelMemberBody').innerHTML = rows.map(row => `<tr>
+    <td>${ME.preview || !row.orders ? esc(row.channel) :
+      `<button type="button" class="order-link" data-member-channel="${esc(row.channel)}">${esc(row.channel)}</button>`}</td>
+    <td><b>${fmt(row.orders)}</b></td><td>${share(row.orders)}</td><td>${fmt(row.samples)}</td>
+    <td>${days(row.avgDays)}</td><td>${days(row.p90Days)}</td>
+    ${[5, 6, 7].map(day => `<td>${measure(channelDeliveryRate(row, day), '%')}</td>`).join('')}</tr>`).join('');
+  $('#channelMemberBody').onclick = event => {
+    const target = event.target.closest('[data-member-channel]');
+    if (target) openMember(target.dataset.memberChannel);
+  };
 }
 
 async function loadChannelTrend() {
@@ -3882,6 +3977,10 @@ run(async function boot() {
     setTrackMode(v === 'channel-exceptions' ? 'special-tracking' : v);
   if (v === 'regions-other') setRegionMarket('other');
   displayView(routeView(v));
+  if (['channels-lastmile','channels-group'].includes(v)) {
+    channelTabOverride = v.slice('channels-'.length);
+    setChannelDimension(channelTabOverride);
+  }
   ME = await api('/api/me');
   if (ME.dataRevision) {
     dataRevision = ME.dataRevision;
@@ -3918,6 +4017,7 @@ run(async function boot() {
     if (channelTrendVisible) run(loadChannelTrend);
   }, {rootMargin:'100px 0px'}).observe($('#channelTrend'));
   $('#channelTrendKey').onchange = () => run(loadChannelTrend);
+  $('#channelMemberGroup').onchange = () => run(loadChannelMembers);
   $('#channelTrendPeriod').onclick = event => {
     const selected = event.target.closest('[data-period]');
     if (!selected || selected.dataset.period === channelTrendPeriod) return;
@@ -4010,12 +4110,11 @@ run(async function boot() {
   };
   $('#channelDimension').onclick = event => {
     const button = event.target.closest('button[data-dimension]');
-    if (!CF || !button || channelDimension === button.dataset.dimension) return;
-    channelDimension = button.dataset.dimension;
-    channelComparisonExpanded = false;
-    syncChannelTimingControls();
-    syncFilterPreset(CF);
-    scheduleReport('channels', loadChannels);
+    if (!button || channelDimension === button.dataset.dimension) return;
+    if (!CF) channelTabOverride = button.dataset.dimension;
+    setChannelDimension(button.dataset.dimension);
+    if (CF) syncFilterPreset(CF);
+    showView('channels');
   };
   $('#channelCompareToggle').onclick = () => {
     if (renderedChannels?.dimension !== 'group') return;
@@ -4030,6 +4129,7 @@ run(async function boot() {
     syncFilterPreset(CF);
     if (renderedChannels) renderChannelRates(renderedChannels, channelRows);
     renderChannelTrend();
+    renderChannelMembers();
   };
   $('#channelBasis').onclick = event => {
     const button = event.target.closest('button[data-basis]');

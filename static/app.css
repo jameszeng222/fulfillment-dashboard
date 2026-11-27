@@ -309,6 +309,14 @@ button:focus-visible, a:focus-visible, input:is([type=checkbox],[type=radio],[ty
 .channel-compare-expand { padding:10px 14px; border-top:1px solid var(--line); }
 .channel-compare-expand[hidden] { display:none; }
 .channel-results { display:flex; flex-direction:column; gap:16px; }
+.channel-members .toolbar select { max-width: min(230px, 66vw); }
+.channel-member-content { display: grid; grid-template-columns: minmax(230px, 1fr) minmax(0, 2.25fr); gap: 18px; }
+.channel-member-content h3 { font-size: 13px; margin-bottom: 8px; }
+#channelMemberShare { max-height: 365px; overflow-y: auto; }
+.channel-member-table { max-height: 365px; }
+.channel-member-table th, .channel-member-table td { white-space: nowrap; }
+.channel-member-table th:not(:first-child), .channel-member-table td:not(:first-child) { text-align: right; }
+@media (max-width: 880px) { .channel-member-content { grid-template-columns: minmax(0, 1fr); } }
 #channelLoading.channel-refresh { padding: 6px 11px; color: var(--ink3); font-size: 12px; }
 .channel-comparison { padding: 0; overflow: hidden; }
 .channel-comparison .table-head { padding: 16px 18px 0; }
