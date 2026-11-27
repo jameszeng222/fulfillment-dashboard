@@ -8,7 +8,6 @@ from functools import lru_cache
 from hashlib import sha256
 from io import StringIO
 from math import isfinite
-import re
 from typing import Any, Literal, Optional
 from unicodedata import normalize
 from urllib.parse import quote
@@ -17,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from track17 import OFFICIAL_STATUS
 
-from . import alert_history, channel_groups, cloud_login, core, ops_auth, ops_assistant, public_preview
+from . import alert_export, alert_history, channel_groups, cloud_login, core, ops_auth, ops_assistant, public_preview
 from .carrier_delivery import DELIVERED_BJ, DELIVERED_UTC, reporting_facts, transport_minutes
 from . import track_lookup
 from .filter_time import DATE_BASIS_FIELDS, DEFAULT_DATE_BASIS, REPORTING_WEEKS, DateBasis, time_bounds, week_filter
@@ -466,12 +465,6 @@ def _export_alerts(rows, *, pending, scope, selected_rules):
     platform_names = core.platform_names()
     beijing = timezone(timedelta(hours=8))
 
-    def csv_cell(value):
-        text = "" if value is None else str(value)
-        if re.match(r"^\s*[=+@-]", text) or re.fullmatch(r"[0-9]{15,}", text):
-            return "'" + text
-        return text
-
     def duration(value):
         if value is None or not isfinite(value) or value < 0:
             return "—"
@@ -500,7 +493,7 @@ def _export_alerts(rows, *, pending, scope, selected_rules):
     for row in rows:
         platform = row.get("platform_code")
         handler = [] if pending else [row.get("handled_by"), handled_time(row.get("handle_at"))]
-        writer.writerow(map(csv_cell, (
+        writer.writerow(map(alert_export.csv_cell, (
             row["order_no"], row["tracking_no"], platform_names.get(platform, platform), platform,
             row["rule_cn"], row["shipped_at"] or row["shipped_date"], row["level"],
             duration(row.get("transport_minutes")), *handler, row["current_channel"], row["carrier"], row["days"],
@@ -508,10 +501,18 @@ def _export_alerts(rows, *, pending, scope, selected_rules):
 
     title = "预警处理" if pending else "归档预警"
     rule = next((item["name"] for item in BUSINESS_RULES if selected_rules == [item["key"]]), None)
-    suffix = "本页" if scope == "page" else "全部命中"
-    filename = "-".join(part for part in (title, rule, suffix) if part) + ".csv"
+    suffix = {"page": "本页", "all": "全部命中", "tracks": "全部命中-含完整轨迹"}[scope]
+    filename = "-".join(part for part in (title, rule, suffix) if part)
+    content = output.getvalue().encode("utf-8-sig")
+    if scope == "tracks":
+        content = alert_export.bundle(content, rows)
+        filename += ".zip"
+        media_type = "application/zip"
+    else:
+        filename += ".csv"
+        media_type = "text/csv"
     return Response(
-        b"\xef\xbb\xbf" + output.getvalue().encode("utf-8"), media_type="text/csv",
+        content, media_type=media_type,
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
                  "Cache-Control": "no-store"},
     )
@@ -528,7 +529,7 @@ def list_alerts(request: Request,
                 tstat: str = "", sub: str = "",
                 date_basis: DateBasis = DEFAULT_DATE_BASIS,
                 view: Literal["pending", "archive"] = "pending",
-                export: Literal["page", "all"] | None = None):
+                export: Literal["page", "all", "tracks"] | None = None):
     core.require_user(request)
     bounds = time_bounds(start, end)
     pending = view == "pending"
@@ -612,8 +613,9 @@ def list_alerts(request: Request,
         order_by = ordering.get(sort, default_sort) + ", a.order_no, a.rule"
         shipped_column = "" if has_timestamp else ", NULL AS shipped_at"
         channel_column = "" if has_channel else ", NULL AS current_channel"
-        limit = "" if export == "all" else " LIMIT ? OFFSET ?"
-        row_args = a if export == "all" else a + [size, off]
+        all_matches = export in ("all", "tracks")
+        limit = "" if all_matches else " LIMIT ? OFFSET ?"
+        row_args = a if all_matches else a + [size, off]
         rows = [dict(r) for r in o.execute(
             f"SELECT a.*{shipped_column}{channel_column} "
             f"{base}{where} ORDER BY {order_by}{limit}", row_args).fetchall()]

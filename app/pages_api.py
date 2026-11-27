@@ -249,7 +249,7 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
         tracking = track_lookup.source(con)
         con.execute(f"""
             CREATE TEMP TABLE overview_timing AS
-            SELECT o.创建月份,o.仓内分钟,o.物流分钟,o.件数,o.仓库,o.物流商,o.目的国中文,
+            SELECT o.创建月份,o.仓内分钟,o.物流分钟,o.件数,o.仓库,o.物流商,o.目的国,o.目的国中文,
                    o.C端承运商,o.当前渠道,o.签出时间,o.支付时间,o.平台,o.订单号,o.{DELIVERED_BJ},o.{DELIVERY_SOURCE}
             FROM {facts} o WHERE 1=1{cond}
         """, args)
@@ -294,6 +294,13 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
         by_carrier = by("物流商", 20)
         by_wh = by("仓库", 20)
         by_country = by("目的国中文", 15)
+        country_timing = con.execute("""
+            SELECT 目的国 AS code,coalesce(max(nullif(目的国中文,'')),目的国) AS name,
+                   count(*) AS orders,count(*) FILTER (WHERE 物流分钟>0) AS samples,
+                   round(avg(物流分钟) FILTER (WHERE 物流分钟>0)/1440.0,2) AS days
+            FROM overview_timing WHERE nullif(trim(目的国),'') IS NOT NULL
+            GROUP BY 1 ORDER BY orders DESC, name, code
+        """).df().to_dict("records")
         status_cond, status_args = filters(date_basis)
         by_status = con.execute(f"""
             SELECT coalesce(o.状态, '未填写状态') k, count(*) n
@@ -335,7 +342,7 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
         "monthly": monthly, "byCarrier": by_carrier, "byWarehouse": by_wh,
         "warehouseShipping": warehouse_shipping, "orderSplit": order_split,
         **daily,
-        "byCountry": by_country, "byStatus": by_status,
+        "byCountry": by_country, "countryTiming": country_timing, "byStatus": by_status,
         "byLastMile": by_last_mile, "byCurrentChannel": current_channels[:10], "_currentChannels": current_channels,
         "byTrackingStatus": track_states, "dateBasis": date_basis,
     })

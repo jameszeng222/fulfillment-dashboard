@@ -131,7 +131,7 @@ function reportPath(path) {
 
 function reportStorageKey(path) {
   const version = /^\/api\/channels(?:\?|$)/.test(path) ? 'channel-workday-rates:' :
-    /^\/api\/overview(?:\?|$)/.test(path) ? 'delivery-rates:' :
+    /^\/api\/overview(?:\?|$)/.test(path) ? 'country-timing:' :
       /^\/api\/regional-analysis(?:\?|$)/.test(path) ? 'regional-online-p95:' : '';
   return reportCacheBase + encodeURIComponent(`${ME?.username || 'preview'}:${ME?.role || 'preview'}:${ME?.preview ? 'preview' : 'full'}`) + ':' + version + path;
 }
@@ -786,6 +786,7 @@ function pager(host, total, page, size, go, {sizes, changeSize} = {}) {
     select.onchange = () => changeSize(Number(select.value));
     perPage.append(select);
     host.append(perPage);
+    host.append(mk('首页', 1, page <= 1));
   }
   host.appendChild(mk('‹ 上一页', page - 1, page <= 1));
   host.appendChild(mk('下一页 ›', page + 1, page >= pages));
@@ -1046,11 +1047,41 @@ function renderDash(d, f) {
   drawRank('cWarehouse', d.byWarehouse, 10, k.orders,
     ME.preview ? null : value => openTracking({ ...f, wh: value }));
   drawRank('cCountry', d.byCountry, 15, k.orders);
+  drawCountryTiming(d.countryTiming, f);
   drawRank('cCurrentChannel', d.byCurrentChannel || [], 10, k.orders,
     ME.preview ? null : value => openTracking({ ...f, channel: value }));
   drawRank('cChannelGroup', (d.byChannelGroup || []).map(row => ({...row, filter: row.group || false})),
     Number.POSITIVE_INFINITY, k.orders, ME.preview ? null : group => openTracking({...f, channel_group: group}));
   drawDispatchStatus(d.byStatus);
+}
+
+function drawCountryTiming(rows, filters) {
+  const host = $('#countryTiming');
+  const sort = $('#countryTimingSort');
+  sort.hidden = !rows?.length;
+  if (!rows?.length) {
+    host.innerHTML = `<p class="rank-empty tip">${rows ? '当前筛选无目的国家数据' : '当前快照暂无各国时效数据'}</p>`;
+    return;
+  }
+  const data = sort.value === 'days' ?
+    [...rows].sort((left, right) => (right.days ?? -1) - (left.days ?? -1)) : rows;
+  const max = Math.max(1, ...rows.map(row => row.days || 0));
+  host.innerHTML = `<div class="tblwrap country-timing-table"><table class="tbl">
+    <thead><tr><th>目的国家</th><th>平均时效</th><th>有效时效样本</th><th>履约单量</th></tr></thead>
+    <tbody>${data.map((row, index) => {
+      const name = esc(row.name || row.code);
+      return `<tr><td>${ME.preview ? `<b>${name}</b>` :
+        `<button type="button" class="order-link" data-country-timing="${index}">${name}</button>`}</td>
+        <td><span class="timing-value"><span class="rank-track" aria-hidden="true">
+          <span style="width:${(row.days || 0) * 100 / max}%"></span></span>
+          <strong>${row.days == null ? '—' : `${row.days.toFixed(2)} 天`}</strong></span></td>
+        <td>${fmt(row.samples)}</td><td>${fmt(row.orders)}</td></tr>`;
+    }).join('')}</tbody></table></div>`;
+  host.onclick = event => {
+    const button = event.target.closest('[data-country-timing]');
+    if (button) openTracking({...filters, cn: data[Number(button.dataset.countryTiming)].code});
+  };
+  sort.onchange = () => drawCountryTiming(rows, filters);
 }
 
 async function loadOverviewCharts(d) {
@@ -1267,10 +1298,11 @@ const alertFiltersByMode = {};
 let trackRows = [];
 let trackPage = 1;
 let trackPageSize = 40;
+const fulfillmentPageSizes = [20, 40, 100, 200];
 let renderedTrack = null;
 let alertRows = [];
 let alertPage = 1;
-let renderedAlertParams = null;
+const alertPageSize = {alerts: 40, archive: 40};
 const trackingGroups = () => [...new Map(META.trackStatuses.map(row => [row.status, row.label]))]
   .map(([v, t]) => ({ v, t }));
 const ruleOptions = () => META.ruleOptions || META.rules.map(row => ({ v: row.rule, t: row.rule_cn }));
@@ -1307,7 +1339,6 @@ function setTrackMode(mode) {
     $('#alertChips').replaceChildren();
     $('#alertPager').replaceChildren();
     alertRows = [];
-    renderedAlertParams = null;
   }
   trackMode = mode;
   if (mode !== 'tracking') AF = alertFiltersByMode[mode] || null;
@@ -1629,7 +1660,7 @@ async function loadTrack(page = 1, fromSearch = false, size = trackPageSize) {
       clearedFilters ? '已切换至全部履约单搜索 · ' : ''}共 ${fmt(d.total)} 单`;
   if (!ME.preview) run(() => loadTrackSummary(f, !d.total ? d : null));
   pager($('#trackPager'), d.total, d.page, d.size, p => run(() => loadTrack(p)), {
-    sizes:[20, 40, 100, 200], changeSize:n => run(() => loadTrack(1, false, n)),
+    sizes:fulfillmentPageSizes, changeSize:n => run(() => loadTrack(1, false, n)),
   });
   if (renderedTrack === d) return;
   renderedTrack = d;
@@ -1725,14 +1756,12 @@ async function loadAlerts(page = 1) {
   await loadMeta();
   if (VIEW !== 'track' || trackMode !== mode) return;
   prepareAlerts();
-  const params = qs({ ...readF(AF), view: archived ? 'archive' : 'pending' }, page, 40);
+  const params = qs({ ...readF(AF), view: archived ? 'archive' : 'pending' }, page, alertPageSize[mode]);
   const d = await latest('alerts', '/api/alerts?' + params);
   if (!d || VIEW !== 'track' || trackMode !== mode) return;
   if (!d.rows.length && d.total && page > 1) return loadAlerts(Math.ceil(d.total / d.size));
   alertRows = d.rows;
   alertPage = d.page;
-  renderedAlertParams = new URLSearchParams(params);
-  renderedAlertParams.set('page', d.page);
   AF._info.textContent = `共 ${fmt(d.total)} 条${archived ? '归档' : '待处理'}`;
   const categories = $('#alertChips');
   const restoreFocus = categories.contains(document.activeElement) ? document.activeElement.dataset.alertRule : '';
@@ -1758,7 +1787,13 @@ async function loadAlerts(page = 1) {
       ${archived ? `<td>${esc(r.handled_by || '—')}<small class="cell-sub">${esc(syncTime(r.handle_at))}</small>
         ${allowedActions().some(([action]) => action === 'archive') ? `<button class="btn ghost sm" type="button" data-undo-archive="${index}">撤销归档</button>` : ''}</td>` : ''}
     </tr>`).join('') : blankRow(9, archived ? '没有符合条件的归档记录' : '没有符合条件的待处理预警');
-  pager($('#alertPager'), d.total, d.page, d.size, p => run(() => loadAlerts(p)));
+  pager($('#alertPager'), d.total, d.page, d.size, p => run(() => loadAlerts(p)), {
+    sizes: fulfillmentPageSizes, changeSize: size => {
+      alertPageSize[mode] = size;
+      run(() => loadAlerts(1));
+    },
+  });
+  $('#alertBody').closest('.tblwrap').scrollTop = 0;
    $('#alertBody').querySelectorAll('[data-undo-archive]').forEach(button => {
      button.onclick = () => run(() => {
        button.disabled = true;
@@ -1771,10 +1806,6 @@ async function loadAlerts(page = 1) {
 
 async function exportAlertDetails(scope, button) {
   const mode = trackMode;
-  if (scope === 'page' && (!renderedAlertParams || !alertRows.length)) {
-    return toast('当前没有可导出的预警');
-  }
-  const pageParams = scope === 'page' ? new URLSearchParams(renderedAlertParams) : null;
   const label = button.textContent;
   button.disabled = true;
   button.textContent = '正在导出…';
@@ -1782,8 +1813,7 @@ async function exportAlertDetails(scope, button) {
     await loadMeta();
     if (VIEW !== 'track' || trackMode !== mode || mode === 'tracking') return;
     prepareAlerts();
-    const params = pageParams ||
-      new URLSearchParams(qs({...readF(AF), view: mode === 'archive' ? 'archive' : 'pending'}));
+    const params = new URLSearchParams(qs({...readF(AF), view: mode === 'archive' ? 'archive' : 'pending'}));
     params.set('export', scope);
     const response = await fetch('/api/alerts?' + params, {credentials: 'same-origin', cache: 'no-store'});
     if (!response.ok) {
@@ -1791,7 +1821,8 @@ async function exportAlertDetails(scope, button) {
       throw new Error(typeof error.detail === 'string' ? error.detail : error.message || `导出失败（${response.status}）`);
     }
     const encoded = response.headers.get('Content-Disposition')?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-    downloadBlob(await response.blob(), encoded ? decodeURIComponent(encoded) : '预警明细.csv');
+    downloadBlob(await response.blob(), encoded ? decodeURIComponent(encoded) :
+      scope === 'tracks' ? '预警明细与轨迹.zip' : '预警明细.csv');
   } finally {
     button.disabled = false;
     button.textContent = label;
@@ -3929,8 +3960,8 @@ run(async function boot() {
     ['最新轨迹（当地时间或标注 UTC）', row => row.最新事件当地时间 || row.最新事件时间 ?
       trackTime(row.最新事件当地时间, row.最新事件时间) : ''],
   ]), trackRows);
-  $('#exportAlerts').onclick = event => run(() => exportAlertDetails('page', event.target));
-  $('#exportAllAlerts').onclick = event => run(() => exportAlertDetails('all', event.target));
+  $('#exportAllAlerts').onclick = () => run(() => exportAlertDetails('all', $('#exportAllAlerts')));
+  $('#exportAlertsWithTracks').onclick = () => run(() => exportAlertDetails('tracks', $('#exportAlertsWithTracks')));
   $('#exportChannels').onclick = () => {
     if (!renderedChannels) return;
     const basis = TIMING_BASIS[renderedChannels.basis].label;

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=20261126-track-analysis">
+<link rel="stylesheet" href="/static/app.css?v=20261127-country-timing">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -114,6 +114,17 @@
         </div>
         <div class="grid overview-breakdown">
           <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip" id="monthlyScope">按出库月份统计 · 出库 → 妥投</p></div></div><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></section>
+          <section class="card plot-card wide" aria-labelledby="countryTimingTitle">
+            <div class="ct"><div>
+              <h2 id="countryTimingTitle"><span class="section-icon tone-green"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span>各国平均时效</h2>
+              <p class="tip icon-caption">出库 → 妥投 · 按有效时效样本计算</p>
+            </div>
+              <select id="countryTimingSort" aria-label="各国平均时效排序" hidden>
+                <option value="orders">按履约单量</option><option value="days">按平均时效（从慢到快）</option>
+              </select>
+            </div>
+            <div id="countryTiming"></div>
+          </section>
           <section class="card plot-card status-card" aria-labelledby="statusTitle">
             <div class="ct"><div><h2 id="statusTitle"><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>出库单状态</h2><p class="tip icon-caption">全部出库单状态，含已取消</p></div></div>
             <div id="cStatus"></div>
@@ -180,8 +191,8 @@
                   <select id="batchAction" aria-label="批量处理动作"><option value="">批量操作</option></select>
                   <button type="button" class="btn sm" id="applyBatch" disabled>应用</button>
                 </div>
-                <button type="button" class="btn ghost sm" id="exportAlerts">导出本页</button>
                 <button type="button" class="btn ghost sm" id="exportAllAlerts">导出全部命中</button>
+                <button type="button" class="btn ghost sm" id="exportAlertsWithTracks">导出含完整轨迹</button>
               </div>
             </div>
             <div class="tblwrap">
@@ -686,6 +697,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=20261127-alert-export" defer></script>
+<script src="/static/app.js?v=20261127-country-timing-alert-tracks" defer></script>
 </body>
 </html>

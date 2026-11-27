@@ -13,6 +13,9 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlencode, urlsplit
+from zipfile import ZipFile
+
+import duckdb
 
 from app import alert_history, cloud_login, core, ops_auth
 from app.main import app
@@ -506,6 +509,48 @@ class OpsTests(unittest.TestCase):
             archived = export(export="all", view="archive")[0]
             self.assertEqual((archived["平台"], archived["处理人"], archived["归档时间"]),
                              ("平台一", "处理员", "2026-11-26 20:30"))
+
+    def test_alert_trajectory_export_uses_the_alert_waybill_and_merges_events(self):
+        with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):
+            with core.ops() as db:
+                db.execute("""
+                    INSERT INTO alerts(order_no,rule,rule_cn,platform_code,tracking_no,carrier)
+                    VALUES ('P1','no_update','物流断更','PC1','N-1','GOFO')
+                """)
+            con = duckdb.connect()
+            con.execute("""
+                CREATE TABLE fct_order AS SELECT 'P1' AS 履约单号,'N2' AS 快递单号,'N2' AS 单号归一;
+                CREATE TABLE trk_status(单号 VARCHAR,carrier INTEGER);
+                INSERT INTO trk_status VALUES ('N1',100996),('N2',100996);
+                CREATE TABLE trk_event(单号 VARCHAR,运输商代码 INTEGER,事件时间 TIMESTAMP,当地时间 VARCHAR,
+                    主状态 VARCHAR,子状态 VARCHAR,描述 VARCHAR,地点 VARCHAR,事件承运商 VARCHAR);
+                INSERT INTO trk_event VALUES
+                    ('N1',100996,'2026-11-26 02:00:00',NULL,'Arrival','InTransit_Arrival','Hub','KY','GOFO'),
+                    ('N2',100996,'2026-11-26 03:00:00',NULL,'Arrival','InTransit_Arrival','Other','NY','GOFO'),
+                    ('N1',123,'2026-11-26 04:00:00',NULL,'Arrival','InTransit_Arrival','Wrong carrier','FL','Other');
+                CREATE TABLE trk_archive_summary(履约单号 VARCHAR,单号 VARCHAR,carrier INTEGER,回补状态 VARCHAR);
+                INSERT INTO trk_archive_summary VALUES ('P1','N1',100996,'tracked');
+                CREATE TABLE trk_archive_event(tracking_no VARCHAR,carrier_code INTEGER,event_time_utc VARCHAR,
+                    event_time_raw VARCHAR,stage VARCHAR,substatus VARCHAR,description VARCHAR,location VARCHAR,
+                    provider_name VARCHAR,provider_code INTEGER);
+                INSERT INTO trk_archive_event VALUES
+                    ('N1',100996,'2026-11-26T00:00:00+00:00',
+                        '{"date":"2026-11-25","time":"19:00:00","timezone":"-05:00"}',
+                        'PickedUp','InTransit_PickedUp','Pickup','KY','GOFO',100996),
+                    ('N1',100996,'2026-11-26T02:00:00+00:00',NULL,
+                        'Arrival','InTransit_Arrival','Hub','KY','GOFO',100996);
+            """)
+            with patch.object(core, "duck", return_value=con):
+                status, headers, body = self.browser.request("/api/alerts?export=tracks&rule=no_update")
+            self.assertEqual(status, 200)
+            self.assertEqual(headers[b"content-type"], b"application/zip")
+            with ZipFile(BytesIO(body)) as archive:
+                alerts = archive.read("预警明细.csv").decode("utf-8-sig")
+                events = list(DictReader(StringIO(archive.read("轨迹明细.csv").decode("utf-8-sig"))))
+            self.assertIn('"PC1"', alerts)
+            self.assertEqual([(r["运单号"], r["轨迹描述"]) for r in events], [("N-1", "Pickup"), ("N-1", "Hub")])
+            self.assertEqual(events[0]["节点当地时间"], "2026-11-25 19:00:00 -05:00")
+            self.assertEqual(events[0]["节点时间（北京时间）"], "2026-11-26 08:00:00")
 
     def test_alerts_filter_shared_dimensions_and_inclusive_minutes(self):
         with patch.dict("os.environ", {"FULFILLMENT_OPEN_TEST": "true"}):

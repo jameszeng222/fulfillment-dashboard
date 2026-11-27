@@ -435,6 +435,13 @@ button.rank-row:hover { background: var(--surface-muted); }
 .rank-share { text-align: right; color: var(--ink2); font-variant-numeric: tabular-nums; }
 .rank-track { display: block; height: 5px; border-radius: 5px; background: var(--surface-muted); }
 .rank-track span { display: block; height: 100%; border-radius: inherit; background: var(--brand); }
+.country-timing-table { max-height: min(390px, 58vh); }
+.country-timing-table th:first-child { width: 24%; }
+.country-timing-table th:nth-child(2) { width: 42%; }
+.country-timing-table .timing-value { display: flex; align-items: center; gap: 12px; }
+.country-timing-table .rank-track { flex: 1; min-width: 24px; }
+.country-timing-table .timing-value strong { min-width: 68px; text-align: right; }
+.country-timing-table td:nth-child(n+3), .country-timing-table th:nth-child(n+3) { text-align: right; }
 .rank-empty { padding: 24px 0; text-align: center; }
 .table-card { padding: 0; overflow: hidden; }
 .table-card .table-head { padding: 12px 14px 0; }
