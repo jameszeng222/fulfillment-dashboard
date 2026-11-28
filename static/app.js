@@ -2873,7 +2873,7 @@ async function loadTrackExceptions(page = 1, size = exceptionPageSize) {
   status.textContent = `出库自 ${data.from} 起 · 截至 ${syncTime(data.asof)} · 共 ${fmt(data.total)} 条`;
   $('#trackExceptionBody').innerHTML = data.rows.map(row => `<tr>
     <td>${orderButton(row.order_no, row.waybill)}</td>
-    <td><b>${esc(row.name)}</b><small class="cell-sub"><span class="badge ${row.state === 'late' ? 'h' : 'm'}">
+    <td><b>${esc(row.name)}</b><small class="cell-sub"><span class="badge ${row.state === 'late' ? 'h' : 'purple'}">
       ${row.state === 'late' ? '节点超时' : '超时未见节点'}</span></small></td>
     <td>${esc([row.warehouse, row.site].filter(Boolean).join(' · ') || '—')}
       <small class="cell-sub">${esc(row.channel || row.lastmile || '—')}</small></td>
