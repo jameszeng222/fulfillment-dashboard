@@ -62,17 +62,7 @@ function createDateCalendar() {
   }
 
   function position() {
-    if (!active || !panel.matches(':popover-open')) return;
-    const anchor = active.trigger.getBoundingClientRect();
-    if (!anchor.width || anchor.bottom < 0 || anchor.top > innerHeight) {
-      panel.hidePopover();
-      return;
-    }
-    const left = Math.max(8, Math.min(anchor.left, innerWidth - panel.offsetWidth - 8));
-    const below = anchor.bottom + 8;
-    const top = below + panel.offsetHeight <= innerHeight - 8 ? below : Math.max(8, anchor.top - panel.offsetHeight - 8);
-    panel.style.left = `${left}px`;
-    panel.style.top = `${top}px`;
+    if (active) positionControlPopover(panel, active.trigger);
   }
 
   function moveMonth(offset, focusDay) {

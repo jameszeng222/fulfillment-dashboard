@@ -354,7 +354,7 @@ async function refreshDataRevision() {
         track: trackMode === 'special-tracking' ? loadTrackExceptions : null,
         us: loadUs, rules: loadRules}[VIEW];
       if (refresh) run(refresh);
-      if (VIEW === 'dash' || VIEW === 'track') run(loadActivity);
+      run(loadActivity);
       if (VIEW === 'us') loadVisibleRegionSegments();
     }
   } catch {
@@ -453,7 +453,7 @@ function showView(v) {
   if (META && usesFilterMeta()) loadMeta().catch(() => {});
   const tracking = {tracking: loadTrack, alerts: loadAlerts, archive: loadAlerts, 'special-tracking': loadTrackExceptions};
   run({dash: loadDash, track: tracking[trackMode], channels: loadChannels, us: loadUs, rules: loadRules}[v]);
-  if (!ME.preview && (v === 'dash' || v === 'track')) run(loadActivity);
+  if (!ME.preview) run(loadActivity);
 }
 
 function initChart(id) {
@@ -622,6 +622,44 @@ function keepFocusInside(event, container) {
     event.preventDefault();
     (event.shiftKey ? last : first)?.focus();
   }
+}
+
+function positionControlPopover(panel, trigger, align = 'start') {
+  if (!panel.matches(':popover-open')) return;
+  const anchor = trigger.getBoundingClientRect();
+  if (!anchor.width || anchor.bottom < 0 || anchor.top > innerHeight) {
+    panel.hidePopover();
+    return;
+  }
+  const {offsetWidth:width, offsetHeight:height} = panel;
+  const left = align === 'end' ? anchor.right - width : anchor.left;
+  const below = anchor.bottom + 8;
+  panel.style.left = `${Math.max(8, Math.min(left, innerWidth - width - 8))}px`;
+  panel.style.top = `${below + height <= innerHeight - 8 ? below : Math.max(8, anchor.top - height - 8)}px`;
+}
+
+function setSwitchChoice(button, selected) {
+  button.setAttribute('aria-checked', String(selected));
+  button.tabIndex = selected ? 0 : -1;
+}
+
+function setupSegmentedSwitches() {
+  document.querySelectorAll('.segmented-switch').forEach(group => {
+    group.addEventListener('keydown', event => {
+      const buttons = [...group.querySelectorAll('button[role="radio"]:not(:disabled):not([hidden])')];
+      const index = buttons.indexOf(event.target);
+      if (index < 0) return;
+      const movement = {ArrowLeft:-1, ArrowUp:-1, ArrowRight:1, ArrowDown:1}[event.key];
+      let next;
+      if (movement) next = buttons[(index + movement + buttons.length) % buttons.length];
+      else if (event.key === 'Home') next = buttons[0];
+      else if (event.key === 'End') next = buttons.at(-1);
+      if (!next) return;
+      event.preventDefault();
+      next.focus();
+      next.click();
+    });
+  });
 }
 
 function makeTimeRange(onChange) {
@@ -1067,7 +1105,7 @@ function renderDash(d, f) {
   if (trend.globalBasis !== dateBasis) {
     trend.globalBasis = trend.basis = dateBasis;
     document.querySelectorAll('#dailyBasis button').forEach(button =>
-      button.setAttribute('aria-pressed', String(button.dataset.dateBasis === dateBasis)));
+      setSwitchChoice(button, button.dataset.dateBasis === dateBasis));
   }
   trend.created = d.daily;
   trend.shipped = d.dailyShipped;
@@ -1870,11 +1908,65 @@ async function loadAlerts(page = 1) {
   refreshSelection();
 }
 
-async function exportAlertDetails(scope, button) {
+function setupAlertExport() {
+  const primary = $('#exportAllAlerts');
+  const toggle = $('#alertExportToggle');
+  const menu = $('#alertExportMenu');
+  const items = [...menu.querySelectorAll('[data-export-scope]')];
+  const position = () => positionControlPopover(menu, toggle, 'end');
+  const close = () => { menu.hidePopover(); toggle.focus({preventScroll:true}); };
+  const open = (last = false) => {
+    if (primary.disabled) return;
+    if (!menu.matches(':popover-open')) menu.showPopover();
+    position();
+    (last ? items.at(-1) : items[0]).focus();
+  };
+  menu.addEventListener('beforetoggle', event =>
+    toggle.setAttribute('aria-expanded', String(event.newState === 'open')));
+  toggle.onclick = event => {
+    event.preventDefault();
+    if (menu.matches(':popover-open')) close();
+    else open();
+  };
+  toggle.onkeydown = event => {
+    if (!['ArrowDown','ArrowUp'].includes(event.key)) return;
+    event.preventDefault();
+    open(event.key === 'ArrowUp');
+  };
+  menu.onkeydown = event => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      close();
+    } else if (['ArrowDown','ArrowUp','Home','End'].includes(event.key)) {
+      event.preventDefault();
+      const index = items.indexOf(event.target);
+      if (event.key === 'Home') items[0].focus();
+      else if (event.key === 'End') items.at(-1).focus();
+      else items[(index + items.length + (event.key === 'ArrowDown' ? 1 : -1)) % items.length].focus();
+    }
+  };
+  menu.onclick = event => {
+    const item = event.target.closest('[data-export-scope]');
+    if (!item) return;
+    close();
+    run(() => exportAlertDetails(item.dataset.exportScope));
+  };
+  primary.onclick = () => run(() => exportAlertDetails('all'));
+  window.addEventListener('resize', position);
+  window.addEventListener('scroll', position, true);
+}
+
+async function exportAlertDetails(scope) {
+  const button = $('#exportAllAlerts');
+  if (button.disabled) return;
+  const trigger = $('#alertExportToggle');
+  const caption = button.querySelector('span');
   const mode = trackMode;
-  const label = button.textContent;
+  const label = caption.textContent;
   button.disabled = true;
-  button.textContent = '正在导出…';
+  trigger.setAttribute('aria-disabled', 'true');
+  caption.textContent = '正在导出…';
   try {
     await loadMeta();
     if (VIEW !== 'track' || trackMode !== mode || mode === 'tracking') return;
@@ -1891,7 +1983,8 @@ async function exportAlertDetails(scope, button) {
       scope === 'tracks' ? '预警明细与轨迹.zip' : '预警明细.csv');
   } finally {
     button.disabled = false;
-    button.textContent = label;
+    trigger.removeAttribute('aria-disabled');
+    caption.textContent = label;
   }
 }
 
@@ -2203,13 +2296,12 @@ function channelQuery({filters, basis, dimension}) {
 }
 
 function syncChannelTimingControls() {
-  $('#channelBasisNote').textContent = TIMING_BASIS[channelBasis].note;
   $('#channelBasis').querySelectorAll('button').forEach(button =>
-    button.setAttribute('aria-pressed', String(button.dataset.basis === channelBasis)));
+    setSwitchChoice(button, button.dataset.basis === channelBasis));
   $('#channelDimension').querySelectorAll('button').forEach(button =>
     button.setAttribute('aria-pressed', String(button.dataset.dimension === channelDimension)));
   $('#channelDayMode').querySelectorAll('button').forEach(button =>
-    button.setAttribute('aria-pressed', String(button.dataset.dayMode === channelDayMode)));
+    setSwitchChoice(button, button.dataset.dayMode === channelDayMode));
 }
 
 function setChannelDimension(dimension) {
@@ -2244,6 +2336,7 @@ async function loadChannelFilters() {
     updateDateOptions(CF, CF.date_basis.value);
     scheduleReport('channels',loadChannels);
   });
+  $('#channelBasis').parentElement.append(CF._info);
   updateDateOptions(CF, CF.date_basis.value);
   attachFilterPresets('channels', '渠道时效', host, CF, {
     onApply:() => scheduleReport('channels',loadChannels),
@@ -3490,7 +3583,7 @@ function setupUsControls() {
       const button = event.target.closest('button[data-value]');
       if (!button || usView[field] === button.dataset.value) return;
       usView[field] = button.dataset.value;
-      container.querySelectorAll('button').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+      container.querySelectorAll('button').forEach(item => setSwitchChoice(item, item === button));
       if (field === 'level') usView.place = null;
       renderUsReport();
     };
@@ -3508,7 +3601,7 @@ function setupUsControls() {
     if (usView.metric === 'orders') {
       usView.metric = 'p90';
       $('#usMetric').querySelectorAll('button').forEach(button =>
-        button.setAttribute('aria-pressed', String(button.dataset.value === 'p90')));
+        setSwitchChoice(button, button.dataset.value === 'p90'));
     }
     run(loadUs);
   };
@@ -3563,7 +3656,7 @@ function setRegionMarket(market) {
   $('#regionMarkets').querySelectorAll('button').forEach(button =>
     button.setAttribute('aria-pressed', String(button.dataset.value === market)));
   $('#usLevel').querySelectorAll('button').forEach(button =>
-    button.setAttribute('aria-pressed', String(button.dataset.value === 'states')));
+    setSwitchChoice(button, button.dataset.value === 'states'));
 }
 /* ================= 数据与规则 ================= */
 let activeConfiguration = null;
@@ -4268,6 +4361,12 @@ document.addEventListener('accentchange', () => {
 });
 
 run(async function boot() {
+  setupSegmentedSwitches();
+  $('#breadcrumbHome').onclick = event => {
+    if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+    event.preventDefault();
+    showView('dash');
+  };
   const v = location.hash.slice(1);
   if (['alerts','archive','special-tracking','channel-exceptions'].includes(v))
     setTrackMode(v === 'channel-exceptions' ? 'special-tracking' : v);
@@ -4319,7 +4418,7 @@ run(async function boot() {
     if (!button || channelMemberDimension === button.dataset.memberDimension) return;
     channelMemberDimension = button.dataset.memberDimension;
     $('#channelMemberDimension').querySelectorAll('button').forEach(item =>
-      item.setAttribute('aria-pressed', String(item === button)));
+      setSwitchChoice(item, item === button));
     channelMemberPicker.close();
     if (channelMemberDimension === 'current') channelMemberSelection.channel = '';
     renderChannelMembers();
@@ -4329,14 +4428,14 @@ run(async function boot() {
     if (!selected || selected.dataset.period === channelTrendPeriod) return;
     channelTrendPeriod = selected.dataset.period;
     $('#channelTrendPeriod').querySelectorAll('button').forEach(button =>
-      button.setAttribute('aria-pressed', String(button === selected)));
+      setSwitchChoice(button, button === selected));
     renderChannelTrend();
   };
   const periods = [...document.querySelectorAll('#dailyPeriod button')];
   periods.forEach(button => button.onclick = () => {
     if (trend.span === Number(button.dataset.days)) return;
     trend.span = Number(button.dataset.days);
-    periods.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+    periods.forEach(item => setSwitchChoice(item, item === button));
     drawDailyVolume();
   });
   const dailyBases = [...document.querySelectorAll('#dailyBasis button')];
@@ -4344,7 +4443,7 @@ run(async function boot() {
     const basis = button.dataset.dateBasis;
     if (trend.basis === basis) return;
     trend.basis = basis;
-    dailyBases.forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+    dailyBases.forEach(item => setSwitchChoice(item, item === button));
     drawDailyVolume();
   });
   document.querySelectorAll('#trackTabs [data-mode]').forEach(btn => btn.onclick = () => {
@@ -4518,8 +4617,7 @@ run(async function boot() {
     ['最新轨迹（当地时间或标注 UTC）', row => row.最新事件当地时间 || row.最新事件时间 ?
       trackTime(row.最新事件当地时间, row.最新事件时间) : ''],
   ]), trackRows);
-  $('#exportAllAlerts').onclick = () => run(() => exportAlertDetails('all', $('#exportAllAlerts')));
-  $('#exportAlertsWithTracks').onclick = () => run(() => exportAlertDetails('tracks', $('#exportAlertsWithTracks')));
+  setupAlertExport();
   $('#exportChannels').onclick = () => {
     if (!renderedChannels) return;
     const basis = TIMING_BASIS[renderedChannels.basis].label;

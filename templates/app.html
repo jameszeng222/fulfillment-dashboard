@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
 <script src="/static/theme.js?v=2"></script>
-<link rel="stylesheet" href="/static/app.css?v=sheet-calendar">
+<link rel="stylesheet" href="/static/app.css?v=geist-controls">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -80,7 +80,11 @@
 
   <div class="main">
     <div class="top">
-      <div class="crumb" hidden><b id="crumb">数据总览</b></div>
+      <nav class="crumb" aria-label="面包屑导航">
+        <ol><li><a id="breadcrumbHome" href="#dash">履约监控系统</a></li>
+          <li class="crumb-separator" aria-hidden="true">/</li>
+          <li id="crumb" aria-current="page">数据总览</li></ol>
+      </nav>
       <div class="top-data-status"><span id="reportCacheStatus" class="report-cache-status" role="status" hidden></span><div class="date-tag" id="topMeta">履约数据</div></div>
     </div>
 
@@ -110,14 +114,14 @@
             <div class="ct">
               <div><h2 id="dailyTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>日单量</h2><p class="sr-only" id="dailyRange">按出库时间统计</p></div>
               <div class="daily-controls">
-                <div class="tabs period-tabs" id="dailyBasis" role="group" aria-label="日单量日期口径">
-                  <button type="button" data-date-basis="paid" aria-pressed="false">按支付</button>
-                  <button type="button" data-date-basis="created" aria-pressed="false">按创建</button>
-                  <button type="button" data-date-basis="shipped" aria-pressed="true">按出库</button>
+                <div class="tabs period-tabs segmented-switch" id="dailyBasis" role="radiogroup" aria-label="日单量日期口径">
+                  <button type="button" data-date-basis="paid" role="radio" aria-checked="false" tabindex="-1">按支付</button>
+                  <button type="button" data-date-basis="created" role="radio" aria-checked="false" tabindex="-1">按创建</button>
+                  <button type="button" data-date-basis="shipped" role="radio" aria-checked="true" tabindex="0">按出库</button>
                 </div>
-                <div class="tabs period-tabs" id="dailyPeriod" role="group" aria-label="日单量范围">
-                  <button type="button" data-days="45" aria-pressed="true">近 45 天</button>
-                  <button type="button" data-days="0" aria-pressed="false">全部</button>
+                <div class="tabs period-tabs segmented-switch" id="dailyPeriod" role="radiogroup" aria-label="日单量范围">
+                  <button type="button" data-days="45" role="radio" aria-checked="true" tabindex="0">近 45 天</button>
+                  <button type="button" data-days="0" role="radio" aria-checked="false" tabindex="-1">全部</button>
                 </div>
               </div>
             </div>
@@ -181,7 +185,7 @@
             <button type="button" class="btn ghost sm" id="retryTrack" hidden>重试列表</button>
             <button type="button" class="btn ghost sm" id="showDetailed">有逐条轨迹</button>
             <button type="button" class="btn ghost sm" id="openTrackAnalysis" aria-haspopup="dialog" aria-controls="trackAnalysisDialog" hidden><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg>AI 轨迹分析</button>
-            <button type="button" class="btn ghost sm intent-action" id="exportTrack">导出本页</button>
+            <button type="button" class="btn ghost sm export-button" id="exportTrack"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg>导出本页</button>
           </div></div>
           <div class="tblwrap">
             <table class="tbl">
@@ -208,8 +212,14 @@
                   <select id="batchAction" aria-label="批量处理动作"><option value="">批量操作</option></select>
                   <button type="button" class="btn sm" id="applyBatch" disabled>应用</button>
                 </div>
-                <button type="button" class="btn ghost sm intent-action" id="exportAllAlerts">导出全部命中</button>
-                <button type="button" class="btn ghost sm intent-action" id="exportAlertsWithTracks">导出含完整轨迹</button>
+                <div class="export-split" id="alertExport">
+                  <button type="button" class="btn ghost sm export-button" id="exportAllAlerts"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg><span>导出全部命中</span></button>
+                  <button type="button" class="btn ghost sm export-toggle" id="alertExportToggle" aria-label="更多预警导出方式" aria-haspopup="menu" aria-expanded="false" aria-controls="alertExportMenu" popovertarget="alertExportMenu"><span class="select-chevron" aria-hidden="true"></span></button>
+                  <div class="export-menu" id="alertExportMenu" popover="auto" role="menu" aria-label="预警导出方式">
+                    <button type="button" role="menuitem" data-export-scope="all"><b>导出全部命中</b><span>当前筛选的预警明细 · CSV</span></button>
+                    <button type="button" role="menuitem" data-export-scope="tracks"><b>导出含完整轨迹</b><span>预警明细和逐条轨迹 · ZIP</span></button>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="tblwrap">
@@ -259,22 +269,20 @@
 
       <!-- ============ 渠道时效 ============ -->
       <section class="view" id="v-channels">
-        <div class="page-head"><h1>渠道时效</h1>
-          <div class="tabs" id="channelDimension" role="group" aria-label="渠道时效分类">
-            <button type="button" data-dimension="lastmile" aria-pressed="true">C 端渠道</button>
-            <button type="button" data-dimension="group" aria-pressed="false">自定义渠道</button>
-          </div>
+        <div class="page-head"><h1>渠道时效</h1></div>
+        <div class="tabs" id="channelDimension" role="group" aria-label="渠道时效分类">
+          <button type="button" data-dimension="lastmile" aria-pressed="true">C 端渠道</button>
+          <button type="button" data-dimension="group" aria-pressed="false">自定义渠道</button>
         </div>
         <div class="workspace-stack" id="channelTimingPane">
         <section class="report-controls" aria-label="筛选和对比口径">
         <div class="filters" id="channelFilters"></div>
         <div class="channel-basis">
-          <div class="tabs" id="channelBasis" role="group" aria-label="时效统计口径">
-            <button type="button" class="tab-toned tone-blue" data-basis="paid" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-wallet"/></svg>支付到签收</button>
-            <button type="button" class="tab-toned tone-green" data-basis="shipped" aria-pressed="true"><svg class="ui-icon" aria-hidden="true"><use href="#i-warehouse"/></svg>出库到签收</button>
-            <button type="button" class="tab-toned tone-cyan" data-basis="online" aria-pressed="false"><svg class="ui-icon" aria-hidden="true"><use href="#i-scan"/></svg>上网到签收</button>
+          <div class="tabs segmented-switch" id="channelBasis" role="radiogroup" aria-label="时效统计口径">
+            <button type="button" class="tab-toned tone-blue" data-basis="paid" role="radio" aria-checked="false" tabindex="-1"><svg class="ui-icon" aria-hidden="true"><use href="#i-wallet"/></svg>支付到签收</button>
+            <button type="button" class="tab-toned tone-green" data-basis="shipped" role="radio" aria-checked="true" tabindex="0"><svg class="ui-icon" aria-hidden="true"><use href="#i-warehouse"/></svg>出库到签收</button>
+            <button type="button" class="tab-toned tone-cyan" data-basis="online" role="radio" aria-checked="false" tabindex="-1"><svg class="ui-icon" aria-hidden="true"><use href="#i-scan"/></svg>上网到签收</button>
           </div>
-          <p id="channelBasisNote" aria-live="polite">签出 → 妥投</p>
         </div>
         </section>
         <div id="channelLoading" class="card" role="status">正在读取渠道时效…</div>
@@ -296,9 +304,9 @@
                   <div class="member-menu-panel" id="channelMemberBranches" role="group" aria-label="所属当前渠道" hidden></div>
                 </div>
               </div>
-              <div class="tabs period-tabs" id="channelMemberDimension" role="group" aria-label="子渠道拆分维度">
-                <button type="button" data-member-dimension="current" aria-pressed="false">当前物流渠道</button>
-                <button type="button" data-member-dimension="lastmile" aria-pressed="true">C 端渠道</button>
+              <div class="tabs period-tabs segmented-switch" id="channelMemberDimension" role="radiogroup" aria-label="子渠道拆分维度">
+                <button type="button" data-member-dimension="current" role="radio" aria-checked="false" tabindex="-1">当前物流渠道</button>
+                <button type="button" data-member-dimension="lastmile" role="radio" aria-checked="true" tabindex="0">C 端渠道</button>
               </div>
             </div>
           </div>
@@ -316,11 +324,11 @@
             <h2 id="channelComparisonTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span><span id="channelComparisonName">C 端渠道时效对比</span></h2>
             <p class="sr-only" id="channelChartScope"></p>
           </div><div class="toolbar">
-            <div class="tabs period-tabs" id="channelDayMode" role="group" aria-label="妥投率计时方式">
-              <button type="button" data-day-mode="calendar" aria-pressed="true">自然日</button>
-              <button type="button" data-day-mode="workday" aria-pressed="false">工作日</button>
+            <div class="tabs period-tabs segmented-switch" id="channelDayMode" role="radiogroup" aria-label="妥投率计时方式">
+              <button type="button" data-day-mode="calendar" role="radio" aria-checked="true" tabindex="0">自然日</button>
+              <button type="button" data-day-mode="workday" role="radio" aria-checked="false" tabindex="-1">工作日</button>
             </div>
-            <button type="button" class="btn ghost sm intent-action" id="exportChannels"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg>导出结果</button>
+            <button type="button" class="btn ghost sm export-button" id="exportChannels"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg>导出结果</button>
           </div></div>
           <div class="channel-period" id="channelComparisonPeriod" aria-label="统计时间范围"></div>
           <div class="compare-grid compare-head" id="channelCompareHead" aria-hidden="true">
@@ -336,9 +344,9 @@
             <div><h2 id="channelTrendTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>单渠道时效趋势</h2><p class="sr-only" id="channelTrendScope"></p></div>
             <div class="toolbar">
               <label class="tip" for="channelTrendKey">渠道</label><select id="channelTrendKey"></select>
-              <div class="tabs period-tabs" id="channelTrendPeriod" role="group" aria-label="趋势统计周期">
-                <button type="button" data-period="month" aria-pressed="true">按月</button>
-                <button type="button" data-period="week" aria-pressed="false">按周</button>
+              <div class="tabs period-tabs segmented-switch" id="channelTrendPeriod" role="radiogroup" aria-label="趋势统计周期">
+                <button type="button" data-period="month" role="radio" aria-checked="true" tabindex="0">按月</button>
+                <button type="button" data-period="week" role="radio" aria-checked="false" tabindex="-1">按周</button>
               </div>
             </div>
           </div>
@@ -420,17 +428,17 @@
             <section class="card plot-card us-map-card" aria-labelledby="usMapTitle">
               <div class="ct"><div><h2 id="usMapTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span><span id="regionMapTitle">美国履约地图</span></h2>
                 <p class="tip icon-caption" id="usMapHint">按目的州展示 P90 时效</p></div>
-                <div class="tabs period-tabs" id="usLevel" role="group" aria-label="地图地域级别">
-                  <button type="button" data-value="states" aria-pressed="true">按州</button>
-                  <button type="button" data-value="regions" aria-pressed="false">按业务区域</button>
+                <div class="tabs period-tabs segmented-switch" id="usLevel" role="radiogroup" aria-label="地图地域级别">
+                  <button type="button" data-value="states" role="radio" aria-checked="true" tabindex="0">按州</button>
+                  <button type="button" data-value="regions" role="radio" aria-checked="false" tabindex="-1">按业务区域</button>
                 </div>
               </div>
               <div class="us-map-controls">
-                <div class="tabs period-tabs" id="usMetric" role="group" aria-label="地图指标">
-                  <button type="button" data-value="orders" aria-pressed="false">单量</button>
-                  <button type="button" data-value="avg" aria-pressed="false">平均时效</button>
-                  <button type="button" data-value="p90" aria-pressed="true">P90 时效</button>
-                  <button type="button" data-value="p95" aria-pressed="false">P95 时效</button>
+                <div class="tabs period-tabs segmented-switch" id="usMetric" role="radiogroup" aria-label="地图指标">
+                  <button type="button" data-value="orders" role="radio" aria-checked="false" tabindex="-1">单量</button>
+                  <button type="button" data-value="avg" role="radio" aria-checked="false" tabindex="-1">平均时效</button>
+                  <button type="button" data-value="p90" role="radio" aria-checked="true" tabindex="0">P90 时效</button>
+                  <button type="button" data-value="p95" role="radio" aria-checked="false" tabindex="-1">P95 时效</button>
                 </div>
                 <label class="us-focus">地图渠道<select id="usMapChannel" aria-label="地图渠道"></select></label>
               </div>
@@ -617,7 +625,7 @@
           <div class="ct table-head">
             <div><h2 id="channelGroupRulesTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>自定义渠道分组</h2>
               <p class="tip icon-caption">每个履约单的「当前渠道」只能归入一组。分组保存后可在各业务页面筛选。</p></div>
-            <div class="toolbar"><button type="button" class="btn ghost sm" id="exportChannelGroups">导出配置</button>
+            <div class="toolbar"><button type="button" class="btn ghost sm export-button" id="exportChannelGroups"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg>导出配置</button>
             <button type="button" class="btn ghost sm" id="openChannelGroups" hidden>新增分组</button></div>
           </div>
           <div class="tblwrap"><table class="tbl">
@@ -768,7 +776,7 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/date-calendar.js?v=1" defer></script>
-<script src="/static/app.js?v=sheet-calendar" defer></script>
+<script src="/static/date-calendar.js?v=2" defer></script>
+<script src="/static/app.js?v=geist-controls" defer></script>
 </body>
 </html>
