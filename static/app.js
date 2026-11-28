@@ -501,6 +501,31 @@ function positionFilterPopover(root, panel) {
   if (overflow > 0) panel.style.left = `-${overflow}px`;
 }
 
+const normalizeLookup = value => value.normalize('NFKC').trim().toLowerCase();
+const normalizeCountryName = value => normalizeLookup(value).normalize('NFD').replace(/[\p{M}\p{P}\p{Z}\s]/gu, '');
+let countryCodes;
+
+function countryCode(value, label = '') {
+  if (!countryCodes) {
+    countryCodes = new Map();
+    const names = ['en', 'zh-Hans'].map(locale => new Intl.DisplayNames(locale, {type:'region', fallback:'none'}));
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    for (const a of letters) for (const b of letters) {
+      const code = a + b;
+      if (code === 'ZZ' || new Intl.Locale(`und-${code}`).region !== code) continue;
+      for (const name of names.map(locale => locale.of(code)).filter(Boolean)) {
+        countryCodes.set(normalizeCountryName(name), code);
+        countryCodes.set(code.toLowerCase(), code);
+      }
+    }
+    for (const [name, code] of [
+      ['Congo', 'CG'], ['Congo, The Democratic Republic Of The', 'CD'],
+      ['Czech Republic', 'CZ'], ['China,Hong Kong', 'HK'], ['UK', 'GB'],
+    ]) countryCodes.set(normalizeCountryName(name), code);
+  }
+  return countryCodes.get(normalizeCountryName(value)) || countryCodes.get(normalizeCountryName(label)) || '';
+}
+
 function multiFilter(def, onChange) {
   const root = el('details', 'multi-filter tone-' + filterVisual(def.key)[1]);
   root.dataset.filter = def.key;
@@ -512,8 +537,8 @@ function multiFilter(def, onChange) {
   const panel = el('div', 'multi-popover');
   const search = el('input');
   search.type = 'search';
-  search.placeholder = `搜索${def.label}…`;
-  search.setAttribute('aria-label', search.placeholder);
+  search.placeholder = def.key === 'cn' ? '搜索国家或代码，如 US' : `搜索${def.label}…`;
+  search.setAttribute('aria-label', `搜索${def.label}`);
   const all = el('input');
   all.type = 'checkbox';
   const allLabel = el('label', 'multi-row multi-all', '<span>全部</span>');
@@ -535,10 +560,12 @@ function multiFilter(def, onChange) {
   }
 
   function renderOptions() {
-    const query = search.value.trim().toLocaleLowerCase();
-    list.replaceChildren(...def.options.filter(option =>
-      `${option.t} ${option.v}`.toLocaleLowerCase().includes(query)
-    ).map(option => {
+    const query = normalizeLookup(search.value);
+    const byCountry = def.key === 'cn';
+    const queryCode = byCountry && /^[a-z]{2}$/.test(query) ? countryCode(query) : '';
+    const matches = def.options.map(option => ({option, code: byCountry ? countryCode(option.v, option.t) : ''}))
+      .filter(({option, code}) => queryCode ? code === queryCode : normalizeLookup(`${option.t} ${option.v}`).includes(query));
+    list.replaceChildren(...matches.map(({option, code}) => {
       const row = el('label', 'multi-row');
       const box = el('input');
       box.type = 'checkbox';
@@ -551,6 +578,7 @@ function multiFilter(def, onChange) {
       };
       const text = el('span');
       text.textContent = option.t;
+      if (code) text.append(el('span', 'country-option-code', code));
       row.append(box, text, el('small', '', fmt(option.n)));
       return row;
     }));
@@ -611,6 +639,157 @@ function searchField(input) {
   return field;
 }
 
+function setupChannelSearch(root, label, onChange) {
+  const trigger = el('button', 'btn ghost channel-search-trigger');
+  const caption = el('span');
+  const panel = el('div', 'channel-search-popover');
+  const input = el('input');
+  const list = el('div', 'channel-search-list');
+  let options = [], matches = [], value = '', active = -1;
+
+  root.classList.add('channel-search');
+  trigger.id = root.id + 'Trigger';
+  trigger.type = 'button';
+  trigger.append(caption, el('span', 'select-chevron'));
+  trigger.lastElementChild.setAttribute('aria-hidden', 'true');
+  panel.id = root.id + 'Popover';
+  panel.setAttribute('popover', 'auto');
+  panel.setAttribute('role', 'dialog');
+  panel.setAttribute('aria-label', label);
+  trigger.setAttribute('popovertarget', panel.id);
+  trigger.setAttribute('aria-controls', panel.id);
+  trigger.setAttribute('aria-haspopup', 'dialog');
+  trigger.setAttribute('aria-expanded', 'false');
+  input.type = 'search';
+  input.placeholder = '搜索渠道…';
+  input.setAttribute('aria-label', `搜索${label}`);
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-expanded', 'false');
+  list.id = root.id + 'Options';
+  list.setAttribute('role', 'listbox');
+  list.setAttribute('aria-label', label);
+  input.setAttribute('aria-controls', list.id);
+  const empty = el('p', 'empty', '没有匹配的渠道');
+  empty.setAttribute('role', 'status');
+  panel.append(searchField(input), list, empty);
+  root.append(trigger, panel);
+
+  function updateCaption() {
+    const selected = options.find(option => option.value === value);
+    caption.textContent = selected?.label || '选择渠道';
+    trigger.title = caption.textContent;
+    trigger.setAttribute('aria-label', `${label}：${caption.textContent}`);
+    trigger.disabled = !options.length;
+  }
+
+  function highlight(index, scroll = false) {
+    list.children[active]?.removeAttribute('data-active');
+    active = index;
+    const option = list.children[active];
+    if (option) {
+      option.setAttribute('data-active', '');
+      input.setAttribute('aria-activedescendant', option.id);
+      if (scroll) option.scrollIntoView({block:'nearest'});
+    } else input.removeAttribute('aria-activedescendant');
+  }
+
+  function renderOptions() {
+    const query = normalizeLookup(input.value);
+    matches = options.filter(option => normalizeLookup(option.label).includes(query));
+    list.replaceChildren(...matches.map((option, index) => {
+      const item = el('div', 'channel-search-option');
+      item.id = `${list.id}-${index}`;
+      item.dataset.index = index;
+      item.setAttribute('role', 'option');
+      item.setAttribute('aria-selected', String(value === option.value));
+      item.textContent = option.label;
+      return item;
+    }));
+    list.hidden = !matches.length;
+    empty.hidden = Boolean(matches.length);
+    highlight(matches.length ? Math.max(0, matches.findIndex(option => option.value === value)) : -1);
+    list.scrollTop = 0;
+    positionControlPopover(panel, trigger, 'end');
+  }
+
+  function commit(index) {
+    const option = matches[index];
+    if (!option) return;
+    panel.hidePopover();
+    trigger.focus({preventScroll:true});
+    if (option.value === value) return;
+    value = option.value;
+    updateCaption();
+    onChange(value);
+  }
+
+  panel.addEventListener('beforetoggle', event => {
+    const open = event.newState === 'open';
+    trigger.setAttribute('aria-expanded', String(open));
+    input.setAttribute('aria-expanded', String(open));
+    if (open) {
+      input.value = '';
+      renderOptions();
+    }
+  });
+  panel.addEventListener('toggle', () => {
+    if (!panel.matches(':popover-open')) return;
+    positionControlPopover(panel, trigger, 'end');
+    input.focus({preventScroll:true});
+    highlight(active, true);
+  });
+  panel.addEventListener('focusout', event => {
+    if (event.relatedTarget && !root.contains(event.relatedTarget)) panel.hidePopover();
+  });
+  input.oninput = renderOptions;
+  input.onkeydown = event => {
+    if (event.isComposing) return;
+    const {key} = event;
+    if (key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      panel.hidePopover();
+      trigger.focus({preventScroll:true});
+    } else if (['ArrowDown','ArrowUp'].includes(key) && matches.length) {
+      event.preventDefault();
+      const direction = key === 'ArrowDown' ? 1 : -1;
+      highlight((active + direction + matches.length) % matches.length, true);
+    } else if (key === 'Enter' && active >= 0) {
+      event.preventDefault();
+      commit(active);
+    }
+  };
+  list.onclick = event => {
+    const item = event.target.closest('[data-index]');
+    if (item) commit(Number(item.dataset.index));
+  };
+  for (const event of ['scroll', 'resize']) {
+    window.addEventListener(event, e => {
+      if (!(e.target instanceof Node) || !panel.contains(e.target)) {
+        positionControlPopover(panel, trigger, 'end');
+      }
+    }, true);
+  }
+  updateCaption();
+  return {
+    get value() { return value; },
+    setOptions(items, selected = value) {
+      options = items;
+      this.value = selected;
+      if (panel.matches(':popover-open')) {
+        if (!items.length) panel.hidePopover();
+        else renderOptions();
+      }
+    },
+    set value(selected) {
+      value = options.some(option => option.value === selected) ? selected : options[0]?.value ?? '';
+      updateCaption();
+    },
+  };
+}
+
+let channelTrendPicker, mapChannelPicker;
 const filterCalendar = createDateCalendar();
 
 function keepFocusInside(event, container) {
@@ -2557,11 +2736,7 @@ function renderChannels(d, filters) {
 
   renderChannelRates(d, rows);
   refreshChannelMemberGroups(d);
-  const selector = $('#channelTrendKey');
-  const key = selector.value;
-  selector.replaceChildren(...rows.map(row => new Option(row.channel, row.key)));
-  if (rows.some(row => row.key === key)) selector.value = key;
-  selector.disabled = !rows.length;
+  channelTrendPicker.setOptions(rows.map(row => ({label: row.channel, value: row.key})));
   $('#channelTrendScope').textContent = `按${dateBasisLabel[d.dateBasis || DEFAULT_DATE_BASIS]}分组 · ${TIMING_BASIS[d.basis].label}`;
   if (!rows.length) {
     channelTrendRequest++;
@@ -2865,7 +3040,7 @@ function renderChannelMembers() {
 }
 
 async function loadChannelTrend() {
-  const key = $('#channelTrendKey').value;
+  const key = channelTrendPicker.value;
   if (VIEW !== 'channels' || !channelTrendVisible || !renderedChannels || !key) return;
   const {min_n, ...filters} = renderedChannelFilters;
   const d = renderedChannels;
@@ -3313,11 +3488,9 @@ function renderRegionalData(report, filters) {
     if (!charts.usMap) void loadUsMap(report.market);
     return;
   }
-  const selector = $('#usMapChannel');
-  selector.replaceChildren(new Option('全部渠道', ''), ...report.channels.map(row => new Option(row.label, row.label)));
-  selector.value = usView.channel;
-  if (selector.selectedIndex < 0) selector.value = '';
-  usView.channel = selector.value;
+  mapChannelPicker.setOptions([{label: '全部渠道', value: ''},
+    ...report.channels.map(row => ({label: row.label, value: row.label}))], usView.channel);
+  usView.channel = mapChannelPicker.value;
   renderUsReport();
   void loadUsMap(report.market);
 }
@@ -3670,14 +3843,11 @@ function setupUsControls() {
     syncFilterPreset(UF);
     run(loadUs);
   };
-  $('#usMapChannel').onchange = event => {
-    usView.channel = event.target.value;
-    renderUsReport();
-  };
   $('#usMixBody').onclick = event => {
     const button = event.target.closest('[data-us-channel]');
     if (!button) return;
-    usView.channel = $('#usMapChannel').value = button.dataset.usChannel;
+    mapChannelPicker.value = button.dataset.usChannel;
+    usView.channel = mapChannelPicker.value;
     renderUsReport();
   };
   $('#usDetailsBody').onclick = event => {
@@ -4454,6 +4624,11 @@ run(async function boot() {
   $('#batchAction').hidden = !ME.can_edit;
   $('#applyBatch').hidden = !ME.can_edit;
   document.querySelectorAll('#nav button').forEach(b => b.onclick = () => showView(b.dataset.v));
+  channelTrendPicker = setupChannelSearch($('#channelTrendKey'), '趋势渠道', () => run(loadChannelTrend));
+  mapChannelPicker = setupChannelSearch($('#usMapChannel'), '地图渠道', channel => {
+    usView.channel = channel;
+    renderUsReport();
+  });
   setupUsControls();
   new IntersectionObserver(([entry]) => {
     regionSegmentsVisible = entry.isIntersecting;
@@ -4464,7 +4639,6 @@ run(async function boot() {
     channelTrendVisible = entry.isIntersecting;
     if (channelTrendVisible) run(loadChannelTrend);
   }, {rootMargin:'100px 0px'}).observe($('#channelTrend'));
-  $('#channelTrendKey').onchange = () => run(loadChannelTrend);
   $('#dashTimingBasis').onclick = event => {
     const selected = event.target.closest('[data-basis]');
     if (!selected || selected.dataset.basis === overviewTimingBasis) return;

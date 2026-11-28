@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
 <script src="/static/theme.js?v=2"></script>
-<link rel="stylesheet" href="/static/app.css?v=workspace-polish">
+<link rel="stylesheet" href="/static/app.css?v=channel-search">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -339,7 +339,7 @@
           <div class="ct table-head">
             <div><h2 id="channelTrendTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>单渠道时效趋势</h2><p class="sr-only" id="channelTrendScope"></p></div>
             <div class="toolbar">
-              <label class="tip" for="channelTrendKey">渠道</label><select id="channelTrendKey"></select>
+              <label class="tip" for="channelTrendKeyTrigger">渠道</label><div id="channelTrendKey"></div>
               <div class="tabs period-tabs segmented-switch" id="channelTrendPeriod" role="radiogroup" aria-label="趋势统计周期">
                 <button type="button" data-period="month" role="radio" aria-checked="true" tabindex="0">按月</button>
                 <button type="button" data-period="week" role="radio" aria-checked="false" tabindex="-1">按周</button>
@@ -436,7 +436,7 @@
                   <button type="button" data-value="p90" role="radio" aria-checked="true" tabindex="0">P90 时效</button>
                   <button type="button" data-value="p95" role="radio" aria-checked="false" tabindex="-1">P95 时效</button>
                 </div>
-                <div class="us-focus"><select id="usMapChannel" aria-label="地图渠道"></select></div>
+                <div class="us-focus"><div id="usMapChannel"></div></div>
               </div>
               <div class="chart us-map" id="usMap" role="img" aria-label="美国各州地图。可在下方明细通过键盘选择州或区域。" aria-describedby="usMapHint"></div>
               <div class="us-legend" id="usLegend" aria-label="地图色阶"></div>
@@ -773,6 +773,6 @@
   </form>
 </dialog>
 <script src="/static/date-calendar.js?v=2" defer></script>
-<script src="/static/app.js?v=workspace-polish" defer></script>
+<script src="/static/app.js?v=channel-search" defer></script>
 </body>
 </html>
