@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=overview-green">
+<script src="/static/theme.js?v=2"></script>
+<link rel="stylesheet" href="/static/app.css?v=theme-switcher-2">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -57,6 +58,19 @@
       <button type="button" data-v="rules"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg>数据与规则</button>
     </nav>
     <div class="sidefoot">
+      <label class="theme-picker" for="themeAccent">
+        <span class="theme-label">主题</span>
+        <span class="theme-control">
+          <span class="theme-swatch" aria-hidden="true"></span>
+          <select id="themeAccent" aria-label="主题">
+            <option value="moss">苔绿</option>
+            <option value="iris">鸢尾浅蓝</option>
+            <option value="fog">灰调浅蓝</option>
+            <option value="gray">灰色</option>
+          </select>
+          <svg class="ui-icon theme-chevron" aria-hidden="true"><use href="#i-down"/></svg>
+        </span>
+      </label>
       <div class="who" id="who">—</div>
       <a class="btn ghost sm intent-action" id="cloudSharing" href="/sharing" hidden>邀请同事</a>
       <a class="btn ghost sm intent-action" id="opsAssistant" href="/assistant.html" hidden>智能助手</a>
@@ -119,10 +133,11 @@
               <h2 id="countryTimingTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span>各国平均时效</h2>
               <p class="tip icon-caption">出库 → 妥投 · 按有效时效样本计算</p>
             </div>
-              <select id="countryTimingSort" aria-label="各国平均时效排序" hidden>
+              <div class="toolbar"><select id="countryTimingSort" aria-label="各国时效排序" hidden>
                 <option value="orders">按履约单量</option><option value="days">按平均时效（从慢到快）</option>
                 <option value="p90">按 P90（从慢到快）</option>
-              </select>
+                <option value="p95">按 P95（从慢到快）</option>
+              </select></div>
             </div>
             <div id="countryTiming"></div>
           </section>
@@ -223,7 +238,7 @@
             <div class="ct table-head"><div><h2 id="trackExceptionTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>命中清单</h2>
               <p class="tip" id="trackExceptionStatus" role="status">正在核对轨迹…</p></div>
               <div class="toolbar track-exception-filters">
-                <input type="search" id="trackExceptionSearch" class="inline-search" placeholder="履约单号或运单号" aria-label="搜索履约单号或运单号">
+                <span class="search-field inline-search"><svg class="ui-icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" id="trackExceptionSearch" placeholder="履约单号或运单号" aria-label="搜索履约单号或运单号"></span>
                 <select id="trackExceptionRule" aria-label="特殊轨迹规则"><option value="">全部规则</option></select>
                 <select id="trackExceptionState" aria-label="异常类型"><option value="">全部命中</option>
                   <option value="late">节点超时</option><option value="missing">超时未见节点</option></select>
@@ -440,7 +455,7 @@
           </section>
           <section class="card table-card" aria-labelledby="usDetailTitle">
             <div class="ct table-head"><div><h2 id="usDetailTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span><span id="usDetailName">州级明细</span></h2><p class="sr-only" id="usDetailScope"></p></div>
-              <input type="search" class="inline-search" id="usSearch" placeholder="搜索州名、代码或区域" aria-label="搜索州名、代码或区域">
+              <span class="search-field inline-search"><svg class="ui-icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" id="usSearch" placeholder="搜索州名、代码或区域" aria-label="搜索州名、代码或区域"></span>
             </div>
             <div class="tblwrap"><table class="tbl us-detail-table">
               <thead><tr><th scope="col" id="usPlaceColumn">目的州</th><th scope="col" id="usChannelColumn">单量最高的渠道</th>
@@ -613,7 +628,7 @@
         <div class="card table-card" id="rules-sla" hidden>
           <div class="ct table-head"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg></span>渠道 SLA 规则</h2><p class="tip icon-caption">按当前渠道配置计时起点与承诺天数 · 目标对照以有效签收样本为分母</p></div>
             <div class="toolbar" id="slaGroupFilter">
-              <input type="search" id="slaSearch" class="inline-search" placeholder="搜索当前渠道…" aria-label="搜索当前渠道">
+              <span class="search-field inline-search"><svg class="ui-icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" id="slaSearch" placeholder="搜索当前渠道…" aria-label="搜索当前渠道"></span>
             </div>
           </div>
           <div class="tblwrap"><table class="tbl">
@@ -643,7 +658,9 @@
         <div class="tip" id="dSub">—</div>
       </div>
     </div>
-    <button class="x" id="dClose" aria-label="关闭详情">✕</button>
+    <button type="button" class="btn ghost sm x" id="dClose" aria-label="关闭详情">
+      <svg class="ui-icon" aria-hidden="true"><use href="#i-x"/></svg>
+    </button>
   </header>
   <div class="body" id="dBody"></div>
 </aside>
@@ -682,14 +699,14 @@
       <label>选择分组<select id="channelGroupChoice"></select></label>
       <label>分组名称<input id="channelGroupName" maxlength="80" required placeholder="例如 7日达"></label>
       <div class="channel-group-picker">
-        <label>搜索当前渠道<input type="search" id="channelGroupSearch" placeholder="输入渠道名称"></label>
+        <label>搜索当前渠道<span class="search-field"><svg class="ui-icon" aria-hidden="true"><use href="#i-search"/></svg><input type="search" id="channelGroupSearch" placeholder="输入渠道名称"></span></label>
         <p class="tip" id="channelGroupSelected"></p>
         <div id="channelGroupOptions" role="group" aria-label="当前渠道"></div>
       </div>
     </div>
     <p class="settings-error" id="channelGroupError" role="alert"></p>
     <footer>
-      <button type="button" class="btn ghost" id="channelGroupRemove" hidden>删除此分组</button>
+      <button type="button" class="btn danger" id="channelGroupRemove" hidden>删除此分组</button>
       <button type="submit" class="btn" id="channelGroupSave">保存分组</button>
     </footer>
   </form>
@@ -751,6 +768,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=overview-green" defer></script>
+<script src="/static/app.js?v=theme-switcher" defer></script>
 </body>
 </html>

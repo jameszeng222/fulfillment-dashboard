@@ -56,11 +56,14 @@ const metaPath = '/api/meta';
 const reportTimers = new Map();
 let resizeFrame = 0;
 let toastTimer;
+const themeStyle = getComputedStyle(document.documentElement);
+const themeColor = token => themeStyle.getPropertyValue(token).trim();
 const chartTheme = {
   ink: '#181818', paper: '#fff', text: '#181818', muted: '#6a6a6a',
   grid: '#e4e4e4',
-  series: ['#b8b8b8', '#757575', '#435f50', '#181818'],
-  volume: '#afc4b4', volumeHover: '#90ad99',
+  get accent() { return themeColor('--brand'); },
+  get volume() { return themeColor('--volume'); },
+  get volumeHover() { return themeColor('--volume-hover'); },
   font: 'Geist, "Microsoft YaHei", "PingFang SC", sans-serif',
 };
 const chartMotion = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -445,6 +448,7 @@ function showView(v) {
       v === 'us' ? (usView.market === 'us' ? 'regions' : 'regions-other') : v;
   history.replaceState(null, '', '#' + route);
   window.scrollTo({ top: 0 });
+  refreshThemedCharts();
   resizeVisibleCharts();
   if (META && usesFilterMeta()) loadMeta().catch(() => {});
   const tracking = {tracking: loadTrack, alerts: loadAlerts, archive: loadAlerts, 'special-tracking': loadTrackExceptions};
@@ -517,7 +521,9 @@ function multiFilter(def, onChange) {
   const total = el('small', '', fmt(def.total ?? META.range.orders));
   allLabel.append(total);
   const list = el('div', 'multi-options');
-  panel.append(search, allLabel, list);
+  const choices = el('div', 'multi-choices');
+  choices.append(allLabel, list);
+  panel.append(searchField(search), choices);
   root.append(trigger, panel);
   const selected = new Set();
   let optionsSource = def.options;
@@ -599,6 +605,12 @@ function multiFilter(def, onChange) {
   };
 }
 
+function searchField(input) {
+  const field = el('span', 'search-field', icon('search'));
+  field.append(input);
+  return field;
+}
+
 function makeTimeRange(onChange) {
   const root = el('div', 'filter-time-range tone-blue');
   root.setAttribute('role', 'group');
@@ -671,7 +683,7 @@ function makeFilters(host, defs, onChange) {
   };
   defs.forEach(d => {
     if (d.type === 'text') {
-      const i = el('input'); i.placeholder = d.label; i.dataset.key = d.key; i.style.width = (d.w || 210) + 'px';
+      const i = el('input'); i.type = 'search'; i.placeholder = d.placeholder || d.label; i.dataset.key = d.key; i.style.width = (d.w || 210) + 'px';
       i.setAttribute('aria-label', d.label);
       let timer;
       cancelSearches.push(() => clearTimeout(timer));
@@ -687,19 +699,16 @@ function makeFilters(host, defs, onChange) {
           submit();
         }
       };
+      const field = searchField(i);
       if (d.submit) {
         const group = el('div', 'filter-search');
-        const button = el('button', 'btn ghost sm', '搜索');
+        const button = el('button', 'btn sm', '搜索');
         button.type = 'button';
         button.onclick = submit;
-        const searchField = el('span','filter-search-field tone-' + filterVisual(d.key)[1]);
-        searchField.append(filterGlyph(d.key),i);
-        group.append(searchField, button);
+        group.append(field, button);
         host.appendChild(group);
       } else {
-        const searchField = el('span','filter-search-field tone-' + filterVisual(d.key)[1]);
-        searchField.append(filterGlyph(d.key),i);
-        host.appendChild(searchField);
+        host.appendChild(field);
       }
       refs[d.key] = i;
     } else if (d.type === 'time-range') {
@@ -1069,7 +1078,7 @@ function drawCountryTiming(rows, filters) {
   const max = Math.max(1, ...rows.map(row => row.days || 0));
   const days = value => value == null ? '—' : `${value.toFixed(2)} 天`;
   host.innerHTML = `<div class="tblwrap country-timing-table"><table class="tbl">
-    <thead><tr><th>目的国家</th><th>平均时效</th><th title="约 90% 的有效样本在此时长内妥投">P90 时效</th><th>有效时效样本</th><th>履约单量</th></tr></thead>
+    <thead><tr><th scope="col">目的国家</th><th scope="col">平均时效</th><th scope="col" title="约 90% 的有效样本在此时长内妥投">P90 时效</th><th scope="col" title="约 95% 的有效样本在此时长内妥投">P95 时效</th><th scope="col">有效时效样本</th><th scope="col">履约单量</th></tr></thead>
     <tbody>${data.map((row, index) => {
       const name = esc(row.name || row.code);
       return `<tr><td>${ME.preview ? `<b>${name}</b>` :
@@ -1077,7 +1086,8 @@ function drawCountryTiming(rows, filters) {
         <td><span class="timing-value"><span class="rank-track" aria-hidden="true">
           <span style="width:${(row.days || 0) * 100 / max}%"></span></span>
           <strong>${days(row.days)}</strong></span></td>
-        <td><strong>${days(row.p90)}</strong></td><td>${fmt(row.samples)}</td><td>${fmt(row.orders)}</td></tr>`;
+        <td><strong>${days(row.p90)}</strong></td><td><strong>${days(row.p95)}</strong></td>
+        <td>${fmt(row.samples)}</td><td>${fmt(row.orders)}</td></tr>`;
     }).join('')}</tbody></table></div>`;
   host.onclick = event => {
     const button = event.target.closest('[data-country-timing]');
@@ -1245,6 +1255,7 @@ function drawDailyVolume() {
   const mean = days.reduce((sum, row) => sum + row.n, 0) / days.length;
   $('#dailyFocus').innerHTML = `有单日均 <b>${fmt(mean)}</b> 单 · 峰值 <b>${fmt(peak.n)}</b> 单`;
   const values = days.map(row => [clock(row.day), row.n]);
+  const {accent, volume, volumeHover} = chartTheme;
   chart.setOption({
     useUTC: true, animation: chartMotion, animationDuration: 230, animationDurationUpdate: 140,
     animationEasing: 'quarticOut',
@@ -1264,8 +1275,8 @@ function drawDailyVolume() {
     series: [
       { type: 'bar', name: '日单量', data: values, barWidth: days.length > 90 ? 2 : '62%', barMaxWidth: 28,
         itemStyle: { borderRadius: [3, 3, 0, 0],
-          color: point => point.value[0] === clock(peak.day) ? chartTheme.series[2] : chartTheme.volume },
-        emphasis: { itemStyle: { color: chartTheme.volumeHover } },
+          color: point => point.value[0] === clock(peak.day) ? accent : volume },
+        emphasis: { itemStyle: { color: volumeHover } },
         markPoint: {
           symbol: 'circle', symbolSize: 8, silent: true,
           itemStyle: { color: chartTheme.ink, borderColor: chartTheme.paper, borderWidth: 1.5 },
@@ -1391,6 +1402,7 @@ function updateSubstates(filters) {
 }
 
 const trackingLookup = () => ({type: 'text', label: '履约单号 / 运单号 / 订单号 / 平台订单号',
+  placeholder: '履约单 / 运单 / 订单 / 平台单',
   key: 'q', w: 275, submit: true, auto: !ME.preview});
 
 function monitoringFilterDefs(alerts = false) {
@@ -2772,14 +2784,14 @@ async function drawChannelTrendCharts(data, month, rate, rateTitle) {
     yAxisIndex, data:periods.map(row => row[field] ?? null), itemStyle:{color},
     tooltip:{valueFormatter:value => measure(value,unit)}});
   initChart('channelTrendDuration').setOption({...common, yAxis:axis('{value} 天'), series:[
-    line('平均时效','avg',chartTheme.series[2],' 天'),
+    line('平均时效','avg',chartTheme.accent,' 天'),
     line('P90','p90',chartTheme.ink,' 天'),
   ]}, {notMerge:true});
   initChart('channelTrendVolume').setOption({...common, yAxis:[axis(compactCount),
     {...axis('{value}%'),max:100,splitLine:{show:false}}], series:[
     {name:'履约单量',type:'bar',barMaxWidth:29,data:periods.map(row => row.orders ?? null),
-      itemStyle:{color:chartTheme.series[0],borderRadius:[3,3,0,0]},tooltip:{valueFormatter:fmt}},
-    line(rateTitle,rate,chartTheme.series[2],'%',1),
+      itemStyle:{color:chartTheme.volume,borderRadius:[3,3,0,0]},tooltip:{valueFormatter:fmt}},
+    line(rateTitle,rate,chartTheme.accent,'%',1),
   ]}, {notMerge:true});
   resizeVisibleCharts();
 }
@@ -3035,7 +3047,6 @@ const usTimingLabel = {paid: '支付到签收', created: '创建到签收', ship
   paid_create: '支付到创建', create_ship: '创建到出库', ship_pickup: '出库到上网', pickup_delivered: '上网到签收'};
 const earlySegments = ['paid_create', 'create_ship', 'ship_pickup'];
 const lateSegments = ['pickup_delivered', 'shipped', 'created', 'paid'];
-const usPalette = ['#d9dedb', '#b2bdb6', '#899c90', '#627e6c', '#435f50'];
 const usBlank = '#f3f3f3';
 const usRegionLabels = new Set(['CA', 'CO', 'IA', 'TX', 'GA', 'VA', 'NY', 'PR']);
 const usStateLabels = new Set(['WA', 'CA', 'CO', 'TX', 'IL', 'FL', 'NY']);
@@ -3320,7 +3331,7 @@ function drawUsRegionBorders(chart) {
     const [x2, y2] = chart.convertToPixel({seriesIndex: 0}, b) || [];
     if (![x1, y1, x2, y2].every(Number.isFinite)) continue;
     children.push({type:'line', silent:true, shape:{x1, y1, x2, y2}, z:3,
-      style:{stroke:chartTheme.series[2], lineWidth:1.8, lineCap:'round'}});
+      style:{stroke:chartTheme.accent, lineWidth:1.8, lineCap:'round'}});
   }
   if (children.length) chart.setOption({graphic: [{type:'group', silent:true, children}]});
 }
@@ -3342,6 +3353,7 @@ function drawUsMap() {
   };
   const unique = [...new Set([...usMapPlaces.values()].map(place => mapValue(place.row)).filter(Number.isFinite))]
     .sort((a, b) => a - b);
+  const usPalette = [1, 2, 3, 4, 5].map(band => themeColor(`--map-${band}`));
   const bands = Math.min(usPalette.length, unique.length);
   const cuts = Array.from({length: Math.max(0, bands - 1)}, (_, index) =>
     unique[Math.ceil((index + 1) * unique.length / bands) - 1]);
@@ -4212,6 +4224,21 @@ function closeDrawer() {
 }
 
 /* ================= 启动 ================= */
+const themedCharts = {
+  dash: () => renderedDash && loadOverviewCharts(renderedDash),
+  channels: renderChannelTrend,
+  us: drawUsMap,
+};
+const staleThemeCharts = new Set();
+function refreshThemedCharts() {
+  if (staleThemeCharts.delete(VIEW)) void themedCharts[VIEW]();
+}
+document.addEventListener('accentchange', () => {
+  paintedOverview = null;
+  for (const view of Object.keys(themedCharts)) staleThemeCharts.add(view);
+  refreshThemedCharts();
+});
+
 run(async function boot() {
   const v = location.hash.slice(1);
   if (['alerts','archive','special-tracking','channel-exceptions'].includes(v))

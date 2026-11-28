@@ -298,7 +298,8 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
             SELECT 目的国 AS code,coalesce(max(nullif(目的国中文,'')),目的国) AS name,
                    count(*) AS orders,count(*) FILTER (WHERE 物流分钟>0) AS samples,
                    round(avg(物流分钟) FILTER (WHERE 物流分钟>0)/1440.0,2) AS days,
-                   round(quantile_cont(物流分钟,0.90) FILTER (WHERE 物流分钟>0)/1440.0,2) AS p90
+                   round(quantile_cont(物流分钟,0.90) FILTER (WHERE 物流分钟>0)/1440.0,2) AS p90,
+                   round(quantile_cont(物流分钟,0.95) FILTER (WHERE 物流分钟>0)/1440.0,2) AS p95
             FROM overview_timing WHERE nullif(trim(目的国),'') IS NOT NULL
             GROUP BY 1 ORDER BY orders DESC, name, code
         """).df().to_dict("records")
