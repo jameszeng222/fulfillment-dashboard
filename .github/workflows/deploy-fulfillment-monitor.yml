@@ -100,6 +100,7 @@ jobs:
           cp templates/app.html cloudflare/pages/index.html
           mkdir -p cloudflare/pages/static
           cp static/app.css static/app.js static/echarts.min.js static/sharing.js static/us-states.geojson static/world-countries.geojson static/us-map-LICENSE.txt cloudflare/pages/static/
+          cp static/geist-sans.woff2 static/geist-OFL.txt static/reicon-LICENSE.txt cloudflare/pages/static/
           wrangler --cwd cloudflare pages deploy pages \
             --project-name "$CF_PAGES_PROJECT" --branch main --commit-hash "$GITHUB_SHA" --commit-dirty=false
       - name: Verify Pages deployment

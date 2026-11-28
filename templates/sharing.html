@@ -4,14 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>邀请同事 · 履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/app.css?v=minimal-workspace">
 <style>
-  .share{max-width:850px;margin:32px auto;padding:0 18px;display:grid;gap:16px}
+  .share{max-width:848px;margin:32px auto;padding:0 24px;display:grid;gap:32px}
   .share-head,.share-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
   .share-form{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
   .share-form .field{flex:1;min-width:184px;margin:0}
-  .share .card{padding:18px}
-  .share h1{font-size:23px}
   .share h2{margin-bottom:12px}
   .share p{color:var(--ink2);line-height:1.6;margin:8px 0}
   .share .err{color:var(--bad);min-height:0;margin:0}
@@ -36,7 +34,6 @@
     </form>
     <p>同事可查看履约单及逐条轨迹。邀请链接 24 小时内可用一次，登录后可在同一浏览器直接访问 7 天。</p>
     <div id="freshInvite" hidden>
-      <p>请把此链接发给对应同事。</p>
       <div class="share-row">
         <input id="inviteLink" readonly aria-label="一次性邀请链接">
         <button class="btn ghost" type="button" id="copyInvite">复制链接</button>

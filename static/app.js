@@ -5,7 +5,7 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp
 const icon = name => `<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#i-${name}"></use></svg>`;
 const sectionIcon = (name, tone) => `<span class="section-icon tone-${tone}">${icon(name)}</span>`;
 const metricCard = (label, value, detail, name, tone) =>
-  `<div class="kpi metric-card tone-${tone}"><div class="kpi-label"><span class="lbl">${label}</span>${sectionIcon(name,tone)}</div><div class="val">${value}</div><div class="fl">${detail}</div></div>`;
+  `<div class="kpi metric-card tone-${tone}"><div class="kpi-label"><span class="lbl">${label}</span>${sectionIcon(name,tone)}</div><div class="val">${value}</div><div class="fl sr-only">${detail}</div></div>`;
 const fmt = n => (n == null || isNaN(n)) ? '—' : Math.round(n).toLocaleString('zh-CN');
 const fmt1 = n => (n == null || isNaN(n)) ? '—' : (Math.round(n * 10) / 10).toFixed(1);
 const dt = s => s ? String(s).replace('T', ' ').slice(0, 16) : '—';
@@ -57,13 +57,14 @@ const reportTimers = new Map();
 let resizeFrame = 0;
 let toastTimer;
 const chartTheme = {
-  ink: '#17283e', paper: '#fffefa', text: '#304257', muted: '#5d6975',
-  grid: '#e1e3dc',
-  series: ['#b8c6b7', '#7c9985', '#4f715a', '#17283e'],
+  ink: '#181818', paper: '#fff', text: '#181818', muted: '#6a6a6a',
+  grid: '#e4e4e4',
+  series: ['#b8b8b8', '#757575', '#435f50', '#181818'],
+  font: 'Geist, "Microsoft YaHei", "PingFang SC", sans-serif',
 };
 const chartMotion = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 const chartTip = { backgroundColor: chartTheme.ink, borderWidth: 0, confine: true,
-  padding: [9, 12], textStyle: { color: chartTheme.paper, fontSize: 12 } };
+  padding: [8, 12], textStyle: { color: chartTheme.paper, fontFamily: chartTheme.font, fontSize: 14 } };
 const compactCount = value => value >= 10000 ? `${Number((value / 10000).toFixed(1))} 万` : fmt(value);
 
 function setTopMeta(createdThrough) {
@@ -457,7 +458,10 @@ function showView(v) {
 }
 
 function initChart(id) {
-  if (!charts[id]) charts[id] = echarts.init(document.getElementById(id), null, { renderer: 'canvas' });
+  if (!charts[id]) {
+    if (!Object.keys(charts).length) echarts.registerTheme('workspace', {textStyle:{fontFamily:chartTheme.font}});
+    charts[id] = echarts.init(document.getElementById(id), 'workspace', { renderer: 'canvas' });
+  }
   return charts[id];
 }
 
@@ -743,7 +747,7 @@ function makeFilters(host, defs, onChange) {
   host.appendChild(btn);
   const sp = el('span', 'grow'); sp.style.flex = '1';
   host.appendChild(sp);
-  const info = el('span', '', ''); info.style.cssText = 'font-size:11.5px;color:#8b98ab';
+  const info = el('span', 'tip', '');
   host.appendChild(info);
   refs._info = info;
   Object.defineProperties(refs, {
@@ -1171,15 +1175,18 @@ function drawMix(id, numerator, denominator, summary, rows, groupTotal, {donut =
       <span class="mix-percentage">${percentage(n, groupTotal)}</span></li>`).join('')}</ul>`;
   if (donut) {
     let start = 0;
-    const stops = groupTotal ? segments.map(([, n, tone]) => {
-      const end = start + 100 * n / groupTotal;
-      const stop = `var(--mix-${tone}) ${start}% ${end}%`;
-      start = end;
-      return stop;
-    }) : [];
-    const fill = stops.length ? `conic-gradient(${stops.join(', ')})` : 'var(--line)';
+    const arcs = groupTotal ? segments.map(([, n, tone]) => {
+      const length = 100 * n / groupTotal;
+      const offset = -start;
+      start += length;
+      return `<circle class="mix-ring-${tone}" cx="50" cy="50" r="44" pathLength="100"
+        stroke-dasharray="${length} 100" stroke-dashoffset="${offset}"/>`;
+    }).join('') : '';
     $(`#${id}`).innerHTML = `<div class="mix-donut-layout">
-      <div class="mix-donut" style="--mix-fill:${fill}" role="img" aria-label="海外仓发货占比 ${rate}"><strong>${rate}</strong></div>
+      <div class="mix-donut" role="img" aria-label="海外仓发货占比 ${rate}">
+        <svg class="mix-ring" viewBox="0 0 100 100" fill="none" stroke-width="8" aria-hidden="true">
+          <g transform="rotate(-90 50 50)"><circle class="mix-ring-track" cx="50" cy="50" r="44"/>${arcs}</g>
+        </svg><strong>${rate}</strong></div>
       <div class="mix-details">${list}<p class="tip mix-note">${esc(summary)}</p></div>
     </div>`;
     return;
@@ -1903,6 +1910,8 @@ let channelTrendRequest = 0;
 let channelMemberRequest = 0;
 let renderedChannelMembers = null;
 let channelMemberDimension = 'lastmile';
+const channelMemberSelection = {key:'', channel:''};
+let channelMemberPicker;
 /* ---------------- 组合筛选 ---------------- */
 const filterPresetWidgets = new WeakMap();
 
@@ -2378,20 +2387,224 @@ function renderChannels(d, filters) {
   }
 }
 
+function setupChannelMemberPicker() {
+  const host = $('#channelMemberPicker');
+  const trigger = $('#channelMemberTrigger');
+  const menu = $('#channelMemberMenu');
+  const groups = $('#channelMemberGroups');
+  const branches = $('#channelMemberBranches');
+  const pointer = matchMedia('(hover: hover) and (pointer: fine)');
+  const stacked = matchMedia('(max-width: 760px)');
+  let items = [], mapping = null, mappingRequest;
+  let active = null, pinned = false, lastPoint = null, departure = null;
+  let openTimer, closeTimer, branchTimer;
+
+  function label() {
+    const {key, channel} = channelMemberSelection;
+    $('#channelMemberSelection').textContent = [key, channel].filter(Boolean).join(' / ') || '选择分组';
+    trigger.setAttribute('aria-label', key ? `自定义渠道分组：${key}${channel ? ' / ' + channel : ''}` : '自定义渠道分组');
+    trigger.disabled = !items.length;
+  }
+
+  function align() {
+    const box = host.getBoundingClientRect();
+    const available = document.documentElement.clientWidth;
+    const width = stacked.matches ? Math.min(248, available - 32) : 504;
+    const reverse = !stacked.matches && box.left + width > available - 16;
+    const edge = reverse ? box.right - width : box.left;
+    const left = Math.max(16, Math.min(edge, available - width - 16));
+    menu.style.left = `${left - box.left}px`;
+    menu.dataset.side = reverse ? 'left' : 'right';
+    menu.classList.toggle('member-menu-up', window.innerHeight - box.bottom < 260 && box.top > window.innerHeight - box.bottom);
+  }
+
+  function renderBranches() {
+    if (!active || menu.hidden) return;
+    const members = mapping?.get(active) ||
+      (renderedChannelMembers?.group === active ? renderedChannelMembers.rows.map(row => row.channel) : []);
+    const names = ['', ...members];
+    const rows = names.map(channel => {
+      const checked = active === channelMemberSelection.key && channel === channelMemberSelection.channel;
+      const button = el('button', '', '');
+      button.type = 'button';
+      button.dataset.memberBranch = channel;
+      button.setAttribute('aria-pressed', String(checked));
+      button.append(document.createTextNode(channel || '全部当前渠道'));
+      if (checked) button.insertAdjacentHTML('beforeend', icon('check'));
+      return button;
+    });
+    if (mappingRequest && !members.length) rows.push(el('p', 'tip', '正在读取当前渠道…'));
+    const focused = branches.contains(document.activeElement) ? document.activeElement.dataset.memberBranch : undefined;
+    branches.replaceChildren(...rows);
+    if (focused !== undefined) rows.find(row => row.dataset.memberBranch === focused)?.focus({preventScroll:true});
+  }
+
+  function activate(button) {
+    clearTimeout(branchTimer);
+    active = button.dataset.memberGroup;
+    lastPoint = departure = null;
+    groups.querySelectorAll('button').forEach(item => item.setAttribute('aria-expanded', String(item === button)));
+    renderBranches();
+    branches.hidden = false;
+  }
+
+  function open() {
+    clearTimeout(openTimer);
+    clearTimeout(closeTimer);
+    if (!menu.hidden || !items.length) return;
+    const drill = channelMemberDimension === 'lastmile';
+    groups.replaceChildren(...items.map(({key}) => {
+      const button = el('button', '', '');
+      button.type = 'button';
+      button.dataset.memberGroup = key;
+      button.setAttribute('aria-pressed', String(key === channelMemberSelection.key));
+      if (drill) button.setAttribute('aria-expanded', 'false');
+      button.append(document.createTextNode(key));
+      if (drill) button.insertAdjacentHTML('beforeend', icon('right'));
+      return button;
+    }));
+    branches.hidden = true;
+    menu.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    align();
+    if (drill && !mappingRequest) {
+      mappingRequest = fetchReport(channelGroupPath).then(({data}) => {
+        mapping = new Map(data.groups.map(group => [group.name, group.channels]));
+      }).catch(() => {}).finally(() => {
+        mappingRequest = null;
+        renderBranches();
+      });
+    }
+  }
+
+  function close(focus = false) {
+    clearTimeout(openTimer);
+    clearTimeout(closeTimer);
+    clearTimeout(branchTimer);
+    if (menu.hidden) return;
+    menu.hidden = true;
+    trigger.setAttribute('aria-expanded', 'false');
+    active = lastPoint = departure = null;
+    pinned = false;
+    if (focus) trigger.focus({preventScroll:true});
+  }
+
+  function select(key, channel = '') {
+    const changed = channelMemberSelection.key !== key;
+    Object.assign(channelMemberSelection, {key, channel});
+    close(true);
+    label();
+    if (changed) run(loadChannelMembers);
+    else renderChannelMembers();
+  }
+
+  function towardBranch(point) {
+    if (!departure || branches.hidden || stacked.matches) return false;
+    const box = branches.getBoundingClientRect();
+    const reverse = menu.dataset.side === 'left';
+    const edge = reverse ? box.right : box.left;
+    if (reverse ? point.x > departure.x : point.x < departure.x) return false;
+    const upper = {x:edge, y:box.top};
+    const lower = {x:edge, y:box.bottom};
+    const cross = (a, b, c) => (b.x-a.x)*(c.y-a.y) - (b.y-a.y)*(c.x-a.x);
+    const sides = [cross(departure, upper, point), cross(upper, lower, point), cross(lower, departure, point)];
+    return sides.every(value => value >= 0) || sides.every(value => value <= 0);
+  }
+
+  trigger.addEventListener('pointerenter', () => {
+    if (pointer.matches && trigger.disabled === false && menu.hidden) openTimer = setTimeout(open, 160);
+  });
+  host.addEventListener('pointerenter', () => clearTimeout(closeTimer));
+  host.addEventListener('pointerleave', () => {
+    clearTimeout(openTimer);
+    clearTimeout(branchTimer);
+    if (!pinned) closeTimer = setTimeout(close, 260);
+  });
+  trigger.onclick = event => {
+    if (pinned) return close();
+    open();
+    pinned = true;
+    if (event.detail === 0) groups.querySelector('button')?.focus();
+  };
+  menu.addEventListener('pointermove', event => {
+    if (!pointer.matches || channelMemberDimension !== 'lastmile') return;
+    const button = event.target.closest('[data-member-group]');
+    const point = {x:event.clientX, y:event.clientY};
+    clearTimeout(branchTimer);
+    if (!button) return;
+    if (button.dataset.memberGroup === active) {
+      lastPoint = point;
+      departure = null;
+      return;
+    }
+    departure ||= lastPoint;
+    if (!towardBranch(point)) branchTimer = setTimeout(() => activate(button), 140);
+  });
+  branches.addEventListener('pointerenter', () => clearTimeout(branchTimer));
+  menu.onclick = event => {
+    const group = event.target.closest('[data-member-group]');
+    const branch = event.target.closest('[data-member-branch]');
+    if (branch) select(active, branch.dataset.memberBranch);
+    else if (group && channelMemberDimension === 'current') select(group.dataset.memberGroup);
+    else if (group) {
+      activate(group);
+      if (event.detail === 0) branches.querySelector('button')?.focus();
+    }
+  };
+  host.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !menu.hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      close(true);
+    } else if (event.key === 'ArrowDown' && event.target === trigger) {
+      event.preventDefault();
+      open();
+      pinned = true;
+      groups.querySelector('button')?.focus();
+    } else if (!menu.hidden && event.key === (menu.dataset.side === 'left' ? 'ArrowLeft' : 'ArrowRight') &&
+               groups.contains(event.target) && channelMemberDimension === 'lastmile') {
+      event.preventDefault();
+      activate(event.target);
+      branches.querySelector('button')?.focus();
+    } else if (!menu.hidden && event.key === (menu.dataset.side === 'left' ? 'ArrowRight' : 'ArrowLeft') &&
+               branches.contains(event.target)) {
+      event.preventDefault();
+      const previous = [...groups.querySelectorAll('button')].find(button => button.dataset.memberGroup === active);
+      previous?.setAttribute('aria-expanded', 'false');
+      previous?.focus();
+      branches.hidden = true;
+      active = lastPoint = departure = null;
+    }
+  });
+  host.addEventListener('focusout', event => {
+    if (event.relatedTarget && !host.contains(event.relatedTarget)) close();
+  });
+  document.addEventListener('pointerdown', event => { if (!host.contains(event.target)) close(); });
+  window.addEventListener('resize', () => { if (!menu.hidden) align(); });
+  return {
+    close,
+    label,
+    setGroups(next) {
+      const changed = next.length !== items.length || next.some((item, index) => item.key !== items[index]?.key);
+      if (changed) close();
+      items = next;
+      label();
+    }
+  };
+}
+
 function refreshChannelMemberGroups(report) {
   $('#channelMembers').hidden = report.dimension !== 'group';
   if (report.dimension !== 'group') return;
-  const selector = $('#channelMemberGroup');
-  const group = selector.value;
   const groups = report.memberGroups || [];
-  selector.replaceChildren(...groups.map(item => new Option(item.key, item.key)));
-  if (groups.some(item => item.key === group)) selector.value = group;
-  selector.disabled = !groups.length;
+  if (!groups.some(item => item.key === channelMemberSelection.key)) {
+    Object.assign(channelMemberSelection, {key:groups[0]?.key || '', channel:''});
+  }
+  channelMemberPicker.setGroups(groups);
   if (groups.length) run(loadChannelMembers);
   else {
     channelMemberRequest++;
     renderedChannelMembers = null;
-    $('#channelMemberParent').disabled = true;
     $('#channelMemberContent').hidden = true;
     $('#channelMembersScope').textContent = '';
     $('#channelMemberStatus').textContent = report.snapshotAt ?
@@ -2400,7 +2613,7 @@ function refreshChannelMemberGroups(report) {
 }
 
 async function loadChannelMembers() {
-  const key = $('#channelMemberGroup').value;
+  const {key} = channelMemberSelection;
   if (VIEW !== 'channels' || channelDimension !== 'group' || renderedChannels?.dimension !== 'group' || !key) return;
   const {min_n, ...filters} = renderedChannelFilters;
   const path = reportPath('/api/channel-members?' + qs({...filters, key, basis:renderedChannels.basis}));
@@ -2409,7 +2622,6 @@ async function loadChannelMembers() {
   renderedChannelMembers = reportRecord(path)?.data || null;
   if (renderedChannelMembers) renderChannelMembers();
   else {
-    $('#channelMemberParent').disabled = true;
     $('#channelMemberContent').hidden = true;
     $('#channelMembersScope').textContent = '';
     status.textContent = '正在计算子渠道占比和时效…';
@@ -2433,36 +2645,30 @@ function renderChannelMembers() {
   const report = renderedChannelMembers;
   const {group} = report;
   const lastmile = channelMemberDimension === 'lastmile';
-  const selector = $('#channelMemberParent');
-  const parent = report.rows.find(row => row.channel === selector.value);
-  selector.replaceChildren(new Option('全部子渠道', ''),
-    ...report.rows.map(row => new Option(row.channel, row.channel)));
-  if (parent) selector.value = parent.channel;
-  selector.disabled = !report.rows.length;
+  const parent = report.rows.find(row => row.channel === channelMemberSelection.channel);
+  if (!parent) channelMemberSelection.channel = '';
+  channelMemberPicker.label();
   const scope = lastmile && parent ? parent : report;
   const orders = scope.orders;
   const rows = lastmile ? scope.lastmileRows || [] : report.rows;
   const label = lastmile ? 'C 端渠道' : '当前物流渠道';
   const openMember = key => openTracking({...renderedChannelFilters, channel_group:group,
     ...(lastmile ? {lastmile:key, ...(parent ? {channel:parent.channel} : {})} : {channel:key})});
-  $('#channelMemberParentWrap').hidden = !lastmile;
   $('#channelMemberStatus').textContent = lastmile && !scope.lastmileRows ? '暂时无法读取 C 端渠道明细。' : '';
   $('#channelMemberContent').hidden = false;
   $('#channelMembersScope').textContent = [group, scope.channel, `${fmt(orders)} 单`,
     TIMING_BASIS[renderedChannels.basis].label, CHANNEL_DAY_LABELS[channelDayMode]].filter(Boolean).join(' · ');
-  $('#channelMemberShareTitle').textContent = label + '单量占比';
-  $('#channelMemberTableTitle').textContent = label + '时效对比';
+  $('#channelMembersTitle').textContent = label + '对比';
   $('#channelMemberLabel').textContent = label;
-  if (orders && rows.length) {
-    drawRank('channelMemberShare', rows.map(row => ({k:row.channel, n:row.orders, filter:row.orders ? row.key || row.channel : false})),
-      rows.length, orders, ME.preview ? null : openMember);
-  } else $('#channelMemberShare').textContent = orders ? '暂无渠道明细' : '当前筛选无命中单量';
   const share = value => orders ? (value > 0 && value / orders < 0.001 ? '&lt;0.1%' : measure(100 * value / orders, '%')) : '—';
   const days = value => value == null ? '—' : `${value.toFixed(2)} 天`;
   $('#channelMemberBody').innerHTML = rows.map(row => `<tr>
     <td>${ME.preview || !row.orders ? esc(row.channel) :
       `<button type="button" class="order-link" data-member-channel="${esc(row.key || row.channel)}">${esc(row.channel)}</button>`}</td>
-    <td><b>${fmt(row.orders)}</b></td><td>${share(row.orders)}</td><td>${fmt(row.samples)}</td>
+    <td><b>${fmt(row.orders)}</b></td>
+    <td class="member-share-cell"><div class="member-share">
+      <span class="rank-track" aria-hidden="true"><span style="width:${orders ? 100 * row.orders / orders : 0}%"></span></span>
+      <span>${share(row.orders)}</span></div></td><td>${fmt(row.samples)}</td>
     <td>${days(row.avgDays)}</td><td>${days(row.p90Days)}</td>
     ${[5, 6, 7].map(day => `<td>${measure(channelDeliveryRate(row, day), '%')}</td>`).join('')}</tr>`).join('')
     || '<tr><td colspan="9" class="tip">暂无可比较的渠道</td></tr>';
@@ -2823,8 +3029,8 @@ const usTimingLabel = {paid: '支付到签收', created: '创建到签收', ship
   paid_create: '支付到创建', create_ship: '创建到出库', ship_pickup: '出库到上网', pickup_delivered: '上网到签收'};
 const earlySegments = ['paid_create', 'create_ship', 'ship_pickup'];
 const lateSegments = ['pickup_delivered', 'shipped', 'created', 'paid'];
-const usPalette = ['#e0ebe4', '#b3cbbd', '#80a995', '#4e7c68', '#264938'];
-const usBlank = '#eeede7';
+const usPalette = ['#d9dedb', '#b2bdb6', '#899c90', '#627e6c', '#435f50'];
+const usBlank = '#f3f3f3';
 const usRegionLabels = new Set(['CA', 'CO', 'IA', 'TX', 'GA', 'VA', 'NY', 'PR']);
 const usStateLabels = new Set(['WA', 'CA', 'CO', 'TX', 'IL', 'FL', 'NY']);
 const regionalDuration = (minutes, basis) => Number.isFinite(minutes) ?
@@ -3107,7 +3313,7 @@ function drawUsRegionBorders(chart) {
     const [x2, y2] = chart.convertToPixel({seriesIndex: 0}, b) || [];
     if (![x1, y1, x2, y2].every(Number.isFinite)) continue;
     children.push({type:'line', silent:true, shape:{x1, y1, x2, y2}, z:3,
-      style:{stroke:'#2c493b', lineWidth:1.8, lineCap:'round'}});
+      style:{stroke:chartTheme.series[2], lineWidth:1.8, lineCap:'round'}});
   }
   if (children.length) chart.setOption({graphic: [{type:'group', silent:true, children}]});
 }
@@ -3153,18 +3359,18 @@ function drawUsMap() {
     }},
     visualMap: [{type: 'piecewise', show: false, pieces, outOfRange: {color: usBlank}}],
     series: [{type: 'map', map: regionMapName(usReport.market), roam: false, layoutCenter: ['50%', '50%'], layoutSize: '140%',
-      itemStyle: {areaColor: usBlank, borderColor: '#fffefa', borderWidth: byRegion ? 0.6 : 1},
-      emphasis: {label: {show: false}, itemStyle: {borderColor: '#182b52', borderWidth: 1.6}},
+      itemStyle: {areaColor: usBlank, borderColor: chartTheme.paper, borderWidth: byRegion ? 0.6 : 1},
+      emphasis: {label: {show: false}, itemStyle: {borderColor: chartTheme.ink, borderWidth: 1.6}},
       data: [...usMapPlaces].map(([name, place]) => {
         const value = mapValue(place.row);
         const selected = place.key === usView.place;
         const anchor = byRegion ? usRegionLabels.has(place.code) : !other && usStateLabels.has(place.code) || selected;
         const caption = byRegion ? place.region : other || !compact ? place.state : place.code;
         const label = anchor && Number.isFinite(value) ? {show:true,
-          formatter:`${caption}\n${format(value)}`, color:'#12283b', fontSize:compact ? 10 : 12,
-          fontWeight:700, lineHeight:compact ? 12 : 15, textBorderColor:'#fffefa', textBorderWidth:3} : undefined;
+          formatter:`${caption}\n${format(value)}`, color:chartTheme.ink, fontSize:compact ? 10 : 12,
+          fontWeight:700, lineHeight:compact ? 12 : 16, textBorderColor:chartTheme.paper, textBorderWidth:3} : undefined;
         return {name, value, label, emphasis:label ? {label} : undefined,
-          itemStyle:selected ? {borderColor:'#182b52', borderWidth:2} : undefined};
+          itemStyle:selected ? {borderColor:chartTheme.ink, borderWidth:2} : undefined};
       }),
     }],
   }, {notMerge: true});
@@ -3928,8 +4134,8 @@ async function loadOrderDetail(no, path, refresh = false) {
     `<tr><td class="mono">${esc(s.sku)}</td><td>${esc(s.商品名称) || '—'}</td><td>${fmt(s.数量)}</td><td>${esc(s.类目) || '—'}</td></tr>`).join('');
 
   const notes = (d.notes || []).map(n =>
-    `<div class="note"><div style="font-size:11px;color:#8b98ab">${dt(n.ts)} · ${esc(n.actor)}</div>${esc(n.body)}</div>`).join('')
-    || '<div style="color:#8b98ab;font-size:12px">暂无备注</div>';
+    `<div class="note"><div class="tip">${dt(n.ts)} · ${esc(n.actor)}</div>${esc(n.body)}</div>`).join('')
+    || '<div class="tip">暂无备注</div>';
 
   $('#dBody').innerHTML = `
     ${orderFields(kv)}
@@ -4040,15 +4246,15 @@ run(async function boot() {
     if (channelTrendVisible) run(loadChannelTrend);
   }, {rootMargin:'100px 0px'}).observe($('#channelTrend'));
   $('#channelTrendKey').onchange = () => run(loadChannelTrend);
-  $('#channelMemberGroup').onchange = () => run(loadChannelMembers);
-  $('#channelMemberParent').onchange = renderChannelMembers;
+  channelMemberPicker = setupChannelMemberPicker();
   $('#channelMemberDimension').onclick = event => {
     const button = event.target.closest('[data-member-dimension]');
     if (!button || channelMemberDimension === button.dataset.memberDimension) return;
     channelMemberDimension = button.dataset.memberDimension;
     $('#channelMemberDimension').querySelectorAll('button').forEach(item =>
       item.setAttribute('aria-pressed', String(item === button)));
-    $('#channelMemberParentWrap').hidden = channelMemberDimension !== 'lastmile';
+    channelMemberPicker.close();
+    if (channelMemberDimension === 'current') channelMemberSelection.channel = '';
     renderChannelMembers();
   };
   $('#channelTrendPeriod').onclick = event => {

@@ -4,52 +4,38 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>智能助手 · 履约监控系统</title>
+<link rel="stylesheet" href="/static/app.css?v=minimal-workspace">
 <style>
-:root{--bg:#f4f6fa;--card:#fff;--ink:#1b2430;--ink2:#5b6675;--line:#e6ebf2;--brand:#2F5597;--bad:#d9534f;--ok:#2f9e6e}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;
-     background:var(--bg);color:var(--ink);font-size:14px}
-.wrap{max-width:1080px;margin:0 auto;padding:20px 22px 60px}
-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}
-h1{font-size:19px;font-weight:650}
-h1 span{color:var(--brand)}
-a.back{font-size:13px;color:var(--brand);text-decoration:none}
-.tabs{display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap}
-.tab{border:1px solid var(--line);background:#fff;color:var(--ink2);padding:7px 14px;border-radius:8px;
-     cursor:pointer;font-family:inherit;font-size:13px}
-.tab.on{background:var(--brand);color:#fff;border-color:var(--brand);font-weight:600}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:14px}
-.card h2{font-size:14px;font-weight:640;margin-bottom:10px}
-textarea,input[type=text]{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;
-     font:13px/1.6 ui-monospace,Consolas,monospace;font-family:inherit;resize:vertical;outline:none}
-textarea:focus,input:focus{border-color:var(--brand)}
-.btn{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:8px 16px;font-size:13px;
-     font-family:inherit;cursor:pointer}
-.btn:disabled{opacity:.55;cursor:not-allowed}
-.btn.ghost{background:#fff;border:1px solid var(--line);color:var(--ink2)}
-.row{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
-.msg{padding:10px 12px;border-radius:9px;margin-bottom:9px;font-size:13.5px;line-height:1.75;white-space:pre-wrap}
-.msg.u{background:#f1f5fd;border:1px solid #dbe6f7}
-.msg.a{background:#f7f9fc;border:1px solid var(--line)}
-.hint{font-size:12px;color:var(--ink2);line-height:1.7}
+.wrap{max-width:1080px;margin:0 auto;padding:32px 24px 48px}
+header{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:24px}
+h1{font-size:18px;font-weight:700}
+.wrap .tabs{gap:16px;margin-bottom:24px;background:transparent;padding:0}
+.wrap .tabs .tab{padding:8px 0;min-height:44px;border-radius:0}
+.wrap .tab.on{color:var(--brand);box-shadow:inset 0 -2px var(--brand);font-weight:600}
+.wrap .card{margin-bottom:24px}
+.wrap .card h2{margin-bottom:12px}
+textarea,input[type=text]{width:100%;border:1px solid transparent;border-radius:8px;padding:12px;background:var(--surface-muted);
+     color:var(--ink);font:inherit;resize:vertical}
+.row{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.msg{padding:12px 16px;border-radius:12px;margin-bottom:12px;font-size:14px;line-height:1.6;white-space:pre-wrap}
+.msg.u{background:var(--surface-muted)}
+.msg.a{background:var(--card)}
+.hint{font-size:14px;color:var(--ink2);line-height:1.6}
 .err{color:var(--bad)}
-.list{border:1px solid var(--line);border-radius:9px;overflow:hidden}
-.item{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start}
-.item:last-child{border-bottom:0}
+.item{padding:12px 0;display:flex;gap:12px;align-items:flex-start}
 .item b{font-weight:600}
-.item .d{font-size:12px;color:var(--ink2);margin-top:3px;line-height:1.6}
-.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
-pre{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10px 12px;
-    overflow:auto;max-height:320px;font-size:12px;line-height:1.6;white-space:pre-wrap}
-.tag{font-size:11px;padding:2px 7px;border-radius:5px;background:#eef3fb;color:var(--brand)}
+.item .d{color:var(--ink2);margin-top:4px;line-height:1.6}
+pre{background:var(--surface-muted);border-radius:8px;padding:12px;
+    overflow:auto;max-height:320px;font-size:14px;line-height:1.6;white-space:pre-wrap}
+.tag{padding:4px 8px;border-radius:8px;background:var(--surface-muted);color:var(--ink)}
 .hidden{display:none}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>AI 助手<span>.</span></h1>
-    <div style="display:flex;gap:14px;align-items:center">
+    <h1>AI 助手</h1>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <span class="hint" id="who">—</span>
       <a class="back" href="/">← 返回履约监控</a>
       <button type="button" class="btn ghost" id="assistLogout" hidden>退出登录</button>
@@ -65,7 +51,6 @@ pre{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10
   <!-- AI -->
   <section id="tab-ai">
     <div class="card">
-      <h2>与站点 AI 对话</h2>
       <div id="chat"></div>
       <textarea id="aiInput" rows="3" maxlength="8000" aria-label="问题" placeholder="输入你的问题"></textarea>
       <div class="row">
@@ -83,12 +68,11 @@ pre{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10
   <section id="tab-mcp" class="hidden">
     <div class="card">
       <h2>站点 MCP 工具 <button class="btn ghost" id="mcpReload" style="float:right">刷新</button></h2>
-      <div class="hint" style="margin-bottom:10px">这些是本站点被授权调用的工具，由后端持站点密钥请求，浏览器看不到密钥。</div>
       <div class="list" id="mcpList"><div class="item hint">加载中…</div></div>
     </div>
     <div class="card hidden" id="mcpCallCard">
       <h2>调用 <span class="mono" id="mcpName"></span></h2>
-      <div class="hint" style="margin:6px 0 8px">参数（JSON）</div>
+      <label for="mcpArgs">参数（JSON）</label>
       <textarea id="mcpArgs" rows="4">{}</textarea>
       <div class="row"><button class="btn" id="mcpRun">执行</button></div>
       <div id="mcpResult" style="margin-top:10px"></div>
@@ -99,7 +83,6 @@ pre{background:#f7f9fc;border:1px solid var(--line);border-radius:8px;padding:10
   <section id="tab-skill" class="hidden">
     <div class="card">
       <h2>已授权技能 <button class="btn ghost" id="skillReload" style="float:right">刷新</button></h2>
-      <div class="hint" style="margin-bottom:10px">技能包下载后会按 sha256 校验，校验不过直接丢弃。</div>
       <div class="list" id="skillList"><div class="item hint">加载中…</div></div>
     </div>
     <div class="card">
