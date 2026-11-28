@@ -3957,8 +3957,9 @@ function watchOrderIntent(event) {
 }
 
 function orderFields(fields) {
-  return `<div class="kv">${fields.map(([label, value]) =>
-    `<div class="i">${esc(label)}<b>${esc(value) || '—'}</b></div>`).join('')}</div>`;
+  return `<div class="kv">${fields.map(([label, value, detail]) =>
+    `<div class="i">${esc(label)}<b>${esc(value) || '—'}</b>${detail ? `<span class="kv-detail">${esc(detail)}</span>` : ''}</div>`
+  ).join('')}</div>`;
 }
 
 function orderTrackStatus(order) {
@@ -4050,6 +4051,11 @@ async function loadOrderDetail(no, path, refresh = false) {
   setDrawerOrderLink(o.履约单号);
   $('#dSub').textContent = [o.平台名称 || platformName(o.平台), o.仓库, o.当前渠道 || o.物流商, o.目的国中文 || o.目的国].filter(Boolean).join(' · ');
 
+  const verification = d.verification;
+  let lastSuccess;
+  if (verification && verification.lastVerified !== verification.lastAttempt) {
+    lastSuccess = verification.lastVerified ? `最近成功核对 ${dt(verification.lastVerified)}` : '暂无成功核对';
+  }
   const kv = [
     ...(!ME.preview ? [['订单号', o.订单号], ['平台订单号', o.平台订单号]] : []),
     ['运单号', o.快递单号],
@@ -4068,10 +4074,9 @@ async function loadOrderDetail(no, path, refresh = false) {
     ['C 端承运商', o.C端承运商],
     ['17TRACK 主状态', orderTrackStatus(o)],
     ['17TRACK 子状态', o.轨迹子状态],
-    ...(d.verification ? [
-      ['最近核对（北京时间）', dt(d.verification.lastAttempt)],
-      ['最近成功核对（北京时间）', dt(d.verification.lastVerified)],
-      ['核对结果', verificationStatus[d.verification.outcome] || d.verification.outcome],
+    ...(verification ? [
+      ['最近核对（北京时间）', dt(verification.lastAttempt), lastSuccess],
+      ['核对结果', verificationStatus[verification.outcome] || verification.outcome],
     ] : [['最近查询', dt(o.查询时间)]]),
   ];
 
