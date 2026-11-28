@@ -5,7 +5,7 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp
 const icon = name => `<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#i-${name}"></use></svg>`;
 const sectionIcon = (name, tone) => `<span class="section-icon tone-${tone}">${icon(name)}</span>`;
 const metricCard = (label, value, detail, name, tone) =>
-  `<div class="kpi metric-card tone-${tone}"><div class="kpi-label"><span class="lbl">${label}</span>${sectionIcon(name,tone)}</div><div class="val">${value}</div><div class="fl sr-only">${detail}</div></div>`;
+  `<div class="kpi metric-card tone-${tone}"><div class="kpi-label"><span class="lbl">${label}</span>${sectionIcon(name,tone)}</div><div class="val">${value}</div><div class="fl">${detail}</div></div>`;
 const fmt = n => (n == null || isNaN(n)) ? '—' : Math.round(n).toLocaleString('zh-CN');
 const fmt1 = n => (n == null || isNaN(n)) ? '—' : (Math.round(n * 10) / 10).toFixed(1);
 const dt = s => s ? String(s).replace('T', ' ').slice(0, 16) : '—';
@@ -69,16 +69,10 @@ const compactCount = value => value >= 10000 ? `${Number((value / 10000).toFixed
 
 function setTopMeta(createdThrough) {
   const parts = [createdThrough ? `建单截止 ${createdThrough}` : '履约数据'];
-  const imported = lastImportAt ? `最近导入 ${dt(lastImportAt)}` : '';
-  const snapshot = snapshotAt ? new Date(snapshotAt).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai', hour12: false}) : '';
-  const banner = $('#dashboardSource');
-  banner.hidden = !imported && !snapshot;
-  banner.classList.toggle('is-snapshot', Boolean(snapshot));
-  $('#dashboardSourceLabel').textContent = snapshot ? '云端快照' : 'ERP / WMS 履约数据';
-  $('#dashboardSourceTime').textContent = snapshot ? `${snapshot}（北京时间）` : imported;
-  if (VIEW !== 'dash') {
-    if (imported) parts.push(imported);
-    if (snapshot) parts.push(`云端快照 ${snapshot}`);
+  if (lastImportAt) parts.push(`最近导入 ${dt(lastImportAt)}`);
+  if (snapshotAt) {
+    const snapshot = new Date(snapshotAt).toLocaleString('zh-CN', {timeZone: 'Asia/Shanghai', hour12: false});
+    parts.push(`云端快照 ${snapshot}（北京时间）`);
   }
   $('#topMeta').textContent = parts.join(' · ');
 }
