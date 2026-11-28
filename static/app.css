@@ -754,9 +754,17 @@ button.rank-row:hover { background: var(--surface-muted); }
 .us-legend span { display: inline-flex; align-items: center; gap: 5px; color: var(--ink2); font-size: 11.5px; }
 .us-legend i { display: inline-block; width: 13px; height: 9px; border-radius: 2px; }
 .us-channels-card .tblwrap { max-height: 492px; }
-.us-channel-table td, .us-channel-table th { white-space: nowrap; padding-inline: 8px; }
-.us-channel-table td:first-child { max-width: 165px; white-space: normal; overflow-wrap: anywhere; }
-.us-share-meter { height: 4px; border-radius: 3px; background: var(--line); margin-top: 4px; min-width: 40px; }
+.us-channel-table th:first-child { width: 100%; min-width: 108px; }
+.us-channel-table td:first-child:not([colspan]) { max-width: 0; }
+.us-channel-table :is(th,td):nth-child(n+2), .us-detail-table :is(th,td):nth-child(n+3) { text-align: right; }
+.us-channel-table :is(th,td):not(:first-child,:last-child) { padding-inline: 6px; }
+.us-channel-table .order-link, .us-detail-table .channel-name {
+  display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left;
+}
+.us-channel-table .order-link { width: 100%; }
+.us-detail-table .order-link { text-align: left; }
+.us-detail-table .channel-name { max-width: 208px; }
+.us-share-meter { height: 4px; border-radius: 3px; background: var(--line); margin: 4px 0 0 auto; width: 40px; }
 .us-share-meter i { display: block; height: 100%; border-radius: inherit; background: var(--brand); }
 #usDetailsBody .chosen { background: var(--bg); }
 .us-notes { line-height: 1.65; }
@@ -771,6 +779,8 @@ button.rank-row:hover { background: var(--surface-muted); }
 .regional-segment-heading { color:var(--ink2); font-size:11px; }
 .regional-segment-row { border-top:1px solid var(--line); font-size:12px; }
 .regional-segment-row .order-link { text-align:left; overflow-wrap:anywhere; }
+.regional-segment-heading > :nth-last-child(-n+3),
+.regional-segment-row > :nth-last-child(-n+3) { text-align: right; font-variant-numeric: tabular-nums; }
 .regional-segment-bars { display:grid; gap:4px; }
 .regional-segment-bars span { display:block; height:5px; border-radius:3px; background:var(--line); }
 .regional-segment-bars i { display:block; height:100%; border-radius:3px; background:#8ba7dd; }
@@ -998,7 +1008,8 @@ button, input, select { accent-color: var(--brand); }
 }
 .card .ct > div:has(> .icon-caption) { padding: 0; min-height: 0; }
 .card .ct > div:has(> .icon-caption) .section-icon { position: static; }
-.card .ct h2 .section-icon { display: inline-grid; width: 32px; height: 32px; color: var(--tone, var(--brand)); background: var(--tone-surface, var(--selection)); }
+.card .ct h2 .section-icon { display: inline-grid; width: 32px; height: 32px; color: var(--brand); background: var(--selection); }
+.card .ct > div > h2:has(.section-icon) + .tip { margin-inline-start: 40px; }
 .section-icon { width: 24px; height: 24px; background: none; color: inherit; }
 .ui-icon, .section-icon .ui-icon, .tab-toned .ui-icon, .filter-icon .ui-icon, .filter-timezone .ui-icon,
 .filter-reset .ui-icon, .drawer-order-link .ui-icon, .timeline-panel h4 .ui-icon,

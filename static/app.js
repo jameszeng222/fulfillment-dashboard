@@ -60,6 +60,7 @@ const chartTheme = {
   ink: '#181818', paper: '#fff', text: '#181818', muted: '#6a6a6a',
   grid: '#e4e4e4',
   series: ['#b8b8b8', '#757575', '#435f50', '#181818'],
+  volume: '#afc4b4', volumeHover: '#90ad99',
   font: 'Geist, "Microsoft YaHei", "PingFang SC", sans-serif',
 };
 const chartMotion = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1104,6 +1105,7 @@ async function loadOverviewCharts(d) {
   $('#cMonthly').style.minWidth = `${d.monthly.length * 65 + 100}px`;
   const chart = initChart('cMonthly');
   chart.resize();
+  const lineLabelDistance = 22;
   chart.setOption({
     animation: chartMotion, animationDuration: 230, animationDurationUpdate: 140, animationEasing: 'quarticOut',
     grid: { left: 6, right: 10, top: 52, bottom: 6, containLabel: true },
@@ -1117,14 +1119,24 @@ async function loadOverviewCharts(d) {
       axisLabel: { color: chartTheme.muted, formatter: '{value} 天' } }],
     series: [
       { name: '单量', type: 'bar', barMaxWidth: 48, data: d.monthly.map(r => r.n),
-        itemStyle: { color: chartTheme.series[0], borderRadius: [3, 3, 0, 0] },
-        label: { show: true, position: 'insideBottom', distance: 7, color: chartTheme.ink, fontSize: 11,
+        itemStyle: { color: chartTheme.volume, borderRadius: [3, 3, 0, 0] },
+        label: { show: true, position: 'inside', color: chartTheme.ink, fontSize: 11, fontWeight: 600,
           formatter: point => fmt(point.value) },
-        labelLayout: { hideOverlap: true },
+        labelLayout: ({ dataIndex, rect, labelRect }) => {
+          const padding = labelRect.height / 2 + 5;
+          const days = d.monthly[dataIndex].d;
+          const lineY = days == null ? NaN : chart.convertToPixel({ yAxisIndex: 1 }, days);
+          let y = rect.height >= padding * 2 ? rect.y + Math.max(padding, rect.height * 0.42) : rect.y - padding;
+          if (Number.isFinite(lineY) && y > lineY - lineLabelDistance - padding - 12 && y < lineY + padding) {
+            y = lineY + padding <= rect.y + rect.height - padding
+              ? lineY + padding : lineY - lineLabelDistance - padding - 12;
+          }
+          return { x: rect.x + rect.width / 2, y, align: 'center', verticalAlign: 'middle', hideOverlap: true };
+        },
         tooltip: { valueFormatter: value => `${fmt(value)} 单` } },
       { name: '平均物流天数', type: 'line', smooth: 0.35, yAxisIndex: 1, symbolSize: 6, data: d.monthly.map(r => r.d),
         itemStyle: { color: chartTheme.ink }, lineStyle: { width: 1.5 },
-        label: { show: true, position: 'top', distance: 22, fontSize: 11, color: chartTheme.ink,
+        label: { show: true, position: 'top', distance: lineLabelDistance, fontSize: 11, color: chartTheme.ink,
           formatter: point => measure(point.value, ' 天') },
         labelLayout: { hideOverlap: true },
         tooltip: { valueFormatter: value => measure(value, ' 天') } },
@@ -1252,8 +1264,8 @@ function drawDailyVolume() {
     series: [
       { type: 'bar', name: '日单量', data: values, barWidth: days.length > 90 ? 2 : '62%', barMaxWidth: 28,
         itemStyle: { borderRadius: [3, 3, 0, 0],
-          color: point => point.value[0] === clock(peak.day) ? chartTheme.series[2] : chartTheme.series[0] },
-        emphasis: { itemStyle: { color: chartTheme.series[1] } },
+          color: point => point.value[0] === clock(peak.day) ? chartTheme.series[2] : chartTheme.volume },
+        emphasis: { itemStyle: { color: chartTheme.volumeHover } },
         markPoint: {
           symbol: 'circle', symbolSize: 8, silent: true,
           itemStyle: { color: chartTheme.ink, borderColor: chartTheme.paper, borderWidth: 1.5 },
@@ -2341,9 +2353,9 @@ function renderChannels(d, filters) {
   const dimensionLabel = CHANNEL_DIMENSIONS[dimension];
   $('#channelComparisonName').textContent = dimensionLabel + '时效对比';
   $('#channelCompareLabel').textContent = dimensionLabel;
-  $('#channelPerformanceTitle').textContent = dimensionLabel + '表现对比';
+  $('#channelPerformanceName').textContent = dimensionLabel + '表现对比';
   $('#channelTableLabel').textContent = dimension === 'group' ? '自定义渠道分组' : 'C 端显示物流渠道';
-  $('#channelCountryTitle').textContent = dimensionLabel + ' × 国家';
+  $('#channelCountryName').textContent = dimensionLabel + ' × 国家';
   $('#channelCountryLabel').textContent = dimensionLabel;
   renderedChannelFilters = d.snapshotFiltersSkipped ? {} : {...filters, date_basis: d.dateBasis || filters.date_basis};
   renderChannelPeriod(d, renderedChannelFilters);
@@ -2652,7 +2664,7 @@ function renderChannelMembers() {
   $('#channelMemberContent').hidden = false;
   $('#channelMembersScope').textContent = [group, scope.channel, `${fmt(orders)} 单`,
     TIMING_BASIS[renderedChannels.basis].label, CHANNEL_DAY_LABELS[channelDayMode]].filter(Boolean).join(' · ');
-  $('#channelMembersTitle').textContent = label + '对比';
+  $('#channelMembersName').textContent = label + '对比';
   $('#channelMemberLabel').textContent = label;
   const share = value => orders ? (value > 0 && value / orders < 0.001 ? '&lt;0.1%' : measure(100 * value / orders, '%')) : '—';
   const days = value => value == null ? '—' : `${value.toFixed(2)} 天`;
@@ -3153,7 +3165,7 @@ function renderUsReport() {
     [usMetricLabel[tail], usDay(national[tail]), `约 ${tail.slice(1)}% 的有效样本在此时长内完成`,'history','violet'],
   ].map(row => metricCard(...row)).join('');
 
-  $('#usMixTitle').textContent = scope + '渠道构成';
+  $('#usMixName').textContent = scope + '渠道构成';
   $('#usMixScope').textContent = `${fmt(selected?.orders ?? 0)} 单 · ${usTimingLabel[usReport.basis]}`;
   $('#usClear').hidden = usView.place === null;
   $('#usClear').textContent = '返回' + whole;
@@ -3163,8 +3175,9 @@ function renderUsReport() {
   $('#usLevel').hidden = other;
   $('#usMixBody').innerHTML = mix.map(row => {
     const share = usShare(row.orders, selected.orders);
-    return `<tr><td><button class="order-link" type="button" data-us-channel="${esc(row.label)}"
-      aria-label="在地图查看 ${esc(row.label)}">${esc(row.label)}</button></td><td>${fmt(row.orders)}</td>
+    const name = esc(row.label);
+    return `<tr><td><button class="order-link" type="button" data-us-channel="${name}"
+      title="${name}" aria-label="在地图查看 ${name}">${name}</button></td><td>${fmt(row.orders)}</td>
       <td>${usPercent(share)}<div class="us-share-meter" aria-hidden="true"><i style="width:${share ?? 0}%"></i></div></td>
       <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${usDay(row.p95)}</td><td>${fmt(row.samples)}</td></tr>`;
   }).join('') || blankRow(7, '当前范围无渠道数据');
@@ -3174,7 +3187,7 @@ function renderUsReport() {
   const geographyLabel = other ? '按国家' : isRegion ? '按业务区域' : '按州';
   $('#usMapHint').textContent = `${geographyLabel} · ${source} · ${usMetricLabel[usView.metric]} · ${
     usView.metric === 'orders' ? '按履约单计' : usTimingLabel[usReport.basis]}`;
-  $('#usDetailTitle').textContent = other ? '国家明细' : isRegion ? '业务区域明细' : '州级明细';
+  $('#usDetailName').textContent = other ? '国家明细' : isRegion ? '业务区域明细' : '州级明细';
   $('#usDetailScope').textContent = `${source} · 占比为${countNote} · 点击地域查看渠道构成`;
   $('#usPlaceColumn').textContent = other ? '目的国家' : isRegion ? '业务区域' : '目的州';
   $('#usSearch').placeholder = other ? '搜索国家名称' : '搜索州名、代码或区域';
@@ -3197,7 +3210,7 @@ function renderUsReport() {
   $('#usDetailsBody').innerHTML = details.map(row => `<tr class="${row.key === usView.place ? 'chosen' : ''}">
     <td><button type="button" class="order-link" data-us-place="${esc(row.key)}"
       aria-pressed="${row.key === usView.place}">${esc(row.label)}</button>${other || isRegion ? '' : `<small class="cell-sub">${esc(row.region)}</small>`}</td>
-    <td>${esc(row.channel)}${row.leadingShare != null ? `<small class="cell-sub">占当地 ${usPercent(row.leadingShare)}</small>` : ''}</td>
+    <td><span class="channel-name" title="${esc(row.channel)}">${esc(row.channel)}</span>${row.leadingShare != null ? `<small class="cell-sub">占当地 ${usPercent(row.leadingShare)}</small>` : ''}</td>
     <td>${fmt(row.orders)}</td><td>${usPercent(row.share)}</td>
     <td>${usDay(row.avg)}</td><td>${usDay(row.p90)}</td><td>${usDay(row.p95)}</td><td>${fmt(row.samples)}</td></tr>`).join('') ||
     blankRow(8, other ? '没有符合条件的国家' : '没有符合条件的州或区域');

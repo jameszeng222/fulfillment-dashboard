@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
-<link rel="stylesheet" href="/static/app.css?v=drawer-details">
+<link rel="stylesheet" href="/static/app.css?v=overview-green">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -94,7 +94,7 @@
         <div class="grid overview-lead">
           <section class="card plot-card daily-card" aria-labelledby="dailyTitle">
             <div class="ct">
-              <div><h2 id="dailyTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>日单量</h2><p class="sr-only" id="dailyRange">按出库时间统计</p></div>
+              <div><h2 id="dailyTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>日单量</h2><p class="sr-only" id="dailyRange">按出库时间统计</p></div>
               <div class="daily-controls">
                 <div class="tabs period-tabs" id="dailyBasis" role="group" aria-label="日单量日期口径">
                   <button type="button" data-date-basis="paid" aria-pressed="false">按支付</button>
@@ -110,13 +110,13 @@
             <div class="chart" id="cDaily" role="img" aria-label="每日履约单量趋势"></div>
             <div class="daily-footer"><p class="tip" id="dailyFocus"></p><p class="tip" id="dailyNote" hidden>点击查看当天履约单</p></div>
           </section>
-          <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon tone-cyan"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg></span>C 端承运商单量</h2></div></div><div id="cLastMile"></div></section>
+          <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg></span>C 端承运商单量</h2></div></div><div id="cLastMile"></div></section>
         </div>
         <div class="grid overview-breakdown">
-          <section class="card plot-card wide"><div class="ct"><div><h2>月度单量与时效</h2><p class="tip" id="monthlyScope">按出库月份统计 · 出库 → 妥投</p></div></div><div class="monthly-chart-scroll"><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></div></section>
+          <section class="card plot-card wide"><div class="ct"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>月度单量与时效</h2><p class="tip" id="monthlyScope">按出库月份统计 · 出库 → 妥投</p></div></div><div class="monthly-chart-scroll"><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></div></section>
           <section class="card plot-card wide" aria-labelledby="countryTimingTitle">
             <div class="ct"><div>
-              <h2 id="countryTimingTitle"><span class="section-icon tone-green"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span>各国平均时效</h2>
+              <h2 id="countryTimingTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span>各国平均时效</h2>
               <p class="tip icon-caption">出库 → 妥投 · 按有效时效样本计算</p>
             </div>
               <select id="countryTimingSort" aria-label="各国平均时效排序" hidden>
@@ -127,21 +127,21 @@
             <div id="countryTiming"></div>
           </section>
           <section class="card plot-card status-card" aria-labelledby="statusTitle">
-            <div class="ct"><div><h2 id="statusTitle"><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>出库单状态</h2></div></div>
+            <div class="ct"><div><h2 id="statusTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>出库单状态</h2></div></div>
             <div id="cStatus"></div>
             <button type="button" class="btn ghost sm status-more" id="statusMore" aria-expanded="false" aria-controls="cStatus" hidden>查看全部状态</button>
           </section>
-          <section class="card plot-card"><div class="ct"><div><h2>17TRACK 轨迹覆盖与状态</h2></div></div><div id="cTrackingStatus"></div></section>
-          <section class="card plot-card"><div class="ct"><div><h2>后台物流商单量</h2></div></div><div id="cCarrier"></div></section>
-          <section class="card plot-card"><div class="ct"><div><h2>发货仓分布</h2></div></div><div id="cWarehouse"></div></section>
-          <section class="card plot-card"><div class="ct"><div><h2>目的国家分布</h2></div></div><div id="cCountry"></div></section>
+          <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-scan"/></svg></span>17TRACK 轨迹覆盖与状态</h2></div></div><div id="cTrackingStatus"></div></section>
+          <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-truck"/></svg></span>后台物流商单量</h2></div></div><div id="cCarrier"></div></section>
+          <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-warehouse"/></svg></span>发货仓分布</h2></div></div><div id="cWarehouse"></div></section>
+          <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span>目的国家分布</h2></div></div><div id="cCountry"></div></section>
           <section class="card plot-card" aria-labelledby="currentChannelTitle">
-            <div class="ct"><div><h2 id="currentChannelTitle">当前渠道单量</h2><p class="sr-only" id="currentChannelTip">单量前 10</p></div></div>
+            <div class="ct"><div><h2 id="currentChannelTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg></span>当前渠道单量</h2><p class="sr-only" id="currentChannelTip">单量前 10</p></div></div>
             <div id="cCurrentChannel"></div>
           </section>
           <section class="card plot-card" aria-labelledby="customChannelTitle">
             <div class="ct">
-              <div><h2 id="customChannelTitle">自定义渠道分布</h2><p class="tip">按当前渠道归组 · 以筛选内有效履约单为分母</p></div>
+              <div><h2 id="customChannelTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>自定义渠道分布</h2><p class="tip">按当前渠道归组 · 以筛选内有效履约单为分母</p></div>
             </div>
             <div id="cChannelGroup"></div>
           </section>
@@ -161,7 +161,7 @@
         <div class="filters" id="trackFilters"></div>
         <div class="chips" id="trackChips"></div>
         <div class="card table-card">
-          <div class="ct table-head"><h2><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>履约单列表</h2><div class="toolbar">
+          <div class="ct table-head"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>履约单列表</h2><div class="toolbar">
             <span class="tip" id="trackListStatus" role="status"></span>
             <button type="button" class="btn ghost sm" id="retryTrack" hidden>重试列表</button>
             <button type="button" class="btn ghost sm" id="showDetailed">有逐条轨迹</button>
@@ -186,7 +186,7 @@
           <div class="chips" id="alertChips"></div>
           <div class="card table-card">
             <div class="ct table-head">
-              <div><h2><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span><span id="alertListTitle">预警处理清单</span></h2><p class="tip icon-caption" id="alertListNote"></p></div>
+              <div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span><span id="alertListTitle">预警处理清单</span></h2><p class="tip icon-caption" id="alertListNote"></p></div>
               <div class="toolbar">
                 <div class="toolbar" id="alertBatch">
                   <span id="selectedAlerts" class="tip"></span>
@@ -213,14 +213,14 @@
         <div class="workspace-stack" id="specialTrackingPane" hidden>
           <section class="card plot-card" aria-labelledby="trackRulesTitle">
             <div class="ct">
-              <div><h2 id="trackRulesTitle">特殊轨迹规则</h2></div>
+              <div><h2 id="trackRulesTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg></span>特殊轨迹规则</h2></div>
               <button type="button" class="btn ghost sm" id="addTrackRule" hidden>新增规则</button>
             </div>
             <div id="trackRuleCards" class="trajectory-rule-cards"></div>
             <p class="tip track-rule-note">3PE 常见节点 · 国内揽收 → 出口扫描 → 起飞 → 落地 → 进口扫描 → 目的地设施离站（尾程提取参考）</p>
           </section>
           <section class="card table-card" aria-labelledby="trackExceptionTitle">
-            <div class="ct table-head"><div><h2 id="trackExceptionTitle">命中清单</h2>
+            <div class="ct table-head"><div><h2 id="trackExceptionTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>命中清单</h2>
               <p class="tip" id="trackExceptionStatus" role="status">正在核对轨迹…</p></div>
               <div class="toolbar track-exception-filters">
                 <input type="search" id="trackExceptionSearch" class="inline-search" placeholder="履约单号或运单号" aria-label="搜索履约单号或运单号">
@@ -267,7 +267,7 @@
         <div class="kpis" id="channelKpi"></div>
         <section class="card plot-card channel-members" id="channelMembers" aria-labelledby="channelMembersTitle" hidden>
           <div class="ct"><div>
-            <h2 id="channelMembersTitle">C 端渠道对比</h2>
+            <h2 id="channelMembersTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span><span id="channelMembersName">C 端渠道对比</span></h2>
             <p class="sr-only" id="channelMembersScope"></p>
           </div>
             <div class="toolbar">
@@ -298,7 +298,7 @@
         </section>
         <section class="card channel-comparison" aria-labelledby="channelComparisonTitle">
           <div class="ct table-head"><div>
-            <h2 id="channelComparisonTitle"><span id="channelComparisonName">C 端渠道时效对比</span></h2>
+            <h2 id="channelComparisonTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span><span id="channelComparisonName">C 端渠道时效对比</span></h2>
             <p class="sr-only" id="channelChartScope"></p>
           </div><div class="toolbar">
             <div class="tabs period-tabs" id="channelDayMode" role="group" aria-label="妥投率计时方式">
@@ -318,7 +318,7 @@
         </section>
         <section class="card plot-card channel-trend" id="channelTrend" aria-labelledby="channelTrendTitle">
           <div class="ct table-head">
-            <div><h2 id="channelTrendTitle">单渠道时效趋势</h2><p class="sr-only" id="channelTrendScope"></p></div>
+            <div><h2 id="channelTrendTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>单渠道时效趋势</h2><p class="sr-only" id="channelTrendScope"></p></div>
             <div class="toolbar">
               <label class="tip" for="channelTrendKey">渠道</label><select id="channelTrendKey"></select>
               <div class="tabs period-tabs" id="channelTrendPeriod" role="group" aria-label="趋势统计周期">
@@ -341,7 +341,7 @@
           </div>
         </section>
         <div class="card table-card">
-          <div class="ct table-head"><div><h2 id="channelPerformanceTitle">C 端渠道表现对比</h2><p class="sr-only" id="channelDetailedRateScope">自然日妥投率按全部有效单 · SLA 按当前渠道配置及有效签收样本 · 超时占比按可计时在途单</p></div></div>
+          <div class="ct table-head"><div><h2 id="channelPerformanceTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span><span id="channelPerformanceName">C 端渠道表现对比</span></h2><p class="sr-only" id="channelDetailedRateScope">自然日妥投率按全部有效单 · SLA 按当前渠道配置及有效签收样本 · 超时占比按可计时在途单</p></div></div>
           <div class="channel-period" id="channelTablePeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:none">
             <table class="tbl">
@@ -355,7 +355,7 @@
           </div>
         </div>
         <div class="card table-card">
-          <div class="ct table-head"><h2 id="channelCountryTitle">C 端渠道 × 国家</h2><div class="sr-only" id="channelCountryRateScope">单量 ≥ 200 的组合 · 自然日妥投率</div></div>
+          <div class="ct table-head"><h2 id="channelCountryTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span><span id="channelCountryName">C 端渠道 × 国家</span></h2><div class="sr-only" id="channelCountryRateScope">单量 ≥ 200 的组合 · 自然日妥投率</div></div>
           <div class="channel-period" id="channelCountryPeriod" aria-label="表格时间范围"></div>
           <div class="tblwrap" style="max-height:460px">
             <table class="tbl">
@@ -403,7 +403,7 @@
           <div class="kpis us-kpi" id="usKpi"></div>
           <div class="us-layout">
             <section class="card plot-card us-map-card" aria-labelledby="usMapTitle">
-              <div class="ct"><div><h2 id="usMapTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span><span id="regionMapTitle">美国履约地图</span></h2>
+              <div class="ct"><div><h2 id="usMapTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span><span id="regionMapTitle">美国履约地图</span></h2>
                 <p class="tip icon-caption" id="usMapHint">按目的州展示 P90 时效</p></div>
                 <div class="tabs period-tabs" id="usLevel" role="group" aria-label="地图地域级别">
                   <button type="button" data-value="states" aria-pressed="true">按州</button>
@@ -424,7 +424,7 @@
               <p class="tip" id="usMapStatus" role="status">正在加载州界…</p>
             </section>
             <section class="card plot-card us-channels-card" aria-labelledby="usMixTitle">
-              <div class="ct"><div><h2 id="usMixTitle">全美渠道构成</h2><p class="sr-only" id="usMixScope"></p></div>
+              <div class="ct"><div><h2 id="usMixTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span><span id="usMixName">全美渠道构成</span></h2><p class="sr-only" id="usMixScope"></p></div>
                 <button type="button" class="btn ghost sm" id="usClear" hidden>返回全美</button></div>
               <div class="tblwrap"><table class="tbl us-channel-table">
                 <thead><tr><th scope="col">渠道</th><th scope="col">单量</th><th scope="col">占比</th><th scope="col">平均</th><th scope="col">P90</th><th scope="col">P95</th><th scope="col">样本</th></tr></thead>
@@ -433,16 +433,16 @@
             </section>
           </div>
           <section class="card plot-card" id="regionSegmentsPanel" aria-labelledby="regionalSegmentsTitle">
-            <div class="ct"><div><h2 id="regionalSegmentsTitle">分段时效</h2>
+            <div class="ct"><div><h2 id="regionalSegmentsTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span>分段时效</h2>
               <p class="tip" id="regionalSegmentStatus" role="status"></p></div></div>
             <div id="regionalSegmentContent" class="regional-segments"></div>
             <p class="tip us-notes">点击阶段查看地域分布 · 各阶段独立计样本</p>
           </section>
           <section class="card table-card" aria-labelledby="usDetailTitle">
-            <div class="ct table-head"><div><h2 id="usDetailTitle">州级明细</h2><p class="sr-only" id="usDetailScope"></p></div>
+            <div class="ct table-head"><div><h2 id="usDetailTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span><span id="usDetailName">州级明细</span></h2><p class="sr-only" id="usDetailScope"></p></div>
               <input type="search" class="inline-search" id="usSearch" placeholder="搜索州名、代码或区域" aria-label="搜索州名、代码或区域">
             </div>
-            <div class="tblwrap"><table class="tbl">
+            <div class="tblwrap"><table class="tbl us-detail-table">
               <thead><tr><th scope="col" id="usPlaceColumn">目的州</th><th scope="col" id="usChannelColumn">单量最高的渠道</th>
                 <th scope="col">单量</th><th scope="col">占比</th><th scope="col">平均时效</th><th scope="col">P90 时效</th><th scope="col">P95 时效</th><th scope="col">有效样本</th></tr></thead>
               <tbody id="usDetailsBody"></tbody>
@@ -472,7 +472,7 @@
         <div class="workspace-stack" id="rules-sync" hidden>
           <section class="card" aria-labelledby="fullPullTitle">
             <div class="ct sync-card-head">
-              <div><h2 id="fullPullTitle">全量拉取</h2>
+              <div><h2 id="fullPullTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg></span>全量拉取</h2>
                 <p class="tip">导入后有运单新进入追踪范围时自动排队，也可手动发起。全量拉取会重新核对最近查过的运单。</p></div>
               <button type="button" class="btn" id="startFullPull" disabled>全量拉取轨迹</button>
             </div>
@@ -481,40 +481,40 @@
           </section>
           <div class="sync-grid">
             <div class="card">
-              <div class="ct sync-card-head"><h2>定时拉取</h2><span class="badge gray" id="pollStatus">读取中</span></div>
+              <div class="ct sync-card-head"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-calendar"/></svg></span>定时拉取</h2><span class="badge gray" id="pollStatus">读取中</span></div>
               <dl class="source-list" id="pollSummary"></dl>
             </div>
             <div class="card">
-              <div class="ct sync-card-head"><h2>Webhook 推送</h2><span class="badge gray" id="webhookStatus">读取中</span></div>
+              <div class="ct sync-card-head"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-sync"/></svg></span>Webhook 推送</h2><span class="badge gray" id="webhookStatus">读取中</span></div>
               <dl class="source-list" id="webhookSummary"></dl>
               <p class="tip" id="webhookHelp"></p>
             </div>
           </div>
           <p class="tip sync-observed" id="syncObserved" role="status"></p>
           <div class="card table-card">
-            <div class="ct table-head"><div><h2>承运商匹配异常</h2><p class="tip">待核对履约单 · 按 ERP 渠道和 17TRACK 登记代码汇总</p></div><button type="button" class="btn ghost sm" id="openCarrierConflicts">查看履约单</button></div>
+            <div class="ct table-head"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg></span>承运商匹配异常</h2><p class="tip">待核对履约单 · 按 ERP 渠道和 17TRACK 登记代码汇总</p></div><button type="button" class="btn ghost sm" id="openCarrierConflicts">查看履约单</button></div>
             <div class="tblwrap"><table class="tbl"><thead><tr><th>后台物流商</th><th>C 端渠道</th><th>预期代码</th><th>实际登记代码</th><th>履约单数</th></tr></thead><tbody id="carrierConflicts"></tbody></table></div>
           </div>
           <div class="card table-card">
-            <div class="ct table-head"><h2>最近同步批次</h2></div>
+            <div class="ct table-head"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-history"/></svg></span>最近同步批次</h2></div>
             <div class="tblwrap"><table class="tbl"><thead><tr><th>开始时间</th><th>结束时间</th><th>结果</th><th>查询运单</th><th>取回逐条轨迹</th><th>登记未匹配</th></tr></thead><tbody id="pollHistory"></tbody></table></div>
           </div>
           <div class="card table-card">
-            <div class="ct table-head"><h2>最近 Webhook 收件</h2></div>
+            <div class="ct table-head"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>最近 Webhook 收件</h2></div>
             <div class="tblwrap"><table class="tbl"><thead><tr><th>收到时间</th><th>事件</th><th>处理结果</th><th>处理完成</th></tr></thead><tbody id="webhookHistory"></tbody></table></div>
           </div>
         </div>
         <div class="workspace-stack" id="rules-data">
           <div class="kpis" id="dataKpi"></div>
-          <div class="card"><div class="ct"><h2><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>数据来源</h2></div><dl class="source-list" id="sourceHealth"></dl></div>
+          <div class="card"><div class="ct"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>数据来源</h2></div><dl class="source-list" id="sourceHealth"></dl></div>
           <div class="card table-card">
-            <div class="ct table-head"><h2>最近 ERP 导入记录</h2></div>
+            <div class="ct table-head"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-history"/></svg></span>最近 ERP 导入记录</h2></div>
             <div class="tblwrap"><table class="tbl"><thead><tr><th>文件</th><th>导入时间</th></tr></thead><tbody id="importBody"></tbody></table></div>
           </div>
         </div>
         <div class="workspace-stack" id="rules-definitions" hidden>
           <section class="card table-card definitions-card">
-            <div class="ct"><h2>时间字段与取值</h2><p class="tip">按履约单统计，时效统一使用北京时间计算。</p></div>
+            <div class="ct"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span>时间字段与取值</h2><p class="tip">按履约单统计，时效统一使用北京时间计算。</p></div>
             <div class="tblwrap"><table class="tbl">
               <thead><tr><th scope="col">字段</th><th scope="col">来源</th><th scope="col">取值及显示</th></tr></thead>
               <tbody>
@@ -528,7 +528,7 @@
             </table></div>
           </section>
           <section class="card table-card definitions-card">
-            <div class="ct"><h2>指标计算</h2><p class="tip">时效使用自然时间。业务预警的工作日口径以各规则说明为准。</p></div>
+            <div class="ct"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>指标计算</h2><p class="tip">时效使用自然时间。业务预警的工作日口径以各规则说明为准。</p></div>
             <div class="tblwrap"><table class="tbl">
               <thead><tr><th scope="col">指标</th><th scope="col">计算方式</th></tr></thead>
               <tbody>
@@ -546,7 +546,7 @@
             </table></div>
           </section>
           <section class="card table-card definitions-card">
-            <div class="ct"><h2>单量、筛选与汇总维度</h2></div>
+            <div class="ct"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg></span>单量、筛选与汇总维度</h2></div>
             <div class="tblwrap"><table class="tbl">
               <thead><tr><th scope="col">项目</th><th scope="col">口径</th></tr></thead>
               <tbody>
@@ -563,7 +563,7 @@
           </section>
           <section class="card table-card definitions-card" aria-labelledby="weekCalendarTitle">
             <div class="ct table-head"><div>
-              <h2 id="weekCalendarTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span>2026 年全年周次表</h2>
+              <h2 id="weekCalendarTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-clock"/></svg></span>2026 年全年周次表</h2>
               <p class="tip icon-caption">每周周日至周六，含 1 月 1 日的周为 W1。跨年日期以灰色显示。</p>
             </div></div>
             <div class="tblwrap week-calendar"><table class="tbl" aria-labelledby="weekCalendarTitle">
@@ -572,7 +572,7 @@
             </table></div>
           </section>
           <section class="card table-card definitions-card">
-            <div class="ct"><h2>轨迹覆盖、业务预警和数据更新</h2></div>
+            <div class="ct"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg></span>轨迹覆盖、业务预警和数据更新</h2></div>
             <div class="tblwrap"><table class="tbl">
               <thead><tr><th scope="col">项目</th><th scope="col">怎么判断</th></tr></thead>
               <tbody>
@@ -590,17 +590,17 @@
         </div>
         <div class="workspace-stack" id="rules-business" hidden>
         <div class="card">
-          <div class="ct"><h2><span class="section-icon tone-warn"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg></span>业务预警规则</h2><div class="tip" id="ruleAsof">—</div></div>
+          <div class="ct"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-alert"/></svg></span>业务预警规则</h2><div class="tip" id="ruleAsof">—</div></div>
           <div id="ruleList"></div>
         </div>
         <div class="card">
-          <div class="ct"><h2>待接入的数据源</h2></div>
+          <div class="ct"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>待接入的数据源</h2></div>
           <div id="notImpl"></div>
         </div>
         </div>
         <section class="card table-card" id="rules-channel-groups" aria-labelledby="channelGroupRulesTitle" hidden>
           <div class="ct table-head">
-            <div><h2 id="channelGroupRulesTitle"><span class="section-icon tone-blue"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>自定义渠道分组</h2>
+            <div><h2 id="channelGroupRulesTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>自定义渠道分组</h2>
               <p class="tip icon-caption">每个履约单的「当前渠道」只能归入一组。分组保存后可在各业务页面筛选。</p></div>
             <div class="toolbar"><button type="button" class="btn ghost sm" id="exportChannelGroups">导出配置</button>
             <button type="button" class="btn ghost sm" id="openChannelGroups" hidden>新增分组</button></div>
@@ -611,7 +611,7 @@
           </table></div>
         </section>
         <div class="card table-card" id="rules-sla" hidden>
-          <div class="ct table-head"><div><h2><span class="section-icon tone-violet"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg></span>渠道 SLA 规则</h2><p class="tip icon-caption">按当前渠道配置计时起点与承诺天数 · 目标对照以有效签收样本为分母</p></div>
+          <div class="ct table-head"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-sliders"/></svg></span>渠道 SLA 规则</h2><p class="tip icon-caption">按当前渠道配置计时起点与承诺天数 · 目标对照以有效签收样本为分母</p></div>
             <div class="toolbar" id="slaGroupFilter">
               <input type="search" id="slaSearch" class="inline-search" placeholder="搜索当前渠道…" aria-label="搜索当前渠道">
             </div>
@@ -622,7 +622,7 @@
           </table></div>
         </div>
         <div class="card table-card" id="rules-dictionary" hidden>
-          <div class="ct table-head"><div><h2>17TRACK 状态字典</h2></div></div>
+          <div class="ct table-head"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-book"/></svg></span>17TRACK 状态字典</h2></div></div>
           <div class="tblwrap"><table class="tbl"><thead><tr><th>主状态</th><th>主状态代码</th><th>子状态</th><th>子状态代码</th></tr></thead><tbody id="dictionaryBody"></tbody></table></div>
         </div>
       </section>
@@ -751,6 +751,6 @@
     </footer>
   </form>
 </dialog>
-<script src="/static/app.js?v=drawer-details" defer></script>
+<script src="/static/app.js?v=overview-green" defer></script>
 </body>
 </html>
