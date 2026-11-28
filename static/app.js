@@ -611,19 +611,36 @@ function searchField(input) {
   return field;
 }
 
+const filterCalendar = createDateCalendar();
+
+function keepFocusInside(event, container) {
+  if (event.key !== 'Tab') return;
+  const focusable = [...container.querySelectorAll('a[href], button, input, select, textarea, [tabindex]')]
+    .filter(node => node.tabIndex >= 0 && !node.disabled && node.getClientRects().length);
+  const first = focusable[0], last = focusable.at(-1);
+  if (event.shiftKey ? document.activeElement === first : document.activeElement === last) {
+    event.preventDefault();
+    (event.shiftKey ? last : first)?.focus();
+  }
+}
+
 function makeTimeRange(onChange) {
   const root = el('div', 'filter-time-range tone-blue');
   root.setAttribute('role', 'group');
   root.setAttribute('aria-label', '时间范围（北京时间）');
   const fields = {};
+  const days = {start:'', end:''};
   const inputs = [];
   const error = el('span', 'filter-time-error');
   error.setAttribute('role', 'status');
   error.hidden = true;
   for (const [key, label, defaultTime] of [['start', '开始', '00:00'], ['end', '结束', '23:59']]) {
-    const date = el('input');
-    date.type = 'date';
-    date.setAttribute('aria-label', `${label}日期（北京时间）`);
+    const date = el('button', 'calendar-trigger', `<span></span>${icon('calendar')}`);
+    date.type = 'button';
+    date.setAttribute('aria-haspopup', 'dialog');
+    date.setAttribute('aria-expanded', 'false');
+    date.setAttribute('aria-controls', 'filterCalendar');
+    date.setAttribute('popovertarget', 'filterCalendar');
     const time = el('input');
     time.type = 'time';
     time.step = '60';
@@ -631,27 +648,38 @@ function makeTimeRange(onChange) {
     time.setAttribute('aria-label', `${label}时分（北京时间）`);
     time.title = `未填写时默认 ${defaultTime}`;
     const updateTime = () => {
-      time.disabled = !date.value;
-      time.value = date.value ? time.value || defaultTime : '';
-      field.classList.toggle('has-date', Boolean(date.value));
+      const day = days[key];
+      time.disabled = !day;
+      time.value = day ? time.value || defaultTime : '';
+      field.classList.toggle('has-date', Boolean(day));
+      date.firstElementChild.textContent = day || '选择日期';
+      date.setAttribute('aria-label', `${label}日期（北京时间）${day ? '，' + day : ''}`);
     };
     const changed = () => { updateTime(); onChange(1); };
-    date.onchange = changed;
+    date.onclick = event => {
+      event.preventDefault();
+      filterCalendar.open({
+        trigger:date, value:days[key], other:days[key === 'start' ? 'end' : 'start'],
+        range:() => [days.start, days.end],
+        commit:day => { days[key] = day; changed(); },
+      });
+    };
     time.onchange = changed;
     const field = el('div', 'date-filter');
-    const dayLabel = el('label', 'date-filter-label');
+    const dayLabel = el('div', 'date-filter-label');
     dayLabel.append(el('span', '', label), date);
     field.append(dayLabel, time);
     root.appendChild(field);
-    inputs.push(date, time);
+    inputs.push(time);
+    updateTime();
     fields[key] = {
       get value() {
-        if (!date.value || !time.value || time.value === defaultTime) return date.value;
-        return `${date.value}T${time.value}`;
+        if (!days[key] || !time.value || time.value === defaultTime) return days[key];
+        return `${days[key]}T${time.value}`;
       },
       set value(value) {
         const parts = (value || '').split(/[T ]/);
-        date.value = parts[0];
+        days[key] = isCalendarDate(parts[0]) ? parts[0] : '';
         time.value = parts[1] || '';
         updateTime();
       },
@@ -4509,6 +4537,7 @@ run(async function boot() {
   };
   $('#dClose').onclick = closeDrawer;
   $('#mask').onclick = closeDrawer;
+  $('#drawer').addEventListener('keydown', event => keepFocusInside(event, $('#drawer')));
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
     if ($('#drawer').classList.contains('on')) closeDrawer();
