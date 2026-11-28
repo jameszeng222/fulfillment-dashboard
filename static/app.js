@@ -4298,7 +4298,7 @@ async function loadOrderDetail(no, path, refresh = false) {
         <small>${a.is_main == null ? '' : a.is_main ? '主预警' : '次预警'}${a.days == null ? '' : ` · ${measure(a.days, ' 天')}`}</small>
         ${pending ? '' : stateBadge(a.state)}
       </div>
-      ${a.evidence ? `<p>${esc(a.evidence)}</p>` : ''}
+      ${a.evidence && !(a.rule === 'signout_timeout' && a.evidence === 'FS') ? `<p>${esc(a.evidence)}</p>` : ''}
       ${a.handled_by ? `<p>处理人 ${esc(a.handled_by)} · ${esc(syncTime(a.handle_at))}</p>` : ''}
       ${!pending && a.first_seen_at ? `<p>首次留痕 · ${esc(dt(a.first_seen_at))}</p>` : ''}
       ${a.cleared_at ? `<p>不再命中 · ${esc(syncTime(a.cleared_at))}</p>` : ''}
@@ -4343,8 +4343,8 @@ async function loadOrderDetail(no, path, refresh = false) {
       <span>物流时间线</span>
       ${o.单号归一 ? `<a href="https://t.17track.net/zh-cn#nums=${encodeURIComponent(o.单号归一)}" target="_blank" rel="noopener noreferrer">在 17TRACK 查看 ↗</a>` : ''}
     </div>
-    ${fulfillmentTimeline ? `<section class="timeline-panel fulfillment-timeline" aria-label="履约节点">
-      <h4>${icon('warehouse')}履约节点 · 北京时间</h4><ol>${fulfillmentTimeline}</ol>
+    ${fulfillmentTimeline ? `<section class="timeline-panel fulfillment-timeline" aria-labelledby="fulfillmentTimelineTitle">
+      <h4 id="fulfillmentTimelineTitle">${icon('warehouse')}履约节点（北京时间）</h4><ol>${fulfillmentTimeline}</ol>
     </section>` : ''}
     <section class="timeline-panel carrier-timeline" aria-label="承运商轨迹">
       <h4>${icon('truck')}${timelineLabel}</h4>

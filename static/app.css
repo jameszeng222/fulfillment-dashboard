@@ -487,6 +487,8 @@ button:focus-visible, a:focus-visible, input:is([type=checkbox],[type=radio],[ty
 .mix-list strong, .mix-percentage { text-align:right; font-variant-numeric:tabular-nums; }
 .mix-note { margin-top:8px; }
 .daily-card .ct { align-items: flex-start; margin-bottom: 3px; }
+.daily-card { display: flex; flex-direction: column; }
+.daily-card #cDaily { flex: 1 0 auto; }
 .daily-controls { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 5px 8px; }
 .daily-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 5px 12px; }
 .daily-footer b { color: var(--ink); font-variant-numeric: tabular-nums; }
@@ -638,11 +640,14 @@ button.rank-row:hover { background: var(--surface-muted); }
 .timeline-panel { margin-top: 8px; padding: 10px 12px; border: 1px solid; border-radius: 8px; }
 .timeline-panel h4 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; line-height: 1.4; }
 .timeline-panel h4 .ui-icon { width: 14px; height: 14px; }
-.fulfillment-timeline { padding: 12px; background: var(--signal-slate-bg); border-color: #d7e2e8; }
-.fulfillment-timeline h4, .fulfillment-timeline li time { color: var(--signal-slate); }
+.fulfillment-timeline {
+  --timeline-line: color-mix(in srgb, var(--line) 82%, var(--brand));
+  padding: 12px; background: var(--selection); border-color: var(--timeline-line);
+}
+.fulfillment-timeline h4, .fulfillment-timeline li time { color: var(--brand); }
 .fulfillment-timeline ol { list-style: none; margin-top: 5px; }
 .fulfillment-timeline li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 3px 12px;
-  padding: 8px 0; border-bottom: 1px solid #d7e2e8; }
+  padding: 8px 0; border-bottom: 1px solid var(--timeline-line); }
 .fulfillment-timeline li:last-child { border-bottom: 0; padding-bottom: 0; }
 .fulfillment-timeline li time { font-variant-numeric: tabular-nums; }
 .carrier-timeline { background: #eff4ed; border-color: #d9e4d7; }
@@ -1258,6 +1263,7 @@ button, input, select { accent-color: var(--brand); }
 .btn.danger { background: var(--card); color: var(--signal-rose); border: 1px solid var(--line); }
 .btn.danger:hover:not(:disabled) { background: var(--signal-rose-bg); border-color: var(--signal-rose); filter: none; }
 .btn.filter-reset { gap: 4px; }
+#dashFilters .filter-reset, #channelMemberTrigger { min-height: 44px; }
 .toolbar, .pager { gap: 8px; }
 .pager :is(select,input) { border: 1px solid var(--line); }
 .tabs { padding: 4px; gap: 4px; border: 0; border-radius: 8px; background: var(--surface-muted); }
@@ -1321,6 +1327,7 @@ button, input, select { accent-color: var(--brand); }
 .rank-track, .compare-bar, .us-share-meter, .regional-segment-bars span { height: 4px; border-radius: 8px; background: var(--line); }
 .compare-bar i, .rank-track span, .us-share-meter i { background: var(--brand); }
 .rank-row, .mix-list li { min-height: 36px; padding-block: 8px; border: 0; font-size: 14px; }
+#cLastMile .rank-row { min-height: 28px; padding-block: 4px; }
 .mix-list li { border-bottom: 1px solid var(--line); }
 .rank-name { white-space: normal; overflow-wrap: anywhere; }
 .mix-details .mix-list li { font-size: 14px; }
