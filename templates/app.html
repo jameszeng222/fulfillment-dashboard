@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>履约监控系统</title>
 <script src="/static/theme.js?v=2"></script>
-<link rel="stylesheet" href="/static/app.css?v=geist-controls">
+<link rel="stylesheet" href="/static/app.css?v=overview-timing">
 </head>
 <body>
 <svg xmlns="http://www.w3.org/2000/svg" class="icon-library" aria-hidden="true" focusable="false">
@@ -59,7 +59,6 @@
     </nav>
     <div class="sidefoot">
       <label class="theme-picker" for="themeAccent">
-        <span class="theme-label">主题</span>
         <span class="theme-control">
           <span class="theme-swatch" aria-hidden="true"></span>
           <select id="themeAccent" aria-label="主题">
@@ -97,7 +96,13 @@
           <button class="btn" id="openPending" type="button"><svg class="ui-icon" aria-hidden="true"><use href="#i-bell"/></svg>待跟进预警<span id="pendingCount" class="action-count"></span></button>
         </div>
         <div class="filters" id="dashFilters"></div>
+        <div class="tabs segmented-switch" id="dashTimingBasis" role="radiogroup" aria-label="总览时效起点" hidden>
+          <button type="button" data-basis="paid" role="radio" aria-checked="false" tabindex="-1">下单到签收</button>
+          <button type="button" data-basis="shipped" role="radio" aria-checked="true" tabindex="0">出库到签收</button>
+          <button type="button" data-basis="online" role="radio" aria-checked="false" tabindex="-1">上网到签收</button>
+        </div>
         <div class="kpis" id="dashKpi"></div>
+        <p class="tip" id="dashTimingError" role="status" hidden></p>
         <p class="tip" id="overviewChartStatus" role="status" hidden></p>
         <div class="grid overview-mixes">
           <section class="card plot-card mix-card warehouse-mix-card tone-blue" aria-labelledby="warehouseShareTitle">
@@ -126,16 +131,15 @@
               </div>
             </div>
             <div class="chart" id="cDaily" role="img" aria-label="每日履约单量趋势"></div>
-            <div class="daily-footer"><p class="tip" id="dailyFocus"></p><p class="tip" id="dailyNote" hidden>点击查看当天履约单</p></div>
+            <div class="daily-footer"><p class="tip" id="dailyFocus"></p></div>
           </section>
           <section class="card plot-card"><div class="ct"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-route"/></svg></span>C 端承运商单量</h2></div></div><div id="cLastMile"></div></section>
         </div>
         <div class="grid overview-breakdown">
-          <section class="card plot-card wide"><div class="ct"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>月度单量与时效</h2><p class="tip" id="monthlyScope">按出库月份统计 · 出库 → 妥投</p></div></div><div class="monthly-chart-scroll"><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></div></section>
+          <section class="card plot-card wide"><div class="ct"><div><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg></span>月度单量与时效</h2></div></div><div class="monthly-chart-scroll"><div class="chart tall" id="cMonthly" role="img" aria-label="月度履约单量与平均物流天数"></div></div></section>
           <section class="card plot-card wide" aria-labelledby="countryTimingTitle">
             <div class="ct"><div>
               <h2 id="countryTimingTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span>各国平均时效</h2>
-              <p class="tip icon-caption">出库 → 妥投 · 按有效时效样本计算</p>
             </div>
               <div class="toolbar"><select id="countryTimingSort" aria-label="各国时效排序" hidden>
                 <option value="orders">按履约单量</option><option value="days">按平均时效（从慢到快）</option>
@@ -160,7 +164,7 @@
           </section>
           <section class="card plot-card" aria-labelledby="customChannelTitle">
             <div class="ct">
-              <div><h2 id="customChannelTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>自定义渠道分布</h2><p class="tip">按当前渠道归组 · 以筛选内有效履约单为分母</p></div>
+              <div><h2 id="customChannelTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-layers"/></svg></span>自定义渠道分布</h2></div>
             </div>
             <div id="cChannelGroup"></div>
           </section>
@@ -183,9 +187,8 @@
           <div class="ct table-head"><h2><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-list"/></svg></span>履约单列表</h2><div class="toolbar">
             <span class="tip" id="trackListStatus" role="status"></span>
             <button type="button" class="btn ghost sm" id="retryTrack" hidden>重试列表</button>
-            <button type="button" class="btn ghost sm" id="showDetailed">有逐条轨迹</button>
-            <button type="button" class="btn ghost sm" id="openTrackAnalysis" aria-haspopup="dialog" aria-controls="trackAnalysisDialog" hidden><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg>AI 轨迹分析</button>
-            <button type="button" class="btn ghost sm export-button" id="exportTrack"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg>导出本页</button>
+            <button type="button" class="btn ghost sm icon-button-label" id="openTrackAnalysis" aria-haspopup="dialog" aria-controls="trackAnalysisDialog" hidden><svg class="ui-icon" aria-hidden="true"><use href="#i-chart"/></svg><span>AI 轨迹分析</span></button>
+            <div id="trackExport"></div>
           </div></div>
           <div class="tblwrap">
             <table class="tbl">
@@ -212,14 +215,7 @@
                   <select id="batchAction" aria-label="批量处理动作"><option value="">批量操作</option></select>
                   <button type="button" class="btn sm" id="applyBatch" disabled>应用</button>
                 </div>
-                <div class="export-split" id="alertExport">
-                  <button type="button" class="btn ghost sm export-button" id="exportAllAlerts"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg><span>导出全部命中</span></button>
-                  <button type="button" class="btn ghost sm export-toggle" id="alertExportToggle" aria-label="更多预警导出方式" aria-haspopup="menu" aria-expanded="false" aria-controls="alertExportMenu" popovertarget="alertExportMenu"><span class="select-chevron" aria-hidden="true"></span></button>
-                  <div class="export-menu" id="alertExportMenu" popover="auto" role="menu" aria-label="预警导出方式">
-                    <button type="button" role="menuitem" data-export-scope="all"><b>导出全部命中</b><span>当前筛选的预警明细 · CSV</span></button>
-                    <button type="button" role="menuitem" data-export-scope="tracks"><b>导出含完整轨迹</b><span>预警明细和逐条轨迹 · ZIP</span></button>
-                  </div>
-                </div>
+                <div id="alertExport"></div>
               </div>
             </div>
             <div class="tblwrap">
@@ -256,6 +252,7 @@
                   <option value="14">近 14 天出库</option><option value="30" selected>近 30 天出库</option>
                   <option value="60">近 60 天出库</option><option value="90">近 90 天出库</option></select>
                 <button type="button" class="btn ghost sm" id="refreshTrackExceptions">刷新</button>
+                <div id="trackExceptionExport"></div>
               </div>
             </div>
             <div class="tblwrap"><table class="tbl track-exception-table">
@@ -328,7 +325,6 @@
               <button type="button" data-day-mode="calendar" role="radio" aria-checked="true" tabindex="0">自然日</button>
               <button type="button" data-day-mode="workday" role="radio" aria-checked="false" tabindex="-1">工作日</button>
             </div>
-            <button type="button" class="btn ghost sm export-button" id="exportChannels"><svg class="ui-icon" aria-hidden="true"><use href="#i-download"/></svg>导出结果</button>
           </div></div>
           <div class="channel-period" id="channelComparisonPeriod" aria-label="统计时间范围"></div>
           <div class="compare-grid compare-head" id="channelCompareHead" aria-hidden="true">
@@ -427,7 +423,7 @@
           <div class="us-layout">
             <section class="card plot-card us-map-card" aria-labelledby="usMapTitle">
               <div class="ct"><div><h2 id="usMapTitle"><span class="section-icon"><svg class="ui-icon" aria-hidden="true"><use href="#i-globe"/></svg></span><span id="regionMapTitle">美国履约地图</span></h2>
-                <p class="tip icon-caption" id="usMapHint">按目的州展示 P90 时效</p></div>
+                <p class="sr-only" id="usMapHint">按目的州展示 P90 时效</p></div>
                 <div class="tabs period-tabs segmented-switch" id="usLevel" role="radiogroup" aria-label="地图地域级别">
                   <button type="button" data-value="states" role="radio" aria-checked="true" tabindex="0">按州</button>
                   <button type="button" data-value="regions" role="radio" aria-checked="false" tabindex="-1">按业务区域</button>
@@ -440,9 +436,9 @@
                   <button type="button" data-value="p90" role="radio" aria-checked="true" tabindex="0">P90 时效</button>
                   <button type="button" data-value="p95" role="radio" aria-checked="false" tabindex="-1">P95 时效</button>
                 </div>
-                <label class="us-focus">地图渠道<select id="usMapChannel" aria-label="地图渠道"></select></label>
+                <div class="us-focus"><select id="usMapChannel" aria-label="地图渠道"></select></div>
               </div>
-              <div class="chart us-map" id="usMap" role="img" aria-label="美国各州地图。可在下方明细通过键盘选择州或区域。"></div>
+              <div class="chart us-map" id="usMap" role="img" aria-label="美国各州地图。可在下方明细通过键盘选择州或区域。" aria-describedby="usMapHint"></div>
               <div class="us-legend" id="usLegend" aria-label="地图色阶"></div>
               <p class="tip" id="usMapStatus" role="status">正在加载州界…</p>
             </section>
@@ -777,6 +773,6 @@
   </form>
 </dialog>
 <script src="/static/date-calendar.js?v=2" defer></script>
-<script src="/static/app.js?v=geist-controls" defer></script>
+<script src="/static/app.js?v=overview-timing" defer></script>
 </body>
 </html>

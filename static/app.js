@@ -5,7 +5,7 @@ const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp
 const icon = name => `<svg class="ui-icon" aria-hidden="true" focusable="false"><use href="#i-${name}"></use></svg>`;
 const sectionIcon = (name, tone) => `<span class="section-icon tone-${tone}">${icon(name)}</span>`;
 const metricCard = (label, value, detail, name, tone) =>
-  `<div class="kpi metric-card tone-${tone}"><div class="kpi-label"><span class="lbl">${label}</span>${sectionIcon(name,tone)}</div><div class="val">${value}</div><div class="fl">${detail}</div></div>`;
+  `<div class="kpi metric-card tone-${tone}"><div class="kpi-label"><span class="lbl">${label}</span>${sectionIcon(name,tone)}</div><div class="val">${value}</div>${detail ? `<div class="fl">${detail}</div>` : ''}</div>`;
 const fmt = n => (n == null || isNaN(n)) ? '—' : Math.round(n).toLocaleString('zh-CN');
 const fmt1 = n => (n == null || isNaN(n)) ? '—' : (Math.round(n * 10) / 10).toFixed(1);
 const dt = s => s ? String(s).replace('T', ' ').slice(0, 16) : '—';
@@ -891,6 +891,9 @@ function pager(host, total, page, size, go, {sizes, changeSize} = {}) {
 /* ================= 数据总览 ================= */
 let DF = null;
 let renderedDash = null;
+let overviewTimingBasis = 'shipped';
+let overviewTimingFilters;
+let overviewMonthly;
 let paintedOverview = null;
 const DEFAULT_DATE_BASIS = 'shipped';
 const dateBasisLabel = {paid: '支付时间', created: '创建时间', shipped: '出库时间'};
@@ -1056,6 +1059,9 @@ async function loadDash() {
     const host = $('#dashFilters');
     DF = makeFilters(host, commonDateFilters(), () => scheduleReport('dash',loadDash));
     attachFilterPresets('overview', '数据总览', host, DF, {onApply:() => scheduleReport('dash',loadDash)});
+    const timing = $('#dashTimingBasis');
+    host.insertBefore(timing, host.querySelector('.grow'));
+    timing.hidden = false;
   }
   const f = readF(DF);
   updateDateOptions(DF, f.date_basis);
@@ -1076,27 +1082,59 @@ function syncOverviewFilterNote(d) {
   DF._info.textContent = d.snapshotFiltersSkipped ? '实时筛选暂不可用，图表显示全量快照' : '';
 }
 
+async function loadOverviewTiming() {
+  if (!renderedDash || VIEW !== 'dash') return;
+  const report = renderedDash;
+  const basis = overviewTimingBasis;
+  const [average, rate] = [...$('#dashKpi').querySelectorAll('.val')].slice(-2);
+  const errorText = $('#dashTimingError');
+  const current = () => VIEW === 'dash' && renderedDash === report && overviewTimingBasis === basis;
+  const render = data => {
+    if (!current()) return;
+    average.innerHTML = data.transitDays == null ? '—' : `${fmt1(data.transitDays)} <small>天</small>`;
+    rate.textContent = measure(deliveryRate(data, 6), '%');
+    overviewMonthly = data.monthly || report.monthly.map(row => ({...row, d: null}));
+    drawCountryTiming(data.countryTiming || report.countryTiming?.map(row =>
+      ({...row, days: null, p90: null, p95: null, samples: null})), overviewTimingFilters);
+    void loadOverviewCharts();
+  };
+  errorText.hidden = true;
+  pendingRequests.delete('overviewTiming');
+  if (basis === 'shipped') return render({...report.kpi, monthly: report.monthly, countryTiming: report.countryTiming});
+  try {
+    if (report.snapshotFiltersSkipped) throw new Error();
+    const path = reportPath('/api/overview/timing?' + qs({...overviewTimingFilters, basis}));
+    const saved = reportRecord(path);
+    render(saved?.data || {});
+    await presentReport('overviewTiming', path, render);
+  } catch {
+    if (!current()) return;
+    render({});
+    errorText.textContent = '当前筛选的时效暂时无法加载。';
+    errorText.hidden = false;
+  }
+}
+
 function renderDash(d, f) {
   if (VIEW !== 'dash') return;
   syncOverviewFilterNote(d);
   if (renderedDash === d) {
-    void loadOverviewCharts(d);
+    void loadOverviewTiming();
     return;
   }
   renderedDash = d;
+  overviewTimingFilters = f;
   const dateBasis = d.dateBasis || (d.snapshotAt ? 'created' : f.date_basis);
-  $('#monthlyScope').textContent = `按${dateBasisLabel[dateBasis].replace('时间', '')}月份统计 · 出库 → 妥投`;
   setTopMeta(d.asof);
 
   const k = d.kpi;
   const defs = [
-    ['履约单数', fmt(k.orders), '筛选范围', 'box', 'blue'],
-    ['总件数', fmt(k.items), `单均 ${k.orders ? fmt1(k.items / k.orders) : '—'} 件`, 'layers', 'blue'],
-    ['妥投覆盖率', measure(k.signRate, '%'), `含 WMS 补算 ${fmt(k.fallbackSigned)} 单`, 'check', 'green'],
-    ['仓内处理', k.inboundHours == null ? '—' : `${fmt1(k.inboundHours)} <small>小时</small>`, '履约单创建 → 出库', 'warehouse', 'violet'],
-    ['物流运输', k.transitDays == null ? '—' : `${fmt1(k.transitDays)} <small>天</small>`, `出库 → 妥投 · ${fmt(k.transitSamples)} 单`, 'truck', 'cyan'],
-    ['6 天内妥投率', measure(deliveryRate(k, 6), '%'),
-      k.deliveryRates ? `出库起算 · 2 天内 ${measure(deliveryRate(k, 2), '%')}` : '妥投率待同步', 'clock', 'green'],
+    ['履约单数', fmt(k.orders), '', 'box', 'blue'],
+    ['总件数', fmt(k.items), '', 'layers', 'blue'],
+    ['妥投覆盖率', measure(k.signRate, '%'), '', 'check', 'green'],
+    ['仓内处理', k.inboundHours == null ? '—' : `${fmt1(k.inboundHours)} <small>小时</small>`, '', 'warehouse', 'violet'],
+    ['平均时效', '—', '', 'truck', 'cyan'],
+    ['6 天内妥投率', '—', '', 'clock', 'green'],
   ];
   $('#dashKpi').innerHTML = defs.map(row => metricCard(...row)).join('');
 
@@ -1111,7 +1149,7 @@ function renderDash(d, f) {
   trend.shipped = d.dailyShipped;
   trend.paid = d.dailyPaid;
   trend.filters = f;
-  void loadOverviewCharts(d);
+  void loadOverviewTiming();
 
   drawRank('cCarrier', d.byCarrier, 10, k.orders,
     ME.preview ? null : value => openTracking({ ...f, cr: value }));
@@ -1122,7 +1160,6 @@ function renderDash(d, f) {
   drawRank('cWarehouse', d.byWarehouse, 10, k.orders,
     ME.preview ? null : value => openTracking({ ...f, wh: value }));
   drawRank('cCountry', d.byCountry, 15, k.orders);
-  drawCountryTiming(d.countryTiming, f);
   drawRank('cCurrentChannel', d.byCurrentChannel || [], 10, k.orders,
     ME.preview ? null : value => openTracking({ ...f, channel: value }));
   drawRank('cChannelGroup', (d.byChannelGroup || []).map(row => ({...row, filter: row.group || false})),
@@ -1162,23 +1199,24 @@ function drawCountryTiming(rows, filters) {
   sort.onchange = () => drawCountryTiming(rows, filters);
 }
 
-async function loadOverviewCharts(d) {
-  if (paintedOverview === d) return;
+async function loadOverviewCharts() {
+  const monthly = overviewMonthly;
+  if (!monthly || paintedOverview === monthly) return;
   const status = $('#overviewChartStatus');
   try {
     await loadChartLibrary();
   } catch {
-    if (VIEW !== 'dash' || renderedDash !== d) return;
+    if (VIEW !== 'dash' || overviewMonthly !== monthly) return;
     const retry = el('button', 'btn ghost sm', '重试图表');
     retry.type = 'button';
-    retry.onclick = () => loadOverviewCharts(d);
+    retry.onclick = () => loadOverviewCharts();
     status.replaceChildren('趋势图暂时无法加载。 ', retry);
     status.hidden = false;
     return;
   }
-  if (VIEW !== 'dash' || renderedDash !== d || paintedOverview === d) return;
+  if (VIEW !== 'dash' || overviewMonthly !== monthly || paintedOverview === monthly) return;
   status.hidden = true;
-  $('#cMonthly').style.minWidth = `${d.monthly.length * 65 + 100}px`;
+  $('#cMonthly').style.minWidth = `${monthly.length * 65 + 100}px`;
   const chart = initChart('cMonthly');
   chart.resize();
   const lineLabelDistance = 22;
@@ -1187,20 +1225,20 @@ async function loadOverviewCharts(d) {
     grid: { left: 6, right: 10, top: 52, bottom: 6, containLabel: true },
     tooltip: { ...chartTip, trigger: 'axis', valueFormatter: fmt },
     legend: { right: 4, top: 0, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11, color: chartTheme.text } },
-    xAxis: { type: 'category', data: d.monthly.map(r => r.m), axisTick: { show: false },
+    xAxis: { type: 'category', data: monthly.map(r => r.m), axisTick: { show: false },
       axisLine: { lineStyle: { color: chartTheme.grid } }, axisLabel: { color: chartTheme.muted, hideOverlap: true } },
     yAxis: [{ type: 'value', splitLine: { lineStyle: { color: chartTheme.grid } },
       axisLabel: { color: chartTheme.muted, formatter: compactCount } },
     { type: 'value', min: 0, splitLine: { show: false },
       axisLabel: { color: chartTheme.muted, formatter: '{value} 天' } }],
     series: [
-      { name: '单量', type: 'bar', barMaxWidth: 48, data: d.monthly.map(r => r.n),
+      { name: '单量', type: 'bar', barMaxWidth: 48, data: monthly.map(r => r.n),
         itemStyle: { color: chartTheme.volume, borderRadius: [3, 3, 0, 0] },
         label: { show: true, position: 'inside', color: chartTheme.ink, fontSize: 11, fontWeight: 600,
           formatter: point => fmt(point.value) },
         labelLayout: ({ dataIndex, rect, labelRect }) => {
           const padding = labelRect.height / 2 + 5;
-          const days = d.monthly[dataIndex].d;
+          const days = monthly[dataIndex].d;
           const lineY = days == null ? NaN : chart.convertToPixel({ yAxisIndex: 1 }, days);
           let y = rect.height >= padding * 2 ? rect.y + Math.max(padding, rect.height * 0.42) : rect.y - padding;
           if (Number.isFinite(lineY) && y > lineY - lineLabelDistance - padding - 12 && y < lineY + padding) {
@@ -1210,7 +1248,7 @@ async function loadOverviewCharts(d) {
           return { x: rect.x + rect.width / 2, y, align: 'center', verticalAlign: 'middle', hideOverlap: true };
         },
         tooltip: { valueFormatter: value => `${fmt(value)} 单` } },
-      { name: '平均物流天数', type: 'line', smooth: 0.35, yAxisIndex: 1, symbolSize: 6, data: d.monthly.map(r => r.d),
+      { name: '平均时效', type: 'line', smooth: 0.35, yAxisIndex: 1, symbolSize: 6, data: monthly.map(r => r.d),
         itemStyle: { color: chartTheme.ink }, lineStyle: { width: 1.5 },
         label: { show: true, position: 'top', distance: lineLabelDistance, fontSize: 11, color: chartTheme.ink,
           formatter: point => measure(point.value, ' 天') },
@@ -1219,7 +1257,7 @@ async function loadOverviewCharts(d) {
     ],
   });
   drawDailyVolume();
-  paintedOverview = d;
+  paintedOverview = monthly;
 }
 
 function drawOverviewMixes(data) {
@@ -1241,14 +1279,13 @@ function drawOverviewMixes(data) {
       [
         ['同仓拆单', orders.same, 'teal'], ['异仓拆单', orders.cross, 'primary'],
         ...(orders.unknown ? [['仓库待确认', orders.unknown, 'unknown']] : []),
-      ], orders.split, { note: '构成占比以拆单订单为分母' +
-        (orders.missingFulfillments ? ` · ${fmt(orders.missingFulfillments)} 个履约单缺订单号` : '') });
+      ], orders.split);
   } else {
     $('#orderSplitMix').textContent = '等待快照同步';
   }
 }
 
-function drawMix(id, numerator, denominator, summary, rows, groupTotal, {donut = false, note = ''} = {}) {
+function drawMix(id, numerator, denominator, summary, rows, groupTotal, {donut = false} = {}) {
   const percentage = (n, total) => measure(total ? 100 * n / total : null, '%');
   const segments = rows.filter(([, n]) => n > 0);
   const rate = percentage(numerator, denominator);
@@ -1278,8 +1315,7 @@ function drawMix(id, numerator, denominator, summary, rows, groupTotal, {donut =
   $(`#${id}`).innerHTML = `
     <div class="mix-summary"><strong>${rate}</strong><span class="tip">${esc(summary)}</span></div>
     <div class="mix-track" aria-hidden="true">${bar}</div>
-    ${list}
-    ${note ? `<p class="tip mix-note">${esc(note)}</p>` : ''}`;
+    ${list}`;
 }
 
 function drawDispatchStatus(rows) {
@@ -1305,8 +1341,6 @@ function drawDailyVolume() {
   const last = series.at(-1);
   const latest = last ? clock(last.day) : 0;
   const days = trend.span ? series.filter(row => clock(row.day) >= latest - (trend.span - 1) * dayMs) : series;
-  $('#dailyNote').hidden = ME.preview || !days.length;
-  $('#dailyNote').textContent = `点击按${label}查看当天的履约单`;
   $('#cDaily').hidden = !days.length;
   $('#dailyRange').textContent = days.length ?
     `${days[0].day} 至 ${days.at(-1).day} · 按${label}统计（北京时间）` :
@@ -1398,6 +1432,8 @@ let TF = null;
 let AF = null;
 const alertFiltersByMode = {};
 let trackRows = [];
+let trackDownloadPath;
+let exceptionDownloadPath;
 let trackPage = 1;
 let trackPageSize = 40;
 const fulfillmentPageSizes = [20, 40, 100, 200];
@@ -1756,6 +1792,7 @@ async function loadTrack(page = 1, fromSearch = false, size = trackPageSize) {
     return loadTrack(lastPage, false, d.size);
   }
   trackRows = d.rows;
+  trackDownloadPath = d.snapshotAt ? null : trackRowsPath(f, d.page, d.size);
   trackPage = d.page;
   trackPageSize = d.size;
   lastTrackingQuery = query || '';
@@ -1908,10 +1945,34 @@ async function loadAlerts(page = 1) {
   refreshSelection();
 }
 
-function setupAlertExport() {
-  const primary = $('#exportAllAlerts');
-  const toggle = $('#alertExportToggle');
-  const menu = $('#alertExportMenu');
+function setupExportMenu(root, label, options, onExport) {
+  const menuId = root.id + 'Menu';
+  root.classList.add('export-split');
+  root.innerHTML = `
+    <button type="button" class="btn ghost sm export-button">${icon('download')}<span></span></button>
+    <button type="button" class="btn ghost sm export-toggle" aria-expanded="false" aria-haspopup="menu"
+      aria-label="更多${esc(label)}导出方式" aria-controls="${menuId}" popovertarget="${menuId}"><span class="select-chevron" aria-hidden="true"></span></button>
+    <div id="${menuId}" class="export-menu" popover="auto" role="menu" aria-label="${esc(label)}导出方式">
+      ${options.map(([scope, title, detail]) => `<button type="button" role="menuitem" data-export-scope="${esc(scope)}">
+        <b>${esc(title)}</b><span>${esc(detail)}</span></button>`).join('')}
+    </div>`;
+  const [primary, toggle, menu] = root.children;
+  const caption = primary.querySelector('span');
+  const [defaultScope, title] = options[0];
+  caption.textContent = title;
+  const download = async scope => {
+    if (primary.disabled) return;
+    primary.disabled = true;
+    toggle.setAttribute('aria-disabled', 'true');
+    caption.textContent = '正在导出…';
+    try {
+      await onExport(scope);
+    } finally {
+      caption.textContent = title;
+      toggle.removeAttribute('aria-disabled');
+      primary.disabled = false;
+    }
+  };
   const items = [...menu.querySelectorAll('[data-export-scope]')];
   const position = () => positionControlPopover(menu, toggle, 'end');
   const close = () => { menu.hidePopover(); toggle.focus({preventScroll:true}); };
@@ -1950,42 +2011,31 @@ function setupAlertExport() {
     const item = event.target.closest('[data-export-scope]');
     if (!item) return;
     close();
-    run(() => exportAlertDetails(item.dataset.exportScope));
+    run(() => download(item.dataset.exportScope));
   };
-  primary.onclick = () => run(() => exportAlertDetails('all'));
+  primary.onclick = () => run(() => download(defaultScope));
   window.addEventListener('resize', position);
   window.addEventListener('scroll', position, true);
 }
 
-async function exportAlertDetails(scope) {
-  const button = $('#exportAllAlerts');
-  if (button.disabled) return;
-  const trigger = $('#alertExportToggle');
-  const caption = button.querySelector('span');
-  const mode = trackMode;
-  const label = caption.textContent;
-  button.disabled = true;
-  trigger.setAttribute('aria-disabled', 'true');
-  caption.textContent = '正在导出…';
-  try {
-    await loadMeta();
-    if (VIEW !== 'track' || trackMode !== mode || mode === 'tracking') return;
-    prepareAlerts();
-    const params = new URLSearchParams(qs({...readF(AF), view: mode === 'archive' ? 'archive' : 'pending'}));
-    params.set('export', scope);
-    const response = await fetch('/api/alerts?' + params, {credentials: 'same-origin', cache: 'no-store'});
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      throw new Error(typeof error.detail === 'string' ? error.detail : error.message || `导出失败（${response.status}）`);
-    }
-    const encoded = response.headers.get('Content-Disposition')?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
-    downloadBlob(await response.blob(), encoded ? decodeURIComponent(encoded) :
-      scope === 'tracks' ? '预警明细与轨迹.zip' : '预警明细.csv');
-  } finally {
-    button.disabled = false;
-    trigger.removeAttribute('aria-disabled');
-    caption.textContent = label;
+async function fetchExport(path, scope) {
+  const url = new URL(path, location.origin);
+  url.searchParams.set('export', scope);
+  const response = await fetch(url, {credentials: 'same-origin', cache: 'no-store'});
+  const encoded = response.headers.get('Content-Disposition')?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (!response.ok || !encoded) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(typeof error.detail === 'string' ? error.detail : error.message || '导出失败，请稍后重试');
   }
+  downloadBlob(await response.blob(), decodeURIComponent(encoded));
+}
+
+async function exportAlertDetails(scope) {
+  const mode = trackMode;
+  await loadMeta();
+  if (VIEW !== 'track' || trackMode !== mode || !['alerts', 'archive'].includes(mode)) return;
+  prepareAlerts();
+  return fetchExport('/api/alerts?' + qs({...readF(AF), view: mode === 'archive' ? 'archive' : 'pending'}), scope);
 }
 
 function alertTarget({order_no, rule, first_seen_at, history_id, handle_at}) {
@@ -2496,16 +2546,13 @@ function renderChannels(d, filters) {
   const rows = d.rows || [];
   channelRows = rows;
   const totalOrders = rows.reduce((a, r) => a + r.orders, 0);
-  const signed = rows.reduce((a, r) => a + r.signed, 0);
   const samples = rows.reduce((a, r) => a + r.samples, 0);
-  const fallback = rows.reduce((a, r) => a + (r.fallbackSamples || 0), 0);
   const overAll = rows.reduce((a, r) => a + (r.overdue || 0), 0);
-  const inAll = rows.reduce((a, r) => a + r.slaInTransit, 0);
   $('#channelKpi').innerHTML = [
-    [dimension === 'group' ? '对比分组数' : 'C 端渠道数', fmt(rows.length), `单量 ≥${filters.min_n || 100}`, dimension === 'group' ? 'layers' : 'route','violet'],
-    ['有效签收样本', fmt(samples), signed ? `含 WMS 补算 ${fmt(fallback)} 单` : '当前范围无可用的妥投时间','check','green'],
-    ['覆盖单量', fmt(totalOrders), '参与统计','box','blue'],
-    ['SLA 在途超时', fmt(overAll), inAll ? `占可计时在途 ${fmt1(100 * overAll / inAll)}%` : '当前范围无可计时的在途单','clock',overAll ? 'warn' : 'green'],
+    [dimension === 'group' ? '对比分组数' : 'C 端渠道数', fmt(rows.length), '', dimension === 'group' ? 'layers' : 'route', 'violet'],
+    ['有效签收样本', fmt(samples), '', 'check', 'green'],
+    ['覆盖单量', fmt(totalOrders), '', 'box', 'blue'],
+    ['SLA 在途超时', fmt(overAll), '', 'clock', overAll ? 'warn' : 'green'],
   ].map(row => metricCard(...row)).join('');
 
   renderChannelRates(d, rows);
@@ -2998,8 +3045,10 @@ async function loadTrackExceptions(page = 1, size = exceptionPageSize) {
         state:$('#trackExceptionState'), q:$('#trackExceptionSearch')};
     }
     const filters = {...readF(exceptionFilters), q:exceptionFilters.q.value.trim()};
-    data = await latest('trackExceptions', '/api/channel-track-exceptions?' + qs(filters, page, size),
+    const path = '/api/channel-track-exceptions?' + qs(filters, page, size);
+    data = await latest('trackExceptions', path,
       {signal: AbortSignal.timeout(20_000)});
+    if (data && VIEW === 'track' && trackMode === 'special-tracking') exceptionDownloadPath = path;
   } catch (error) {
     if (VIEW === 'track' && trackMode === 'special-tracking') status.textContent = error.message;
     return;
@@ -3185,6 +3234,7 @@ function openCountryRegion(country, filters) {
   usView.channel = '';
   $('#usSearch').value = '';
   $('#usResults').hidden = true;
+  $('#usStatus').hidden = false;
   $('#usStatus').textContent = '正在读取区域履约数据…';
   regionDrilldown = {market, filters: {...filters, cn: country}};
   showView('us');
@@ -3231,7 +3281,10 @@ async function loadUs() {
   const status = $('#usStatus');
   const path = '/api/regional-analysis?' + qs({...filters, market: usView.market, basis: usView.basis, dimension: usView.dimension});
   const saved = reportRecord(reportPath(path));
-  if (!saved) status.textContent = usReport ? '正在更新…' : '正在读取区域履约数据…';
+  if (!saved) {
+    status.hidden = false;
+    status.textContent = usReport ? '正在更新…' : '正在读取区域履约数据…';
+  }
   if (!saved && usReport && usReport.market !== usView.market) $('#usResults').hidden = true;
   try {
     return await presentReport('us', path, report => renderRegionalData(report, filters),
@@ -3241,6 +3294,7 @@ async function loadUs() {
     const retry = el('button', 'btn ghost sm', '重试');
     retry.type = 'button';
     retry.onclick = () => run(loadUs);
+    status.hidden = false;
     status.replaceChildren('区域履约数据暂时无法加载。 ', retry);
     return;
   }
@@ -3252,7 +3306,7 @@ function renderRegionalData(report, filters) {
   const prior = usReport;
   usReport = report;
   regionalFilters = filters;
-  $('#usStatus').textContent = `按${dateBasisLabel[report.dateBasis]}筛选（北京时间） · ${usTimingLabel[report.basis]}`;
+  $('#usStatus').hidden = true;
   $('#usResults').hidden = false;
   if (prior === report) {
     loadVisibleRegionSegments();
@@ -3290,11 +3344,10 @@ function renderUsReport() {
   const selectedChannel = usView.channel;
   const tail = usView.metric === 'p95' ? 'p95' : 'p90';
   $('#usKpi').innerHTML = [
-    [other ? `${countryLabel || '其他国家'}履约单` : '美国履约单', fmt(national.orders), '单量含在途单','globe','blue'],
-    ['有效时效样本', fmt(national.samples), earlySegments.includes(usReport.basis) ?
-      `有效覆盖 ${usPercent(usShare(national.samples, national.orders))}` : `含 WMS 补算 ${fmt(national.fallback)} 单`,'check','green'],
-    ['平均时效', usDay(national.avg), usTimingLabel[usReport.basis],'clock','cyan'],
-    [usMetricLabel[tail], usDay(national[tail]), `约 ${tail.slice(1)}% 的有效样本在此时长内完成`,'history','violet'],
+    [other ? `${countryLabel || '其他国家'}履约单` : '美国履约单', fmt(national.orders), '', 'globe', 'blue'],
+    ['有效时效样本', fmt(national.samples), '', 'check', 'green'],
+    ['平均时效', usDay(national.avg), '', 'clock', 'cyan'],
+    [usMetricLabel[tail], usDay(national[tail]), '', 'history', 'violet'],
   ].map(row => metricCard(...row)).join('');
 
   $('#usMixName').textContent = scope + '渠道构成';
@@ -4346,7 +4399,7 @@ function closeDrawer() {
 
 /* ================= 启动 ================= */
 const themedCharts = {
-  dash: () => renderedDash && loadOverviewCharts(renderedDash),
+  dash: loadOverviewCharts,
   channels: renderChannelTrend,
   us: drawUsMap,
 };
@@ -4391,7 +4444,7 @@ run(async function boot() {
   if (!ME.preview) $('#currentChannelTip').textContent += ' · 点击渠道查看履约单';
   if (ME.preview) {
     for (const selector of ['[data-v="rules"]', '[data-v="us"]', '#openPending',
-      '#trackTabs', '#showDetailed', '#exportTrack', '#trackAlertHeading']) {
+      '#trackTabs', '#trackExport', '#trackAlertHeading']) {
       $(selector).hidden = true;
     }
     $('#trackIntro').textContent = '输入完整单号查看物流状态和时间线';
@@ -4412,6 +4465,13 @@ run(async function boot() {
     if (channelTrendVisible) run(loadChannelTrend);
   }, {rootMargin:'100px 0px'}).observe($('#channelTrend'));
   $('#channelTrendKey').onchange = () => run(loadChannelTrend);
+  $('#dashTimingBasis').onclick = event => {
+    const selected = event.target.closest('[data-basis]');
+    if (!selected || selected.dataset.basis === overviewTimingBasis) return;
+    overviewTimingBasis = selected.dataset.basis;
+    $('#dashTimingBasis').querySelectorAll('button').forEach(button => setSwitchChoice(button, button === selected));
+    void loadOverviewTiming();
+  };
   channelMemberPicker = setupChannelMemberPicker();
   $('#channelMemberDimension').onclick = event => {
     const button = event.target.closest('[data-member-dimension]');
@@ -4484,7 +4544,6 @@ run(async function boot() {
     list.addEventListener('pointerover', watchOrderIntent);
     list.addEventListener('focusin', watchOrderIntent);
   }
-  $('#showDetailed').onclick = () => openTracking({ coverage: 'detailed', sort: '逐条事件数' });
   $('#openTrackAnalysis').hidden = ME.preview;
   $('#openTrackAnalysis').onclick = () => run(async () => {
     await loadTrackFilters();
@@ -4601,38 +4660,40 @@ run(async function boot() {
     await reloadRules();
     toast('已刷新数据与规则');
   });
-  $('#exportTrack').onclick = () => exportCsv('履约轨迹-本页', [
-    '履约单号', '快递单号', '物流商', '当前渠道', 'C端承运商', '仓库', '目的国中文', '轨迹状态中文',
-    '轨迹子状态', '运输商代码', '主预警名称', '逐条事件数',
-  ].map(key => [key, row => row[key]]).concat([
-    ['平台名称', row => platformName(row.平台)], ['客户下单（北京时间）', row => row.支付时间],
-    ['履约单创建（北京时间）', row => row.创建时间], ['出库（北京时间）', row => row.签出时间],
-    ['运输时间', row => durationText(row.运输分钟)],
-    ['历史预警', row => row.历史预警?.rule_cn], ['处理人', row => row.历史预警?.handled_by],
-    ['处理时间（北京时间）', row => row.历史预警?.handle_at ? syncTime(row.历史预警.handle_at) : ''],
-    ['ERP / WMS 妥投（原始值）', row => row.签收时间], ['WMS 时间口径', row => row.WMS时间口径],
-    ['妥投统计来源', row => row.妥投统计来源],
-    ['17TRACK 妥投（当地时间或标注 UTC）', row => row.签收当地时间 || row.承运商签收时间 ?
-      trackTime(row.签收当地时间, row.承运商签收时间) : ''],
-    ['最新轨迹（当地时间或标注 UTC）', row => row.最新事件当地时间 || row.最新事件时间 ?
-      trackTime(row.最新事件当地时间, row.最新事件时间) : ''],
-  ]), trackRows);
-  setupAlertExport();
-  $('#exportChannels').onclick = () => {
-    if (!renderedChannels) return;
-    const basis = TIMING_BASIS[renderedChannels.basis].label;
-    const dimension = CHANNEL_DIMENSIONS[renderedChannels.dimension || 'lastmile'];
-    const dayLabel = CHANNEL_DAY_LABELS[channelDayMode];
-    exportCsv(`渠道时效-${dimension}-${basis}-${dayLabel}`, [
-    ['时效口径', () => basis],
-    ['妥投率计时', () => dayLabel],
-    [dimension, row => row.channel], ['单量', row => row.orders], ['有妥投时间', row => row.signed],
-    ['有效签收样本', row => row.samples], ['WMS 补算样本', row => row.fallbackSamples],
-    ['平均时效（天）', row => row.avgDays], ['P90（天）', row => row.p90Days],
-    ...DELIVERY_WINDOWS.map(days => [`${days}天内妥投率（${dayLabel}，%，按总单量）`, row => channelDeliveryRate(row, days)]),
-    ['SLA 在途超时', row => row.overdue], ['SLA 有效签收样本', row => row.sla_samples], ['SLA达成率（%）', row => row.slaRate],
-    ], channelRows);
-  };
+  setupExportMenu($('#trackExport'), '履约单', [
+    ['page', '导出本页', '当前页履约单明细 · CSV'],
+    ['tracks', '导出本页含完整轨迹', '当前页履约单及逐条轨迹 · ZIP'],
+  ], scope => {
+    if (!trackRows.length) return toast('当前没有可导出的履约单');
+    if (scope === 'tracks') {
+      if (!trackDownloadPath) return toast('实时轨迹暂不可用');
+      return fetchExport(trackDownloadPath, scope);
+    }
+    exportCsv('履约轨迹-本页', [
+      '履约单号', '快递单号', '物流商', '当前渠道', 'C端承运商', '仓库', '目的国中文', '轨迹状态中文',
+      '轨迹子状态', '运输商代码', '主预警名称', '逐条事件数',
+    ].map(key => [key, row => row[key]]).concat([
+      ['平台名称', row => platformName(row.平台)], ['客户下单（北京时间）', row => row.支付时间],
+      ['履约单创建（北京时间）', row => row.创建时间], ['出库（北京时间）', row => row.签出时间],
+      ['运输时间', row => durationText(row.运输分钟)],
+      ['历史预警', row => row.历史预警?.rule_cn], ['处理人', row => row.历史预警?.handled_by],
+      ['处理时间（北京时间）', row => row.历史预警?.handle_at ? syncTime(row.历史预警.handle_at) : ''],
+      ['ERP / WMS 妥投（原始值）', row => row.签收时间], ['WMS 时间口径', row => row.WMS时间口径],
+      ['妥投统计来源', row => row.妥投统计来源],
+      ['17TRACK 妥投（当地时间或标注 UTC）', row => row.签收当地时间 || row.承运商签收时间 ?
+        trackTime(row.签收当地时间, row.承运商签收时间) : ''],
+      ['最新轨迹（当地时间或标注 UTC）', row => row.最新事件当地时间 || row.最新事件时间 ?
+        trackTime(row.最新事件当地时间, row.最新事件时间) : ''],
+    ]), trackRows);
+  });
+  setupExportMenu($('#alertExport'), '预警', [
+    ['all', '导出全部命中', '当前筛选的预警明细 · CSV'],
+    ['tracks', '导出含完整轨迹', '预警明细和逐条轨迹 · ZIP'],
+  ], exportAlertDetails);
+  setupExportMenu($('#trackExceptionExport'), '特殊轨迹', [
+    ['all', '导出全部命中', '当前筛选的特殊轨迹明细 · CSV'],
+    ['tracks', '导出含完整轨迹', '命中明细和逐条轨迹 · ZIP'],
+  ], scope => exceptionDownloadPath ? fetchExport(exceptionDownloadPath, scope) : toast('命中清单仍在加载'));
   $('#dClose').onclick = closeDrawer;
   $('#mask').onclick = closeDrawer;
   $('#drawer').addEventListener('keydown', event => keepFocusInside(event, $('#drawer')));

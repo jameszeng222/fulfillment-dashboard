@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 
-from . import channel_groups, core, rules
+from . import alert_export, channel_groups, core, rules
 from .tracking_archive import EVENT_TABLE, TABLE
 from .tracking_clock import carrier_wall_time
 
@@ -314,7 +314,8 @@ def _compute(_snapshot, payload, group_payload, start_day, asof):
 @router.get("/channel-track-exceptions")
 def exceptions(request: Request, days: int = Query(30, ge=1, le=90), rule: str = "", q: str = "",
                state: Literal["", "late", "missing"] = "",
-               page: int = Query(1, ge=1), size: int = Query(40, ge=1, le=100)):
+               page: int = Query(1, ge=1), size: int = Query(40, ge=1, le=100),
+               export: Literal["all", "tracks"] | None = None):
     core.require_user(request)
     with core.ops() as db:
         settings = configuration(db)
@@ -325,6 +326,22 @@ def exceptions(request: Request, days: int = Query(30, ge=1, le=90), rule: str =
     key = q.strip().casefold()
     matches = [item for item in rows if (not rule or item["rule"] == rule) and (not state or item["state"] == state) and
                (not key or key in item["order_no"].casefold() or key in (item["waybill"] or "").casefold())]
+    if export:
+        if not matches:
+            raise HTTPException(404, "当前没有可导出的特殊轨迹命中")
+        headers = ["履约单号", "运单号", "命中规则", "异常类型", "仓库", "地点", "当前渠道", "C 端承运商",
+                   "起始时间（当地）", "起始节点", "承诺截止（当地）", "实际节点时间", "实际节点", "最近核对（UTC）"]
+        content = alert_export.csv_content(headers, (
+            (row["order_no"], row["waybill"], row["name"], "节点超时" if row["state"] == "late" else "超时未见节点",
+             row["warehouse"], row["site"], row["channel"], row["lastmile"], row["anchor_at"], row["anchor_text"],
+             row["deadline"], row["event_at"], row["event_text"], row["checked_at"])
+            for row in matches
+        ))
+        filename = "特殊轨迹监控-全部命中"
+        if export == "all":
+            return alert_export.download(content, filename)
+        pairs = [{"order_no": row["order_no"], "tracking_no": row["waybill"]} for row in matches]
+        return alert_export.download(content, filename + "-含完整轨迹", events=pairs, details="特殊轨迹明细.csv")
     offset = (page - 1) * size
     return {"rows": matches[offset:offset+size], "counts": counts, "total": len(matches),
             "page": page, "size": size, "from": start_day.isoformat(), "asof": asof.isoformat()}

@@ -2,15 +2,12 @@
 from __future__ import annotations
 
 from collections import Counter
-import csv
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from hashlib import sha256
-from io import StringIO
 from math import isfinite
 from typing import Any, Literal, Optional
 from unicodedata import normalize
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -485,37 +482,25 @@ def _export_alerts(rows, *, pending, scope, selected_rules):
             moment = moment.astimezone(beijing)
         return moment.isoformat(sep=" ", timespec="minutes")[:16]
 
-    output = StringIO(newline="")
-    writer = csv.writer(output, quoting=csv.QUOTE_ALL)
     handler_columns = [] if pending else ["处理人", "归档时间"]
-    writer.writerow(["履约单号", "运单号", "平台", "平台代码", "预警", "履约出库时间（北京时间）",
-                     "级别", "运输时间", *handler_columns, "当前物流渠道", "后台物流商", "异常持续天数"])
-    for row in rows:
+    headers = ["履约单号", "运单号", "平台", "平台代码", "预警", "履约出库时间（北京时间）",
+               "级别", "运输时间", *handler_columns, "当前物流渠道", "后台物流商", "异常持续天数"]
+
+    def values(row):
         platform = row.get("platform_code")
         handler = [] if pending else [row.get("handled_by"), handled_time(row.get("handle_at"))]
-        writer.writerow(map(alert_export.csv_cell, (
+        return (
             row["order_no"], row["tracking_no"], platform_names.get(platform, platform), platform,
             row["rule_cn"], row["shipped_at"] or row["shipped_date"], row["level"],
             duration(row.get("transport_minutes")), *handler, row["current_channel"], row["carrier"], row["days"],
-        )))
+        )
 
     title = "预警处理" if pending else "归档预警"
     rule = next((item["name"] for item in BUSINESS_RULES if selected_rules == [item["key"]]), None)
     suffix = {"page": "本页", "all": "全部命中", "tracks": "全部命中-含完整轨迹"}[scope]
     filename = "-".join(part for part in (title, rule, suffix) if part)
-    content = output.getvalue().encode("utf-8-sig")
-    if scope == "tracks":
-        content = alert_export.bundle(content, rows)
-        filename += ".zip"
-        media_type = "application/zip"
-    else:
-        filename += ".csv"
-        media_type = "text/csv"
-    return Response(
-        content, media_type=media_type,
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
-                 "Cache-Control": "no-store"},
-    )
+    return alert_export.download(alert_export.csv_content(headers, map(values, rows)), filename,
+                                 events=rows if scope == "tracks" else None)
 
 
 @router.get("/alerts")

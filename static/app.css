@@ -962,8 +962,6 @@ button.rank-row:hover { background: var(--surface-muted); }
 #channelTimingPane .channel-comparison .table-head { padding: 17px 18px 5px; }
 #channelTimingPane .channel-comparison .table-head h2 { font-size: 17px; }
 #channelDayMode { align-self: center; padding: 3px; }
-#exportChannels { display: inline-flex; align-items: center; gap: 5px; }
-#exportChannels .ui-icon { width: 13px; height: 13px; color: var(--ink3); }
 #channelComparisonPeriod { padding: 0 18px 11px; }
 .channel-period span { padding: 0; background: transparent; color: var(--ink3); }
 .channel-period span + span::before { content: "·"; margin-right: 6px; }
@@ -1075,7 +1073,7 @@ button, input, select { accent-color: var(--brand); }
 .section-icon { width: 24px; height: 24px; background: none; color: inherit; }
 .ui-icon, .section-icon .ui-icon, .tab-toned .ui-icon, .filter-icon .ui-icon, .filter-timezone .ui-icon,
 .filter-reset .ui-icon, .drawer-order-link .ui-icon, .timeline-panel h4 .ui-icon,
-.status-pill .ui-icon, .event-label .ui-icon, #exportChannels .ui-icon, #openPending .ui-icon, #trackTabs .ui-icon {
+.status-pill .ui-icon, .event-label .ui-icon, #openPending .ui-icon, #trackTabs .ui-icon {
   width: 24px; height: 24px; padding: 3px; fill: none; stroke: none; flex: none;
 }
 .filter-icon { width: 24px; height: 24px; }
@@ -1227,9 +1225,10 @@ button, input, select { accent-color: var(--brand); }
 .filter-search .btn { min-height: 44px; min-width: 64px; padding-inline: 16px; }
 .btn.ghost, #openPending, .pager button, .chipstat { box-shadow: none; background: var(--card); border: 1px solid var(--line); color: var(--ink); }
 .btn.ghost:hover, #openPending:hover, .pager button:not(:disabled):hover { background: var(--surface-muted); border-color: var(--line); color: var(--ink); }
-.export-button, .export-split { display: inline-flex; align-items: center; white-space: nowrap; }
-.export-button { gap: 4px; }
-.export-button .ui-icon { width: 20px; height: 20px; padding: 2px; color: var(--ink2); }
+.export-button, .export-split, .icon-button-label { display: inline-flex; align-items: center; white-space: nowrap; }
+.export-button, .icon-button-label { gap: 4px; }
+:is(.export-button,.icon-button-label) .ui-icon { width: 20px; height: 20px; padding: 2px; color: var(--ink2); }
+.export-split .btn, .btn.icon-button-label, .track-exception-filters > .btn { min-height: 44px; }
 .export-split { align-items: stretch; }
 .export-split .export-button { border-radius: 8px 0 0 8px; }
 .export-split .export-toggle {
@@ -1280,6 +1279,8 @@ button, input, select { accent-color: var(--brand); }
   background: var(--card); border-color: var(--line); color: var(--ink);
 }
 .tabs.segmented-switch button:focus-visible { outline-offset: -2px; }
+#dashTimingBasis, .toolbar .tabs.segmented-switch { padding: 4px; }
+#dashTimingBasis button, .toolbar .tabs.segmented-switch button { min-height: 34px; }
 :is(#trackTabs, #channelDimension, #regionMarkets, #ruleTabs) {
   width: 100%; gap: 4px 20px; padding: 0;
   border: 0; border-bottom: 1px solid var(--line); background: transparent; border-radius: 0;
@@ -1399,6 +1400,7 @@ button, input, select { accent-color: var(--brand); }
 .regional-segment-bars i { background: #b8b8b8; }
 .regional-segment-bars span:nth-child(2) i { background: var(--brand); }
 .rule, .trajectory-rule { padding: 0 0 12px; margin-bottom: 12px; }
+.trajectory-rule { border-radius: 0; }
 .trajectory-rule + .trajectory-rule { border-inline-start: 1px solid var(--line); padding-inline-start: 16px; }
 .rule :is(.cat,.hit,dt,dd), .rule .rh b, .trajectory-counts { font-size: 14px; color: var(--ink2); }
 .rule .cat { color: var(--ink); }
@@ -1490,9 +1492,4 @@ button, input, select { accent-color: var(--brand); }
   .drawer header, .drawer .body, .settings-dialog :is(header,footer), .settings-fields { padding: 16px; }
   .drawer .body .kv { --field-columns: 2; }
   .kv .i:nth-child(2n+3)::before { content: ""; }
-}
-@media (max-width: 380px) {
-  .theme-label {
-    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
-  }
 }

@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 import pandas as pd
 
-from . import alert_history, analytics_snapshot, channel_groups, core, ops_assistant, public_preview, rules, us_analysis, track_analysis, track_lookup
+from . import alert_export, alert_history, analytics_snapshot, channel_groups, core, ops_assistant, public_preview, rules, us_analysis, track_analysis, track_lookup
 from .carrier_delivery import (
     DELIVERY_SOURCE, DELIVERED_BJ, DELIVERED_UTC, WMS_CLOCK, elapsed_minutes, reporting_facts, transport_minutes,
 )
@@ -233,6 +233,61 @@ def overview(request: Request, month: str = "", wh: str = "", pf: str = "", cr: 
                                for row in distribution if row["n"]]}
 
 
+@router.get("/overview/timing")
+def overview_timing(request: Request, basis: Literal["paid", "online"],
+                    month: str = "", wh: str = "", pf: str = "", cr: str = "", cn: str = "",
+                    start: str = "", end: str = "", lastmile: str = "", channel: str = "", week: str = "",
+                    date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = ""):
+    core.require_reader(request)
+    with core.ops() as db:
+        groups = channel_groups.load(db)["groups"] if channel_group else []
+    date_basis = date_basis or DEFAULT_DATE_BASIS
+    cond, args = _cond(month, wh, pf, cr, cn, start=start, end=end, lastmile=lastmile, channel=channel,
+                       week=week, date_basis=date_basis, require_time=True,
+                       group_selection=channel_groups.filter_values(channel_group, groups))
+    archive = transport_archive_version() if basis == "online" else None
+    return _overview_timing(core.snapshot_key(), archive, basis, date_basis, cond, tuple(args))
+
+
+@lru_cache(maxsize=48)
+def _overview_timing(_snapshot, archive, basis, date_basis, cond, args):
+    with core.duck() as con:
+        facts = analytics_snapshot.facts(con)
+        join, online_start = analytics_snapshot.scan_source(con, archive) if basis == "online" else ("", ONLINE_START)
+        _, minutes = _channel_duration(basis, online_start)
+        month = ("o.创建月份" if date_basis == "created"
+                 else f"strftime(o.{DATE_BASIS_FIELDS[date_basis]}, '%Y-%m')")
+        con.execute(f"""
+            CREATE TEMP TABLE overview_alternate AS
+            SELECT {month} AS month_key, o.目的国, o.目的国中文, {minutes} AS 物流分钟
+            FROM {facts} o {join} WHERE 1=1{cond}
+        """, args)
+        orders, average, *counts = con.execute(f"""
+            SELECT count(*), round(avg(物流分钟) FILTER (WHERE 物流分钟>0)/1440.0, 2),
+                   {delivery_window_counts("物流分钟")}
+            FROM overview_alternate
+        """).fetchone()
+        monthly = con.execute("""
+            SELECT month_key AS m, count(*) AS n, avg(物流分钟) FILTER (WHERE 物流分钟>0)/1440.0 AS d
+            FROM overview_alternate GROUP BY 1 ORDER BY 1
+        """).df().to_dict("records")
+        countries = _overview_country_timing(con, "overview_alternate")
+    return core.clean({"transitDays": average, "deliveryRates": delivery_rates(dict(zip(DELIVERY_WINDOWS, counts)), orders),
+                       "monthly": monthly, "countryTiming": countries})
+
+
+def _overview_country_timing(con, table):
+    return con.execute(f"""
+        SELECT 目的国 AS code,coalesce(max(nullif(目的国中文,'')),目的国) AS name,
+               count(*) AS orders,count(*) FILTER (WHERE 物流分钟>0) AS samples,
+               round(avg(物流分钟) FILTER (WHERE 物流分钟>0)/1440.0,2) AS days,
+               round(quantile_cont(物流分钟,0.90) FILTER (WHERE 物流分钟>0)/1440.0,2) AS p90,
+               round(quantile_cont(物流分钟,0.95) FILTER (WHERE 物流分钟>0)/1440.0,2) AS p95
+        FROM {table} WHERE nullif(trim(目的国),'') IS NOT NULL
+        GROUP BY 1 ORDER BY orders DESC, name, code
+    """).df().to_dict("records")
+
+
 @lru_cache(maxsize=32)
 def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, week, date_basis, group_selection):
     def filters(basis, *, require_time=False):
@@ -294,15 +349,7 @@ def _overview(_snapshot, month, wh, pf, cr, cn, start, end, lastmile, channel, w
         by_carrier = by("物流商", 20)
         by_wh = by("仓库", 20)
         by_country = by("目的国中文", 15)
-        country_timing = con.execute("""
-            SELECT 目的国 AS code,coalesce(max(nullif(目的国中文,'')),目的国) AS name,
-                   count(*) AS orders,count(*) FILTER (WHERE 物流分钟>0) AS samples,
-                   round(avg(物流分钟) FILTER (WHERE 物流分钟>0)/1440.0,2) AS days,
-                   round(quantile_cont(物流分钟,0.90) FILTER (WHERE 物流分钟>0)/1440.0,2) AS p90,
-                   round(quantile_cont(物流分钟,0.95) FILTER (WHERE 物流分钟>0)/1440.0,2) AS p95
-            FROM overview_timing WHERE nullif(trim(目的国),'') IS NOT NULL
-            GROUP BY 1 ORDER BY orders DESC, name, code
-        """).df().to_dict("records")
+        country_timing = _overview_country_timing(con, "overview_timing")
         status_cond, status_args = filters(date_basis)
         by_status = con.execute(f"""
             SELECT coalesce(o.状态, '未填写状态') k, count(*) n
@@ -499,6 +546,16 @@ def analyze_track(body: TrackAnalysisScope, request: Request, interpret: bool = 
     return {**result, "aiAvailable": bool(ai_available)}
 
 
+TRACK_EXPORT_COLUMNS = (
+    ("履约单号", "履约单号"), ("运单号", "快递单号"), ("订单号", "订单号"), ("平台代码", "平台"),
+    ("仓库", "仓库"), ("当前渠道", "当前渠道"), ("后台物流商", "物流商"), ("C 端承运商", "C端承运商"),
+    ("目的国", "目的国中文"), ("支付时间（北京时间）", "支付时间"), ("创建时间（北京时间）", "创建时间"),
+    ("出库时间（北京时间）", "签出时间"), ("运输分钟", "运输分钟"), ("17TRACK 状态", "轨迹状态中文"),
+    ("17TRACK 子状态", "轨迹子状态"), ("业务预警", "主预警名称"), ("逐条事件数", "逐条事件数"),
+    ("最新轨迹", "最新描述"), ("最新轨迹时间（当地）", "最新事件当地时间"),
+)
+
+
 @router.get("/track")
 def track(request: Request,
           page: int = Query(1, ge=1), size: int = Query(50, ge=1, le=200),
@@ -508,11 +565,17 @@ def track(request: Request,
           start: str = "", end: str = "", lastmile: str = "",
           sub: str = "", coverage: str = "", channel: str = "", week: str = "",
           date_basis: DateBasis = DEFAULT_DATE_BASIS, channel_group: str = "", resolved_only: bool = False,
-          part: Literal["all", "rows", "summary"] = "all"):
+          part: Literal["all", "rows", "summary"] = "all", export: Literal["tracks"] | None = None):
     if core.require_reader(request)["preview"]:
+        if export:
+            raise HTTPException(403, "当前账号无法导出履约明细")
         return public_preview.search("" if resolved_only else q, page, size)
+    if export:
+        part = "rows"
     selection, resolved = _track_selection(channel_group, resolved_only)
     if resolved == {}:
+        if export:
+            raise HTTPException(404, "当前没有可导出的履约单")
         return {"total": 0, "page": page, "size": size, "rows": [], "statusSummary": [], "ruleSummary": []}
     cond, args = _track_conditions(q=q, month=month, wh=wh, pf=pf, cr=cr, cn=cn, tstat=tstat,
                                    rule=rule, signed=signed, start=start, end=end, lastmile=lastmile,
@@ -554,6 +617,8 @@ def track(request: Request,
                 """, args)
                 search_total = con.execute("SELECT count(*) FROM matching_track_orders").fetchone()[0]
                 if off >= search_total:
+                    if export:
+                        raise HTTPException(404, "当前没有可导出的履约单")
                     return {"total": search_total, "page": page, "size": size, "rows": [],
                             "statusSummary": [], "ruleSummary": []}
                 con.execute(f"""
@@ -570,6 +635,8 @@ def track(request: Request,
                 """, args)
                 search_total = con.execute("SELECT count(*) FROM matching_track_orders").fetchone()[0]
                 if off >= search_total:
+                    if export:
+                        raise HTTPException(404, "当前没有可导出的履约单")
                     return {"total": search_total, "page": page, "size": size, "rows": [],
                             "statusSummary": [], "ruleSummary": []}
                 page_cond, page_args = " AND o.履约单号 IN (SELECT 履约单号 FROM matching_track_orders)", []
@@ -655,6 +722,14 @@ def track(request: Request,
     finally:
         con.close()
 
+    if export:
+        if not rows:
+            raise HTTPException(404, "当前没有可导出的履约单")
+        clean_rows = core.clean(rows)
+        content = alert_export.csv_content([label for label, _ in TRACK_EXPORT_COLUMNS],
+            ([row[key] for _, key in TRACK_EXPORT_COLUMNS] for row in clean_rows))
+        pairs = [{"order_no": row["履约单号"], "tracking_no": row["快递单号"]} for row in clean_rows]
+        return alert_export.download(content, "履约单-本页-含完整轨迹", events=pairs, details="履约单明细.csv")
     return core.clean({"total": int(total), "page": page, "size": size,
                        "rows": rows,
                        "statusSummary": status_summary, "ruleSummary": rule_summary})

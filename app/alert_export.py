@@ -1,10 +1,13 @@
 """Build the complete trajectory download for the selected alert waybills."""
 import csv
 from datetime import timedelta
-from io import BytesIO, TextIOWrapper
+from io import BytesIO, StringIO, TextIOWrapper
 from itertools import groupby
 import re
+from urllib.parse import quote
 from zipfile import ZIP_DEFLATED, ZipFile
+
+from fastapi.responses import Response
 
 from . import core, tracking_archive
 from .tracking_clock import carrier_wall_time
@@ -18,8 +21,30 @@ def csv_cell(value):
     return text
 
 
+def csv_content(headers, rows):
+    output = StringIO(newline="")
+    writer = csv.writer(output, quoting=csv.QUOTE_ALL)
+    writer.writerow(headers)
+    writer.writerows(map(csv_cell, row) for row in rows)
+    return output.getvalue().encode("utf-8-sig")
+
+
+def download(content, filename, *, events=None, details="预警明细.csv"):
+    if events is None:
+        extension, media_type = ".csv", "text/csv"
+    else:
+        content = bundle(content, events, details)
+        extension, media_type = ".zip", "application/zip"
+    return Response(content, media_type=media_type, headers={
+        "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename + extension, safe='')}",
+        "Cache-Control": "no-store",
+    })
+
+
 def _event_rows(con, alerts):
     pairs = sorted({(row["order_no"], str(row["tracking_no"] or "").strip()) for row in alerts})
+    if not pairs:
+        return
     order_nos, waybills = zip(*pairs)
     con.execute("""
         CREATE TEMP TABLE export_waybills AS
@@ -87,10 +112,10 @@ def _write_track_csv(stream, events):
                                           description, place, provider, code, "近期轨迹" if source else "历史轨迹")))
 
 
-def bundle(alert_csv, alerts):
+def bundle(detail_csv, alerts, details="预警明细.csv"):
     output = BytesIO()
     with ZipFile(output, "w", compression=ZIP_DEFLATED, compresslevel=4) as archive:
-        archive.writestr("预警明细.csv", alert_csv)
+        archive.writestr(details, detail_csv)
         with core.duck() as con, archive.open("轨迹明细.csv", "w") as file:
             with TextIOWrapper(file, encoding="utf-8-sig", newline="") as stream:
                 _write_track_csv(stream, _event_rows(con, alerts))
